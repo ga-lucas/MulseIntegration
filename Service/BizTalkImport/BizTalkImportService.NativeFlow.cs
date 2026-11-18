@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Mulse.Modules.ControlFlow;
@@ -488,6 +488,22 @@ public sealed partial class BizTalkImportService
                             translated.Kind = NativeFlowNodeKind.Wait; translated.DurationSeconds = seconds.Value;
                             return translated;
                         }
+                    case "MessagePartRef" when parents.GetValueOrDefault(node.Id)?.ShapeType == "Transform":
+                        translated.Name = "Map message: " + node.Properties.GetValueOrDefault("MessageRef", node.Name);
+                        return translated;
+                    case "Transform":
+                    {
+                        var shape = ReadTransformShape(node, messages, out var shapeProblem);
+                        if (shape is null) return Block(node, shapeProblem);
+                        if (mapChoices is null || !Mulse.Modules.Mapping.RenderDispatchDefinition.Read(mapChoices, allowEmpty: true).Any(choice => string.Equals(choice.Value, shape.ClassName, StringComparison.Ordinal)))
+                            return Block(node, $"Transform shape applies map class '{shape.ClassName}', which has no native renderer choice. Enable 'Derive native map choices' with the map's project in the source paths (see the derived map choices report for why a map could not be converted), or add a choice whose value is exactly this class name. No CLR map is loaded and nothing is guessed.");
+                        translated.Kind = NativeFlowNodeKind.Render; translated.Children = [];
+                        translated.Module = Mulse.Modules.Mapping.RenderDispatchDefinition.ModuleId;
+                        translated.InputMessages = [.. shape.Inputs]; translated.MessageName = shape.Output;
+                        translated.SelectionExpression = new() { Literal = NativeScalar.From(shape.ClassName) };
+                        Warn("A static Transform shape is imported as a render-dispatch step whose selector is the map class name, using the flow's shared choice table (the converted .btm map). Inputs are read in source order and the output replaces the construct message. The converted map is not a verified equivalent of the deployed BizTalk map: preview it with synthetic inputs against trusted expected output.");
+                        return translated;
+                    }
                     case "MessageRef" when parents.GetValueOrDefault(node.Id)?.ShapeType is "OperationDeclaration" or "PartDeclaration":
                         translated.Name = "Operation message: " + node.Properties.GetValueOrDefault("Ref", node.Name);
                         return translated;

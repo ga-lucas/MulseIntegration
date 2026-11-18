@@ -58,8 +58,8 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
             throw new ArgumentException("Native configuration snapshots require native generation, one host configuration path and 1-16 explicit helper .cs paths (at most 4096 characters each).");
         var nativeConfiguration = request.NativeHostConfigurationPath is { } configurationPath
             ? NativeSourceConfigurationCatalog.Read(configurationPath, request.NativeConfigurationHelperPaths) : null;
-        if (request.DeriveNativeMapChoices && (!request.GenerateNativeFlow || request.AdditionalRulePaths.Count == 0))
-            throw new ArgumentException("Deriving native map choices requires native generation and at least one rule export path.");
+        if (request.DeriveNativeMapChoices && !request.GenerateNativeFlow)
+            throw new ArgumentException("Deriving native map choices requires native generation.");
         if (request.NativeMapChoicesJson is not null)
         {
             if (!request.GenerateNativeFlow) throw new ArgumentException("Native map choices require native generation.");
@@ -268,10 +268,12 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
         if (request.DeriveNativeMapChoices)
         {
             var literals = request.AdditionalRulePaths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase)
-                .SelectMany(path => BizTalkRulePolicyAnalyzer.ReadMapNameLiterals(path, request.NativePolicyVersions, cancellationToken)).ToArray();
+                .SelectMany(path => BizTalkRulePolicyAnalyzer.ReadMapNameLiterals(path, request.NativePolicyVersions, cancellationToken))
+                .Concat(ReadTransformShapeMapNames(hydratedProjects.SelectMany(static project => project.Artifacts)
+                    .Where(static artifact => string.Equals(artifact.Kind, "Orchestration", StringComparison.OrdinalIgnoreCase)).Select(static artifact => artifact.FullPath))).ToArray();
             derivedChoices = BizTalkNativeMapChoiceDeriver.Derive(hydratedProjects.Select(project => project.ProjectPath), literals, nativeSchemas!, request.NativeMapChoicesJson, cancellationToken, storedMapValues);
             mapChoicesJson = derivedChoices.CasesJson;
-            warnings.Add($"{derivedChoices.Report.Count(static item => item.Status is "Converted" or "ConvertedWithStubs")} of {derivedChoices.Report.Count} policy map-name values were converted to native map choices (some may wait on script stubs); the rest are listed with reasons and stay fail-closed. Derived choices are not verified equivalents of the BizTalk maps.");
+            warnings.Add($"{derivedChoices.Report.Count(static item => item.Status is "Converted" or "ConvertedWithStubs")} of {derivedChoices.Report.Count} map-name values (policy literals and orchestration Transform shapes) were converted to native map choices (some may wait on script stubs); the rest are listed with reasons and stay fail-closed. Derived choices are not verified equivalents of the BizTalk maps.");
             if (storedMapValues.Count > 0)
                 warnings.Add($"Converted maps are stored as {storedMapValues.Count} config value(s) named 'biztalk-map.*'; the generated flows reference them, so the effective choices JSON holds references rather than map content.");
         }

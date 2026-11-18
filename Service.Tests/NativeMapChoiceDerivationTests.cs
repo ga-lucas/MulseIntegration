@@ -262,9 +262,7 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
 
         Assert.Equal(["Converted", "NoMatchingMap"], response.DerivedMapChoices.OrderBy(item => item.Status, StringComparer.Ordinal).Select(item => item.Status));
         Assert.Single(RenderDispatchDefinition.Read(response.EffectiveMapChoicesJson!));
-        Assert.Contains(response.Warnings, warning => warning.Contains("1 of 2 policy map-name values", StringComparison.Ordinal));
-        await Assert.ThrowsAsync<ArgumentException>(() => service.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest
-        { SourcePath = project, GenerateNativeFlow = true, DeriveNativeMapChoices = true }, default));
+        Assert.Contains(response.Warnings, warning => warning.Contains("1 of 2 map-name values", StringComparison.Ordinal));
         await Assert.ThrowsAsync<ArgumentException>(() => service.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest
         { SourcePath = project, AdditionalRulePaths = [rules], DeriveNativeMapChoices = true }, default));
         var without = await service.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest { SourcePath = project, AdditionalRulePaths = [rules], GenerateNativeFlow = true }, default);
@@ -298,8 +296,9 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
         AnalyzeBizTalkSolutionRequestViewModel Request() => (AnalyzeBizTalkSolutionRequestViewModel)current.Invoke(designer, null)!;
 
         SetField("_generateNativeBizTalkFlow", true);
-        Assert.False(Request().DeriveNativeMapChoices);
         SetField("_additionalRulePaths", "rules.xml");
+        Assert.True(Request().DeriveNativeMapChoices);
+        SetField("_additionalRulePaths", "");
         Assert.True(Request().DeriveNativeMapChoices);
         SetField("_deriveNativeMapChoices", false);
         Assert.False(Request().DeriveNativeMapChoices);
@@ -454,5 +453,81 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
                     new XElement(brl + "argument", new XElement(brl + "constant", new XElement(brl + "string", setter.Value))))))))))).ToString();
     }
 
+    private static readonly XNamespace Design = "http://schemas.microsoft.com/BizTalk/2003/DesignerData";
+    private static XElement Prop(string key, string value) => new(Design + "Property", new XAttribute("Name", key), new XAttribute("Value", value));
+    private static XElement Shape(string kind, string name, params object[] children) => new(Design + "Element", new XAttribute("Type", kind), Prop("Name", name), children);
+    private static XElement PartRef(string link, string message, string? part = null)
+        => new(Design + "Element", new XAttribute("Type", "MessagePartRef"), new XAttribute("ParentLink", link), Prop("MessageRef", message), part is null ? null : Prop("PartRef", part), Prop("Name", "ref-" + message));
+
+    private async Task<(BizTalkSolutionAnalysisResponse Response, BizTalkFlowCandidateResponse Candidate)> ImportTransformShape(string className, bool derive = true, string? part = null, bool twoInputs = false)
+    {
+        var project = WriteProject();
+        File.WriteAllText(project, File.ReadAllText(project).Replace("</ItemGroup>", "<XLang Include=\"Flow.odx\" /></ItemGroup>", StringComparison.Ordinal));
+        var inputs = twoInputs ? new object[] { PartRef("Transform_InputMessagePartRef", "request", part), PartRef("Transform_InputMessagePartRef", "extra") }
+            : [PartRef("Transform_InputMessagePartRef", "request", part)];
+        var source = new XElement(Design + "MetaModel", Shape("ServiceDeclaration", "Service",
+            Shape("MessageDeclaration", "request"), Shape("MessageDeclaration", "extra"), Shape("MessageDeclaration", "result"),
+            Shape("ServiceBody", "Body",
+                Shape("Receive", "input", Prop("MessageName", "request"), Prop("PortName", "input")),
+                Shape("Construct", "Build result",
+                    Shape("Transform", "Apply map", Prop("ClassName", className), inputs, PartRef("Transform_OutputMessagePartRef", "result")),
+                    Shape("MessageRef", "resultRef", Prop("Ref", "result"))))));
+        File.WriteAllText(Path.Combine(_directory, "Flow.odx"), "<?xml version='1.0'?>" + source);
+        var response = await new BizTalkImportService().AnalyzeAsync(new AnalyzeBizTalkSolutionRequest { SourcePath = project, GenerateNativeFlow = true, DeriveNativeMapChoices = derive }, default);
+        return (response, Assert.Single(response.FlowCandidates));
+    }
+
+    private static Mulse.Modules.ControlFlow.NativeFlowDefinition Definition(BizTalkFlowCandidateResponse candidate)
+        => Mulse.Modules.ControlFlow.NativeFlowDefinition.Read(candidate.DraftFlow.Augments.Single().Settings["flowJson"], allowBlocked: true);
+
+    [Fact]
+    public async Task StaticTransformShape_BecomesARenderDispatchStepOverTheSharedChoiceTable()
+    {
+        var (response, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult");
+        var definition = Definition(candidate);
+        Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.Name.Contains("Apply map", StringComparison.Ordinal));
+        var step = Assert.Single(definition.AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Render);
+        Assert.Equal("render-dispatch", step.Module);
+        Assert.Equal(["request"], step.InputMessages);
+        Assert.Equal("result", step.MessageName);
+        Assert.Equal("Acme.Partner.Maps.OrderToResult", step.SelectionExpression!.Literal!.Value);
+        Assert.Contains(RenderDispatchDefinition.Read(definition.RenderChoicesJson!), choice => choice.Value == "Acme.Partner.Maps.OrderToResult");
+        Assert.Contains(response.DerivedMapChoices, item => item.Value == "Acme.Partner.Maps.OrderToResult" && item.Status == "Converted");
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("static Transform shape", StringComparison.Ordinal));
+        Assert.False(candidate.DraftFlow.Enabled);
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_PassesEveryInputInSourceOrder()
+    {
+        var (_, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult", twoInputs: true);
+        var step = Assert.Single(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Render);
+        Assert.Equal(["request", "extra"], step.InputMessages);
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_StaysBlockedWithoutDerivedChoices()
+    {
+        var (_, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult", derive: false);
+        var blocked = Assert.Single(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.Name == "Apply map");
+        Assert.Contains("no native renderer choice", blocked.BlockReason, StringComparison.Ordinal);
+        Assert.Contains("Derive native map choices", blocked.BlockReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_WithAMapThatIsNotInTheImportStaysBlockedAndIsReported()
+    {
+        var (response, candidate) = await ImportTransformShape("Acme.Partner.Maps.NotThere");
+        Assert.Contains(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.BlockReason.Contains("no native renderer choice", StringComparison.Ordinal));
+        Assert.Contains(response.DerivedMapChoices, item => item.Value == "Acme.Partner.Maps.NotThere" && item.Status == "NoMatchingMap");
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_WithAMessagePartInputStaysBlocked()
+    {
+        var (_, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult", part: "BodyPart");
+        var blocked = Assert.Single(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.Name == "Apply map");
+        Assert.Contains("part-level", blocked.BlockReason, StringComparison.Ordinal);
+    }
     public void Dispose() { if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true); }
 }

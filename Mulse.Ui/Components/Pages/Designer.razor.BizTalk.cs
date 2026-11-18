@@ -22,7 +22,7 @@ public partial class Designer
         _generateNativeBizTalkFlow && !string.IsNullOrWhiteSpace(_nativeHostConfigurationPath) ? _nativeHostConfigurationPath : null,
         _generateNativeBizTalkFlow ? SplitPaths(_nativeConfigurationHelperPaths) : null,
         _generateNativeBizTalkFlow ? _nativeMapSettings["casesJson"] : null,
-        _generateNativeBizTalkFlow && _deriveNativeMapChoices && SplitPaths(_additionalRulePaths).Length > 0);
+        _generateNativeBizTalkFlow && _deriveNativeMapChoices);
 
     private string? _bizTalkAnalysisFingerprint;
     private static string BizTalkFingerprint(AnalyzeBizTalkSolutionRequestViewModel request) => System.Text.Json.JsonSerializer.Serialize(request);
@@ -117,7 +117,7 @@ public partial class Designer
         _generateNativeBizTalkFlow && !string.IsNullOrWhiteSpace(_nativeHostConfigurationPath) ? _nativeHostConfigurationPath : null,
         _generateNativeBizTalkFlow ? SplitPaths(_nativeConfigurationHelperPaths) : null,
         _generateNativeBizTalkFlow ? _nativeMapSettings["casesJson"] : null,
-        _generateNativeBizTalkFlow && _deriveNativeMapChoices && SplitPaths(_additionalRulePaths).Length > 0);
+        _generateNativeBizTalkFlow && _deriveNativeMapChoices);
 
     private async Task SelectNativePolicyTarget(BizTalkRulePolicyViewModel policy)
     {
