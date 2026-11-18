@@ -358,7 +358,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                             var target = node.Target!;
                             state.Messages[target.MessageName] = Capture(NativeMessageOperations.SetValue(target, node.Expression!.Evaluate(state.Variables, Fact, instance, clock), Message(target.MessageName))); Pop(); break;
                         case NativeFlowNodeKind.ApplyXmlRules:
-                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.ApplyRules(Message(node.MessageName), node.PolicyJson!, cancellationToken)); Pop(); break;
+                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.ApplyRules(Message(node.MessageName), node.PolicyJson!, cancellationToken, node.StopWhenNoRuleMatches)); Pop(); break;
                         case NativeFlowNodeKind.SaveMessage: state.Messages[node.MessageName] = Capture(batch); Pop(); break;
                         case NativeFlowNodeKind.UseMessage: batch = Message(node.MessageName); Pop(); break;
                         case NativeFlowNodeKind.Reply: context.CaptureResponse(Message(node.MessageName)); Pop(); break;

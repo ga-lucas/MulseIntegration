@@ -41,12 +41,12 @@ internal static class NativeMessageOperations
         return new([payload with { Content = BinaryData.FromString(output) }]);
     }
 
-    public static IntegrationBatch ApplyRules(IntegrationBatch message, string policyJson, CancellationToken cancellationToken)
+    public static IntegrationBatch ApplyRules(IntegrationBatch message, string policyJson, CancellationToken cancellationToken, bool stopWhenNoRuleMatches = false)
     {
         if (message.Count != 1) throw new InvalidOperationException("ApplyXmlRules requires exactly one named XML fact payload.");
         var payload = message.Payloads[0];
         var original = XmlMappingSchemas.ReadXml(payload.GetText(), preserveWhitespace: true);
-        var result = XmlRuleRuntime.Evaluate(XmlRuleRuntime.ReadPolicy(policyJson), payload.GetText(), cancellationToken, requireMatch: false);
+        var result = XmlRuleRuntime.Evaluate(XmlRuleRuntime.ReadPolicy(policyJson), payload.GetText(), cancellationToken, requireMatch: stopWhenNoRuleMatches);
         if (result.MatchedRules.Count == 0) return message;
         var document = XmlMappingSchemas.ReadXml(result.OutputXml, preserveWhitespace: true);
         document.Declaration = original.Declaration;

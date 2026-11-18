@@ -331,6 +331,15 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Billing result:** `orch50` 22 blocked → `orch51` 18 blocked (the four retry-only sends). Of the 21 retrying send ports in the sample binding, 20 use FTP/SFTP/SMTP and 1 uses FILE.
 - **Tests:** `NativeDeliverRetryTests` (bounds, back-compat JSON, park then resume, exhaustion, ambiguous held by default and retried on opt-in, no retry without the setting, classifier cases, a real refused-versus-dropped HTTP connection, editor) and updated importer tests. Suite: 2,571 passed.
 
+### Increment: policy no-match choice
+
+- **Finding:** an imported policy call is an `ApplyXmlRules` node, which already left the fact unchanged when no rule matched (BizTalk's behavior); the later renderer choice then failed on the empty value. Only the `xml-rules-augment` module stopped immediately. The two behaviors were inconsistent and not editable.
+- **Decision (user):** stop by default, editable.
+- **Model/UI:** `ApplyXmlRules.StopWhenNoRuleMatches` (off when absent, so older flows are unchanged) with a checkbox and explanation on the node. `xml-rules-augment` gets an `onNoMatch` setting (Stop by default, or Continue unchanged).
+- **Importer:** sets Stop on the imported call and warns that BizTalk continued.
+- **Tests:** `NativeRuleNoMatchTests` (default continue, stop, back-compat JSON, validity, module setting, editor).
+
+
 
 ### Increment: native Listen and correlation following
 

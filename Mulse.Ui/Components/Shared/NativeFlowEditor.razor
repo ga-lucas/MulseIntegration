@@ -298,7 +298,7 @@
                 || (node.Kind == "AppendXmlMessage") != (node.SourceMessage is not null)
                 || node.SourceMessage is { } source && (string.IsNullOrWhiteSpace(source) || source.Length > 128 || source != source.Trim())
                 || (node.Kind is "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules") && node.Children.Count > 0
-                || (node.Kind == "ApplyXmlRules") != (node.PolicyJson is not null)
+                || (node.Kind == "ApplyXmlRules") != (node.PolicyJson is not null) || node.StopWhenNoRuleMatches && node.Kind != "ApplyXmlRules"
                 || node.PolicyJson is { } policy && (string.IsNullOrWhiteSpace(policy) || policy.Length > 2_000_000)
                 || node.InputMessages is { } inputs && (node.Kind is not ("Render" or "Augment") || !_model.Durable || inputs.Count is < 1 or > 32
                     || node.Kind == "Augment" && inputs.Count != 1

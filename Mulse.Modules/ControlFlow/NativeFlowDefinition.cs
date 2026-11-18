@@ -35,6 +35,8 @@ public sealed class NativeFlowNode
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpression? NamespaceExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? SourceMessage { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? PolicyJson { get; set; }
+    /// <summary>ApplyXmlRules only: fail when no rule matches. Off (the default, and BizTalk's behavior) leaves the fact document unchanged.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool StopWhenNoRuleMatches { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? InputMessages { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpression? SelectionExpression { get; set; }
     /// <summary>InvokeTransform only: ordered argument expressions for the pure, hot-loadable transform module; the String result is stored in <see cref="Variable"/>.</summary>
@@ -142,6 +144,8 @@ public sealed class NativeFlowDefinition
                 if ((node.Kind == NativeFlowNodeKind.ApplyXmlRules) != (node.PolicyJson is not null))
                     throw new ArgumentException($"Native node '{node.Id}' requires a policy only for ApplyXmlRules.");
                 if (node.PolicyJson is not null) _ = XmlRuleRuntime.ReadPolicy(node.PolicyJson);
+                if (node.StopWhenNoRuleMatches && node.Kind != NativeFlowNodeKind.ApplyXmlRules)
+                    throw new ArgumentException($"Native node '{node.Id}' allows stop-when-no-rule-matches only on ApplyXmlRules.");
                 if (node.Expression is not null)
                 {
                     NativeExpression.Validate(node.Expression);

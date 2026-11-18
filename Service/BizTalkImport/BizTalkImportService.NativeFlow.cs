@@ -388,10 +388,11 @@ public sealed partial class BizTalkImportService
                         if (BizTalkRulePolicyAnalyzer.CountPotentialConflicts(policy, default) != 0)
                             throw new NotSupportedException("Selected policy has potentially conflicting matches; native import does not guess BRE agenda/priority conflict resolution.");
                         messageCatalog.ValidatePolicyMessage(message, policy);
+                        warnings.Add($"Policy '{policyName}' {selectedVersion}: BizTalk leaves the fact unchanged when no rule matches and carries on. The native node is set to stop instead, so an unknown value is never processed silently; clear 'Stop when no rule matches' on the node to continue like BizTalk.");
                         warnings.Add($"Policy '{policyName}' {selectedVersion} is an explicitly selected native test target, not proof of the deployed version. Only proven conflict-free single-pass XML fact behavior is compiled; full flow activation remains disabled.");
                         return new() { Id = "source-" + node.Id, Name = node.Name, Children = [
                             new() { Id = "source-" + parameter.Id, Name = parameter.Name },
-                            new() { Id = "source-" + node.Id + "-rules", Name = policyName + " " + selectedVersion + " (native test target)", Kind = NativeFlowNodeKind.ApplyXmlRules, MessageName = message, PolicyJson = proposal }
+                            new() { Id = "source-" + node.Id + "-rules", Name = policyName + " " + selectedVersion + " (native test target)", Kind = NativeFlowNodeKind.ApplyXmlRules, MessageName = message, PolicyJson = proposal, StopWhenNoRuleMatches = true }
                         ] };
                     }
                     catch (Exception exception) when (exception is ArgumentException or NotSupportedException)

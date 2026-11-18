@@ -230,7 +230,9 @@
         }
         @if (node.Kind == "ApplyXmlRules")
         {
-            <p class="field-hint">Applies one explicit single-pass XML policy/version to a named fact document. No match leaves that document unchanged; conflicting matches fail. The working payload, metadata and other named copies stay unchanged. No BRE agenda, source interpreter or external effect is executed.</p>
+            <p class="field-hint">Applies one explicit single-pass XML policy/version to a named fact document. Conflicting matches fail. The working payload, metadata and other named copies stay unchanged. No BRE agenda, source interpreter or external effect is executed.</p>
+            <label class="field-label"><input type="checkbox" aria-label="Stop when no rule matches" @bind="node.StopWhenNoRuleMatches" @bind:after="Notify" /> Stop when no rule matches</label>
+            <p class="field-hint">@(node.StopWhenNoRuleMatches ? "A value that no rule covers fails the flow here, so an unknown value is never processed silently. BizTalk would have continued with the document unchanged." : "When no rule matches, the document is left unchanged and the flow continues, as BizTalk did. Later steps that need a value the policy would have set may then fail or behave unexpectedly.")</p>
             <XmlRulePolicyEditor PolicyJson='@(node.PolicyJson ?? "")' PolicyJsonChanged="value => SetPolicy(node, value)" />
         }
         @if (node.Target is not null)
@@ -338,7 +340,7 @@
         node.Target = kind == "SetMessageValue" ? new() { Kind = "XmlString" } : null;
         node.NamespaceExpression = kind == "CreateXmlRoot" ? new() : null;
         node.SourceMessage = kind == "AppendXmlMessage" ? "" : null;
-        node.PolicyJson = kind == "ApplyXmlRules" ? "" : null;
+        node.PolicyJson = kind == "ApplyXmlRules" ? "" : null; node.StopWhenNoRuleMatches = false;
         node.TerminateMessage = kind == "Terminate" ? "" : null;
         node.ExceptionMessageVariable = null; node.ExceptionDetailsVariable = null;
         node.InputMessages = null; node.SelectionExpression = null;

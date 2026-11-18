@@ -83,6 +83,8 @@ public sealed class NativePolicyMigrationTests : IDisposable
         Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
         var call = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.ApplyXmlRules);
         Assert.Equal("facts", call.MessageName);
+        Assert.True(call.StopWhenNoRuleMatches);
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("BizTalk leaves the fact unchanged when no rule matches", StringComparison.Ordinal));
         var policy = XmlRuleRuntime.ReadPolicy(call.PolicyJson!);
         Assert.Equal(version, policy.Version);
         Assert.Equal(expected, policy.Rules[0].Assignments[0].Value);
@@ -120,6 +122,8 @@ public sealed class NativePolicyMigrationTests : IDisposable
     public async Task NativePolicyMutatesOnlyNamedSnapshotAcrossDiskRestart(string group, string batch, string expected)
     {
         var (_, definition) = await Import();
+        // The importer defaults to stopping; these cases cover the explicit "continue like BizTalk" choice.
+        definition.AllNodes().Single(node => node.Kind == NativeFlowNodeKind.ApplyXmlRules).StopWhenNoRuleMatches = false;
         var parent = definition.AllNodes().Single(node => node.Children.Any(child => child.Kind == NativeFlowNodeKind.Reply));
         parent.Children.Insert(parent.Children.FindIndex(node => node.Kind == NativeFlowNodeKind.Reply), new() { Id = "pause", Kind = NativeFlowNodeKind.Wait, DurationSeconds = 1 });
         var step = new ModuleStepDefinition { Module = NativeFlowDefinition.ModuleId, Settings = new() { ["flowJson"] = JsonSerializer.Serialize(definition, Json) } };
@@ -144,6 +148,18 @@ public sealed class NativePolicyMigrationTests : IDisposable
         Assert.Equal(expected, XDocument.Parse(reply.GetText()).Root!.Element("MapName")!.Value);
         if (expected.Length == 0) Assert.Equal(input.Payloads[0].GetText(), reply.GetText());
         else Assert.Equal("utf-8", XDocument.Parse(reply.GetText()).Declaration!.Encoding);
+    }
+
+    [Theory]
+    [InlineData("999", "true")]
+    [InlineData("001", "false")]
+    public async Task ImportedPolicyCallStopsByDefaultWhenNoRuleMatches(string group, string batch)
+    {
+        var (_, definition) = await Import();
+        var step = new ModuleStepDefinition { Module = NativeFlowDefinition.ModuleId, Settings = new() { ["flowJson"] = JsonSerializer.Serialize(definition, Json) } };
+        var failure = await Assert.ThrowsAnyAsync<Exception>(() => new NativeControlFlowAugmentModule(new NoEffects(), new NoEffects(),
+            new InMemoryFlowOrchestrationStateStore(), new Clock()).AugmentAsync(new FlowExecutionContext("policy", "run", new Clock().Now), Input(group, batch, declaration: true), step, default));
+        Assert.Contains("No XML rule matched", failure.ToString());
     }
 
     [Theory]
