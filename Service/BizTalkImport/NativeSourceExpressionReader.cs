@@ -333,8 +333,20 @@ internal sealed class NativeSourceExpressionReader
                     Next(); Expect("("); Expect(")"); Expect(";"); pendingEmptyDocument = name; continue;
                 }
                 if (_kind == "name" && _token.LastIndexOf('.') is var partDotInSource and > 0 && _multiparts.Contains(_token[..partDotInSource]))
-                    throw new NotSupportedException("Copying part '" + _token[(partDotInSource + 1)..] + "' of multipart message '" + _token[..partDotInSource] + "' into message '" + name
-                        + "' is not translated: native messages have no defined part split, and the native shape of a received HL7 multipart (the BTAHL7 disassembler output) is not defined. Split the message explicitly with native operations.");
+                {
+                    var multipartName = _token[..partDotInSource]; var partName = _token[(partDotInSource + 1)..];
+                    if (partName is not ("MSHSegment" or "BodySegments") || _multiparts.Contains(name))
+                        throw new NotSupportedException("Copying part '" + partName + "' of multipart message '" + multipartName + "' into message '" + name
+                            + "' is not translated: only the MSHSegment and BodySegments parts can be copied into a single-part message (the empty ZSegments part has no native representation).");
+                    Next(); Expect(";");
+                    nodes.Add(new()
+                    {
+                        Id = id + "-part-" + nodes.Count, Name = "Copy " + partName + " of " + multipartName + " into " + name, Kind = NativeFlowNodeKind.Render, Module = "xml-child-select",
+                        Settings = new(StringComparer.OrdinalIgnoreCase) { ["partNumber"] = partName == "MSHSegment" ? "1" : "2", ["expectedRootName"] = "", ["metadata"] = "Clear" },
+                        InputMessages = [multipartName], MessageName = name
+                    });
+                    pendingEmptyDocument = null; continue;
+                }
                 if (_kind != "name" || !_messages.Contains(_token) || _token == pendingEmptyDocument)
                     throw new NotSupportedException("Message copy requires a declared initialized source; transforms/context/empty DOM behavior require explicit native operations.");
                 var source = _token; Next(); Expect(";");

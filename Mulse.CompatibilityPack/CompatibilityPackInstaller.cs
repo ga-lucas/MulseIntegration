@@ -21,6 +21,7 @@ public sealed class CompatibilityPackInstaller : IModuleInstaller
         builder.AddRender<XmlRemoveNamespacesRenderModule>();
         builder.AddRender<FlatFileRenderModule>();
         builder.AddRender<FlatFileSchemaRenderModule>();
+        builder.AddRender<XmlChildSelectModule>();
         builder.AddRender<XsltRenderModule>();
         builder.AddRender<XmlMappingRenderModule>();
         builder.AddRender<SoapEnvelopeRenderModule>();

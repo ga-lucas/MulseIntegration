@@ -128,14 +128,33 @@ public sealed class NativePlatformMultipartImportTests : IDisposable
         Assert.Contains(warnings, warning => warning.Contains("HL7vXGeneric multipart"));
     }
 
-    [Fact]
-    public async Task CopyingOnePartOfAMultipartIntoAMessageStaysBlockedWithTheSpecificCause()
+    [Theory]
+    [InlineData("header", "hl7.MSHSegment", "1")]
+    [InlineData("body", "hl7.BodySegments", "2")]
+    public async Task CopyingTheHeaderOrBodyPartOfAMultipartBecomesAnXmlChildSelectWithADisclosedAssumption(string target, string part, string number)
     {
-        var definition = await Import(("first", Prelude, "hl7"), ("split", "copy.MSHSegment = new System.Xml.XmlDocument(); copy.BodySegments = new System.Xml.XmlDocument(); copy.MSHSegment = header; copy.BodySegments = body; copy.ZSegments = \"\";", "copy"),
-            ("part", "header = hl7.MSHSegment;", "header"));
+        var definition = await Import(("first", Prelude, "hl7"), ("part", target + " = " + part + ";", target));
+        var block = Block(definition, "part");
+        Assert.NotEqual(NativeFlowNodeKind.Blocked, block.Kind);
+        var select = Assert.Single(block.Children);
+        Assert.Equal(NativeFlowNodeKind.Render, select.Kind);
+        Assert.Equal("xml-child-select", select.Module);
+        Assert.Equal(number, select.Settings["partNumber"]);
+        Assert.Equal("Clear", select.Settings["metadata"]);
+        Assert.Equal(["hl7"], select.InputMessages);
+        Assert.Equal(target, select.MessageName);
+        var project = Path.Combine(_directory, "Fixture.btproj");
+        var warnings = Assert.Single((await new BizTalkImportService().AnalyzeAsync(new() { SourcePath = project, GenerateNativeFlow = true }, default)).FlowCandidates).DraftFlow.Warnings;
+        Assert.Contains(warnings, warning => warning.Contains("xml-child-select", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CopyingTheZSegmentsPartOfAMultipartStaysBlockedWithTheSpecificCause()
+    {
+        var definition = await Import(("first", Prelude, "hl7"), ("part", "header = hl7.ZSegments;", "header"));
         var block = Block(definition, "part");
         Assert.Equal(NativeFlowNodeKind.Blocked, block.Kind);
-        Assert.Contains("Copying part 'MSHSegment' of multipart message 'hl7' into message 'header'", block.BlockReason, StringComparison.Ordinal);
+        Assert.Contains("Copying part 'ZSegments' of multipart message 'hl7' into message 'header'", block.BlockReason, StringComparison.Ordinal);
     }
 
     public void Dispose()
