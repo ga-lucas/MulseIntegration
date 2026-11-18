@@ -136,7 +136,8 @@ public sealed partial class BizTalkImportService
                 ScheduleRecurrenceType = ChildText(locationElement, "ScheduleRecurrenceType"),
                 StartDateEnabled = ChildBool(locationElement, "ReceiveLocationStartDateEnabled"),
                 EndDateEnabled = ChildBool(locationElement, "ReceiveLocationEndDateEnabled"),
-                HasPipelineConfiguration = ParsePipelineProperties(ChildText(locationElement, "ReceivePipelineData")).Count > 0
+                HasPipelineConfiguration = ParsePipelineProperties(ChildText(locationElement, "ReceivePipelineData")).Count > 0,
+                PipelineComponents = ParsePipelineComponents(ChildText(locationElement, "ReceivePipelineData"))
             }
         };
     }

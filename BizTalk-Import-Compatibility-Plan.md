@@ -9,7 +9,7 @@ BizTalk project -> analyzed artifacts -> canonical Mulse model
 				-> Flow Designer + Mapping Designer -> native Mulse workflow
 ```
 
-Latest verification: 2,097 service tests
+Latest verification: 2,454 service tests
 
 Report-bearing imports remain disabled and fail closed until verified translation support exists. Configuration review and report statuses are not approvals. Older imports without migration metadata require reanalysis/re-import to receive the gate.
 
@@ -67,12 +67,19 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Measured effect (292 real maps):** converting maps rose from 107 to 114. Next: required targets not produced (23), functoid/field inputs below a repeating record (18), functoids linked to records (15), schema paths still missing (10), functoids without a verified equivalent (9).
 - **Verification:** 2,051 service tests passed and the solution built.
 
+### Increment: Property-setter pipeline components become editable steps (send and receive)
+
+- **Evidence (from the component C#):** `ConsumptionPropertySetter`, `SetAndPromoteItemSyncProperties`, `MapNamePromotions` and `HL7Promotions` each just promote a fixed list of context properties in a namespace held by one of their own properties. Two names differ from the component property (`ReadyForSync` is promoted as `ReadyForSynch`, `IsEDI` as `IsEDIData`).
+- **Change:** the importer drafts one `set-context-property-augment` step per promoted property (namespace, name and value all editable). Receive-location pipelines are now read too (binding `ReceivePipelineData`, falling back to the design-time `.btp`), where these components live; before only send ports were read. Receive steps run for the whole flow. If receive locations differ only the first is generated and the others are reported by name. Standard Microsoft receive components are left to the parse step; unrecognized custom components warn. `AddBlockCharacters` (`Hl7AddDelimit`, an unchanged pass-through in the source) is reported as having no effect instead of as unsupported.
+- **Unverified:** BizTalk's behavior when promoting an empty value. Steps with no configured value stay in the draft as no-ops (the module writes nothing for an empty value) and are listed in a warning.
+- **Verification:** 8 new tests (`BizTalkReceivePipelineTests`); 2,454 service tests passed.
+
 ### Increment: ClientIntegration-specific module solution (`ClientIntegration\ClientIntegration.slnx`)
 
 - **Scope rule:** only ClientIntegration-specific code goes in the new plugin solution; general-purpose helpers belong in the Compatibility Pack, `Mulse.Hl7` or the importer.
 - **Added:** `ClientIntegration-process-throttle-augment` (replaces `ProcessThrottler.GetNextProcessId`; maximum and output key are explicit UI settings; random, so not replay-safe) with 15 tests in its own test project. It builds into `Service\plugins\ClientIntegration\net11.0\` like the other plugins.
 - **Checked every other helper in the source solution** (table in `ClientIntegration\README.md`). Already covered: app-setting getters, FilenameMaker, HL7TypeCaster, SetProp, ExecuteXSLTransform.
-- **General-purpose TODO (not in the plugin):** draft one `set-context-property-augment` step per property for the Consump, ItemSynch, MapNamePromotions and HL7Promotions components; report `AddBlockCharacters` as an unfinished pass-through; binary-document store/retrieve module; full dynamic-map (preprocess/header/body/trailer) pattern; map `GetNextProcessId` assignments to the new module.
+- **General-purpose TODO (not in the plugin):** binary-document store/retrieve module; full dynamic-map (preprocess/header/body/trailer) pattern; map `GetNextProcessId` assignments to the new module. (Property-setter drafting and the `AddBlockCharacters` report are done in the next increment.)
 
 ### Increment: A record switched on from a repeating list (per-partner on/off settings)
 
