@@ -52,7 +52,8 @@ Status key:
 | Send with `Response` operation | Supported | Becomes a Reply. |
 | Send to a dynamic port (FILE, FTP, HTTP, SMTP) | Supported | Explicit transport dispatch on the assigned TransportType. |
 | Send to an unbound, ambiguous, direct-bound or other-transport port (WCF, SQL, MSMQ, ...) | Blocked | Needs a binding export or an explicit native adapter. |
-| Send port with retry or a custom transmit pipeline | Blocked | The child Deliver is kept; retry and pipeline order need review. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
+| Send port with retry | Blocked | The child Deliver is kept; retry needs reviewed effect reconciliation. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
+| Send port with a custom transmit pipeline | Supported for a proven subset | Components translate to an ordered chain of named Augment/Render nodes in front of the Deliver: `HL7TypeCaster`, `.SetProperty`, promotion tables, the HL7 assembler and a MIME/S-MIME encoder (as an SMTP attachment). Any other component (for example the flat-file assembler) keeps the send Blocked and names the component. |
 | Delay (whole seconds, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait. Sub-second and nested forms are Blocked. |
 | Terminate (literal message) | Supported | Dynamic messages are Blocked. |
 | Expression / variable / message assignment | Supported | Statement subset, see "Source expressions" below. |
@@ -277,6 +278,15 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Tests:** 7 synthetic tests (stock pipelines pass with warnings, custom and EdiSend blocked with the name, per-port configuration blocked, retry blocked separately, direct send becomes a flow-link deliver with an unset channel, unbound send still blocked). Suite: 2,527 passed.
 - **Billing result (`orch42`):** 61 → 40 blocked rows, 2 clean, 33 none. The "no unique physical binding" blocks dropped from 47 to 0 (the 12 genuinely direct-bound ones now import as flow-link deliveries). Remaining send blockers are custom pipelines (23 sends, 1 of them also with retry) and retry alone (3).
 
+### Increment: custom transmit pipelines as native node chains
+
+- **Change:** a send port's pipeline components now translate to an ordered chain of named native nodes ahead of the Deliver, for static and dynamic sends. The first node reads the Send's message; each writes `{message}~{nodeId}~{n}`; the Deliver (id suffixed `-delivery`) reads the last. The result is a Sequence with the original source id.
+- **Components translated:** `HL7TypeCaster` (`hl7-message-type-augment`), `.SetProperty` and promotion tables (`set-context-property-augment`; empty values are a no-op and warned), the BTAHL7 assembler (`hl7-xml-render`), `Hl7AddDelimit` (no node, warned: it passes the message through). Any other component keeps the send Blocked, naming the component; translated components are shown as children.
+- **Binding vs design-time values:** a binding stores only the properties that were overridden. Unset properties are now filled from the same component (matched by class name, in order) in the `.btp` pipeline file; binding values win. A warning says the deployed values may differ. A binding exports a true Boolean as the COM value `-1`, which is accepted.
+- **MIME/S-MIME encoder, choice and implication:** with `SendBodyPartAsAttachment` true, no signing and no encryption, the SMTP deliver sends the payload as an attachment (`attachPayload=true`, body not used). The MIME headers are produced by the SMTP library, not by an encoder, so they may differ from BizTalk's. Signing, encryption, body-part-off or a non-SMTP deliver stay Blocked.
+- **Dynamic ports with a MIME encoder:** only the SMTP branch is translated; any other assigned transport ends the flow explicitly (a Terminate node) instead of sending an unwrapped message. The warning asks you to review which transports BizTalk could really select. A port with no SMTP handler stays Blocked.
+- **Still Blocked:** flat-file assembler (no native schema-driven renderer; the Billing pipeline leaves the document spec empty, so BizTalk chooses the schema from the runtime message type), signing/encryption, retry above 0 (separate reason), unknown components.
+- **Billing result:** `orch42` 40 blocked → `orch46` 33 blocked. Remaining send blockers: flat-file assembler (15), retry only (4).
 ### Increment: native Listen and correlation following
 
 - **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.

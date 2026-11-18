@@ -172,6 +172,10 @@ public sealed partial class BizTalkImportService
             NativeFlowNode DynamicSend(OdxNode node, NativeFlowNode translated, string port, string message, SendPortAnalysis send)
             {
                 if (send.IsTwoWay) return Block(node, $"Dynamic send port '{send.Name}' is two-way; native request/response over a runtime-selected transport is not inferred.");
+                var pipelineNeedsStep = !TransmitPipelineNeedsNoStep(send, Warn);
+                var pipeline = pipelineNeedsStep ? BuildTransmitPipelineChain(send, translated.Id, message, Warn) : null;
+                var chainBlockers = pipeline?.Blockers.ToList() ?? [];
+                if (pipeline is not null) message = pipeline.FinalMessage;
                 NativeExpression Variable(string name) => new() { Kind = NativeExpressionKind.Variable, Variable = name };
                 var addressVariable = NativeSourceExpressionReader.DynamicPortVariable(port, "Address");
                 var transportVariable = NativeSourceExpressionReader.DynamicPortVariable(port, "TransportType");
@@ -191,7 +195,9 @@ public sealed partial class BizTalkImportService
                     => AddRequirement(requirements, candidate.SuggestedFlowId, $"deliveries[{translated.Id + suffix}].delivers[0].deliver.settings.{key}", kind, description, appliedToDraft: true);
                 var allowed = send.DynamicTransportTypes;
                 var branches = new List<(string Transport, List<NativeFlowNode> Nodes)>();
-                bool Allowed(string transport) => allowed.Count == 0 || allowed.Contains(transport, StringComparer.OrdinalIgnoreCase);
+                // A MIME wrapper is only expressed for email delivery; every other transport then ends the flow explicitly instead of sending an unwrapped message.
+                var mimeSmtpOnly = pipeline is { MimeAttachment: true } && chainBlockers.Count == 0;
+                bool Allowed(string transport) => (!mimeSmtpOnly || transport == "SMTP") && (allowed.Count == 0 || allowed.Contains(transport, StringComparer.OrdinalIgnoreCase));
                 if (Allowed("FILE"))
                     branches.Add(("FILE", [Part("-file-dir", "Path", "Directory"), Part("-file-name", "Path", "FileName"),
                         Deliver("-file", "file-system-deliver", new() { ["namingMode"] = "Fixed", ["overwriteExisting"] = "false" },
@@ -219,23 +225,34 @@ public sealed partial class BizTalkImportService
                             ["from"] = Requirement("-smtp", "from", "Config", $"SMTP sender address for dynamic send port '{send.Name}'."),
                             ["subject"] = $"Imported BizTalk delivery {send.Name}", ["attachPayload"] = "true"
                         }, new() { ["to"] = Variable(NativeSourceExpressionReader.DynamicPortVariable(port, "MailAddress")) })]));
-                if (branches.Count == 0) return Block(node, $"Dynamic send port '{send.Name}' allows no transport with a native adapter ({string.Join(", ", allowed)}).");
+                if (branches.Count == 0) return Block(node, mimeSmtpOnly ? $"Dynamic send port '{send.Name}' uses a MIME/S-MIME encoder, which is only translated for SMTP delivery, but the port allows no SMTP handler." : $"Dynamic send port '{send.Name}' allows no transport with a native adapter ({string.Join(", ", allowed)}).");
                 var supported = string.Join(", ", branches.Select(branch => branch.Transport));
                 List<NativeFlowNode> chain = [new() { Id = translated.Id + "-unsupported", Name = "No native adapter", Kind = NativeFlowNodeKind.Terminate,
-                    TerminateMessage = $"Dynamic send port '{port}' has no native adapter for the assigned transport type; native adapters exist for: {supported}." }];
+                    TerminateMessage = $"Dynamic send port '{port}' has no native adapter for the assigned transport type; native adapters exist for: {supported}." + (mimeSmtpOnly ? " This port's pipeline wraps the message in MIME, which is only translated for SMTP." : "") }];
                 foreach (var (transport, nodes) in Enumerable.Reverse(branches))
                     chain = [new() { Id = translated.Id + "-when-" + transport.ToLowerInvariant(), Name = transport, Kind = NativeFlowNodeKind.If,
                         Expression = new() { Kind = NativeExpressionKind.Equal, Operands = [Variable(transportVariable), new() { Literal = NativeScalar.From(transport) }] },
                         Children = nodes, Otherwise = chain }];
                 translated.Kind = NativeFlowNodeKind.Sequence; translated.Children = chain;
                 Warn($"Dynamic send port '{port}' is translated to an explicit native transport dispatch on the assigned TransportType (exact, case-sensitive FILE/FTP/HTTP/SMTP, limited to the binding's dynamic handlers). Address parsing uses the 'address-part-transform' UDF (Compatibility Pack): FILE splits the last separator, FTP expects ftp://host[:port]/dir/file (default port 21), SMTP strips mailto:. Adapter properties assigned on the outbound message (for example FTP.*, SMTP.* or nsoftware.* values such as TLS mode, subject, sender or host) are NOT translated and stay visible as blockers; the deliver nodes carry reviewed static defaults (FTP encryptionMode=Auto, passive, no overwrite; FILE overwriteExisting=false; SMTP host/from/subject as configuration). A FTP computed remote file name is still expanded as a template by ftp-deliver. Any other or unassigned transport type terminates the flow explicitly.");
-                var unsupportedAllowed = allowed.Where(transport => !branches.Any(branch => branch.Transport.Equals(transport, StringComparison.OrdinalIgnoreCase))).ToArray();
+                string[] unsupportedAllowed = mimeSmtpOnly ? [] : allowed.Where(transport => !branches.Any(branch => branch.Transport.Equals(transport, StringComparison.OrdinalIgnoreCase))).ToArray();
                 if (unsupportedAllowed.Length > 0)
                     Warn($"Dynamic send port '{send.Name}' also allows transports with no native adapter ({string.Join(", ", unsupportedAllowed)}); those values terminate the flow.");
-                if (!TransmitPipelineNeedsNoStep(send, Warn))
+                if (mimeSmtpOnly)
                 {
+                    if (ApplyMimeAttachment(pipeline!, branches[0].Nodes[^1], Warn) is { } mimeReason) chainBlockers.Add(mimeReason);
+                    Warn($"Dynamic send port '{send.Name}' wraps the message in MIME (its pipeline's MIME/S-MIME encoder); only the SMTP branch is translated, and any other assigned transport type ends the flow explicitly rather than sending an unwrapped message. Review which transports BizTalk could really select for this port.");
+                }
+                if (pipelineNeedsStep)
+                {
+                    var sendId = translated.Id;
                     translated.Id += "-delivery";
-                    return Block(node, $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the dynamic deliveries at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(send), [translated]);
+                    if (pipeline is not null && chainBlockers.Count == 0)
+                        return new() { Id = sendId, Name = translated.Name, Kind = NativeFlowNodeKind.Sequence, Children = [.. pipeline.Nodes, translated] };
+                    var reason = pipeline is null
+                        ? $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}' whose components are not known (no per-port configuration in the binding and no pipeline file in the import). Add the pipeline project to the import, or configure named-message augment/render nodes on a separate output message and point the dynamic deliveries at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(send)
+                        : $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}', which has no proven native equivalent for: {string.Join("; ", chainBlockers)}. The translated components are shown as children; configure the remaining step explicitly. No serializer or pass-through is inferred." + PipelineBlockDetail(send);
+                    return Block(node, reason, [.. pipeline?.Nodes ?? [], translated]);
                 }
                 return translated;
             }
@@ -616,14 +633,25 @@ public sealed partial class BizTalkImportService
                         translated.Settings = new(settings.Settings, StringComparer.OrdinalIgnoreCase); translated.MessageName = outboundMessage;
                         if (physical[0].IsTwoWay) translated.Settings["expectsResponse"] = "true";
                         var pipelineNeedsStep = !TransmitPipelineNeedsNoStep(physical[0], Warn);
+                        var chain = pipelineNeedsStep ? BuildTransmitPipelineChain(physical[0], translated.Id, outboundMessage, Warn) : null;
+                        if (chain is not null) translated.MessageName = chain.FinalMessage;
+                        var chainBlockers = chain?.Blockers.ToList() ?? [];
+                        if (chain is not null && chainBlockers.Count == 0 && ApplyMimeAttachment(chain, translated, Warn) is { } mimeReason) chainBlockers.Add(mimeReason);
                         if (physical[0].RetryCount > 0 || pipelineNeedsStep)
                         {
+                            var sendId = translated.Id;
                             translated.Id += "-delivery";
+                            if (chain is not null && chainBlockers.Count == 0 && physical[0].RetryCount == 0)
+                                return new() { Id = sendId, Name = translated.Name, Kind = NativeFlowNodeKind.Sequence, Children = [.. chain.Nodes, translated] };
                             var reason = physical[0].RetryCount > 0
                                 ? "Physical send retry semantics require reviewed native effect reconciliation; no automatic resend is inferred. " : "";
                             if (pipelineNeedsStep)
-                                reason += $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the child delivery at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(physical[0]);
-                            return Block(node, reason, [translated]);
+                                reason += chain is null
+                                    ? $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}' whose components are not known (no per-port configuration in the binding and no pipeline file in the import). Add the pipeline project to the import, or configure named-message augment/render nodes on a separate output message and point the child delivery at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(physical[0])
+                                    : chainBlockers.Count > 0
+                                        ? $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}', which has no proven native equivalent for: {string.Join("; ", chainBlockers)}. The translated components are shown as children; configure the remaining step explicitly. No serializer or pass-through is inferred." + PipelineBlockDetail(physical[0])
+                                        : "";
+                            return Block(node, reason, [.. chain?.Nodes ?? [], translated]);
                         }
                         return translated;
                     case "CallRules":

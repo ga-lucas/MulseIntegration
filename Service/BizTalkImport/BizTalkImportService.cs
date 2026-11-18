@@ -276,11 +276,14 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
                 warnings.Add($"Converted maps are stored as {storedMapValues.Count} config value(s) named 'biztalk-map.*'; the generated flows reference them, so the effective choices JSON holds references rather than map content.");
         }
         var reservedFlowIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // The native translator reads custom pipeline components from the binding, falling back to the design-time pipeline files of every analyzed project.
+        var pipelineArtifacts = hydratedProjects.SelectMany(static project => project.Artifacts.Concat(project.ReferencedArtifacts)).ToArray();
+        var nativeBindings = request.GenerateNativeFlow ? bindingAnalyses.Select(binding => ApplyPipelineFileDefaults(binding, pipelineArtifacts, [])).ToArray() : [];
         var flowCandidates = candidateProjects
             .OrderBy(static project => project.Response.ProjectPath, StringComparer.OrdinalIgnoreCase)
             .SelectMany(project => CreateFlowCandidates(project, customAssemblies, bindingAnalyses, mapInventory, reservedFlowIds))
             .Select(candidate => AttachRuleEvidence(candidate, rulePolicies))
-            .Select(candidate => request.GenerateNativeFlow ? AttachNativeFlow(candidate, bindingAnalyses, rulePolicies, nativeSchemas!, request.NativePolicyVersions, nativeConfiguration, mapChoicesJson) : candidate)
+            .Select(candidate => request.GenerateNativeFlow ? AttachNativeFlow(candidate, nativeBindings, rulePolicies, nativeSchemas!, request.NativePolicyVersions, nativeConfiguration, mapChoicesJson) : candidate)
             .Select(candidate => AttachStoredConfigValues(candidate, storedMapValues))
             .ToArray();
 

@@ -11,6 +11,7 @@ public sealed partial class BizTalkImportService
     /// <summary>
     /// When a send port's binding carries no SendPipelineData, falls back to the design-time component properties of the
     /// referenced custom pipeline (.btp) so the same component-to-step mapping applies. Values are design-time defaults.
+    /// When the binding does carry component configuration, properties it does not set are filled from the same design-time values.
     /// </summary>
     private static BindingFileAnalysis ApplyPipelineFileDefaults(BindingFileAnalysis binding, IEnumerable<BizTalkArtifactResponse> artifacts, List<string> draftWarnings)
     {
@@ -27,11 +28,16 @@ public sealed partial class BizTalkImportService
         {
             ReceiveLocations = port.ReceiveLocations.Select(location =>
             {
-                if (location.Operational.PipelineComponents.Count > 0 || location.ReceivePipeline.Length == 0
-                    || FindPipelineFile(pipelineFiles, location.ReceivePipeline) is not { } file
+                if (location.ReceivePipeline.Length == 0 || FindPipelineFile(pipelineFiles, location.ReceivePipeline) is not { } file
                     || ReadPipelineFileComponents(file.FullPath) is not { Count: > 0 } components)
                 {
                     return location;
+                }
+
+                if (location.Operational.PipelineComponents.Count > 0)
+                {
+                    return MergeDesignTimeDefaults(location.Operational.PipelineComponents, components) is { } merged
+                        ? location with { Operational = location.Operational with { PipelineComponents = merged } } : location;
                 }
 
                 draftWarnings.Add($"Receive location '{location.Name}' has no pipeline configuration in the binding; component properties were read from the design-time pipeline file '{Path.GetFileName(file.FullPath)}'. Deployed per-location overrides are not known - compare with the deployed binding.");
@@ -41,7 +47,7 @@ public sealed partial class BizTalkImportService
 
         var ports = binding.SendPorts.Select(port =>
         {
-            if (port.Operational.PipelineComponents.Count > 0 || port.TransmitPipeline.Length == 0)
+            if (port.TransmitPipeline.Length == 0)
             {
                 return port;
             }
@@ -58,11 +64,43 @@ public sealed partial class BizTalkImportService
                 return port;
             }
 
+            if (port.Operational.PipelineComponents.Count > 0)
+            {
+                return MergeDesignTimeDefaults(port.Operational.PipelineComponents, components) is { } merged
+                    ? port with { Operational = port.Operational with { PipelineComponents = merged } } : port;
+            }
+
             draftWarnings.Add($"Send port '{port.Name}' has no pipeline configuration in the binding; component properties were read from the design-time pipeline file '{Path.GetFileName(file.FullPath)}'. Deployed per-port overrides are not known - compare with the deployed binding.");
             return port with { Operational = port.Operational with { PipelineComponents = components } };
         }).ToArray();
 
         return binding with { ReceivePorts = receivePorts, SendPorts = ports };
+    }
+
+    /// <summary>
+    /// A binding stores only the pipeline properties set on the port; every other property keeps the value designed into the pipeline file.
+    /// Fills the properties a binding component does not set from the same component (matched by class name, in order) in the pipeline file.
+    /// Returns null when nothing was filled.
+    /// </summary>
+    private static IReadOnlyList<PipelineComponentConfig>? MergeDesignTimeDefaults(IReadOnlyList<PipelineComponentConfig> deployed, IReadOnlyList<PipelineComponentConfig> design)
+    {
+        var used = new HashSet<int>();
+        var changed = false;
+        var merged = deployed.Select(component =>
+        {
+            var index = -1;
+            for (var candidate = 0; candidate < design.Count && index < 0; candidate++)
+                if (!used.Contains(candidate) && string.Equals(design[candidate].ClassName, component.ClassName, StringComparison.OrdinalIgnoreCase)) index = candidate;
+            if (index < 0) return component;
+            used.Add(index);
+            var missing = design[index].Properties.Where(pair => !component.Properties.ContainsKey(pair.Key)).ToArray();
+            if (missing.Length == 0) return component;
+            changed = true;
+            var properties = new Dictionary<string, string>(component.Properties, StringComparer.Ordinal);
+            foreach (var pair in missing) properties[pair.Key] = pair.Value;
+            return component with { Properties = properties };
+        }).ToArray();
+        return changed ? merged : null;
     }
 
     private static BizTalkArtifactResponse? FindPipelineFile(IEnumerable<BizTalkArtifactResponse> pipelineFiles, string pipelineTypeName)
