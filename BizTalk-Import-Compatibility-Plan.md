@@ -23,6 +23,121 @@ The importer is meant for this organization first and for publication as a reusa
 
 Report-bearing imports remain disabled and fail closed until verified translation support exists. Configuration review and report statuses are not approvals. Older imports without migration metadata require reanalysis/re-import to receive the gate.
 
+## Construct coverage matrix
+
+This table is by BizTalk construct, not by sample. It was written from the importer code (2026-11), so re-check it when a translator changes; it is maintained by hand.
+
+Status key:
+- **Supported:** imported as native, editable nodes or settings (often with a review warning).
+- **Evidence only:** kept as a named, visible node. It does not change behavior and is not enforced.
+- **Stub:** imported as a documented placeholder with editable UI settings; the original logic is not run.
+- **Blocked:** imported as a visible `Blocked` node (or the map or policy is left unconverted). The flow cannot be enabled until you configure it.
+- **Not recognized:** the construct is not looked at specifically; the default is Blocked, never skipped.
+
+### Orchestration shapes
+
+| Construct | Status | Notes |
+|---|---|---|
+| Service, ServiceBody, Construct | Supported | Plain native sequences. |
+| Scope | Supported | Becomes a sequence. Timeout, retry, batch, isolation, synchronization and rollback are not enforced (warned). |
+| Scope with one untyped `System.Exception` catch | Supported | Native `Try` (body faults only; see the Try increment). |
+| Typed, multiple or fault-message catches | Blocked | Handler order and exception-type matching are not guessed. |
+| Atomic / long-running transaction attributes | Evidence only | Kept by name with their settings. |
+| Decision (if / else if / else) | Supported | Final branch may be an else. Conditions use the supported expression subset. |
+| While / Loop | Supported | Native safety bound of 100 iterations (editable). |
+| Receive (channel + message) | Supported | Filters become native conditions. A filter mixing AND and OR groups is Blocked. |
+| Receive that follows a correlation set | Supported | Native correlation keys. Unproven sets are Blocked. |
+| Listen (2 to 16 branches, at most one Delay) | Supported | First match in source order; timeout fixed on entry. |
+| Send to a uniquely bound FILE, FTP, SFTP, SMTP or HTTP port | Supported | Becomes a Deliver node with editable settings. |
+| Send with `Response` operation | Supported | Becomes a Reply. |
+| Send to a dynamic port (FILE, FTP, HTTP, SMTP) | Supported | Explicit transport dispatch on the assigned TransportType. |
+| Send to an unbound, ambiguous, direct-bound or other-transport port (WCF, SQL, MSMQ, ...) | Blocked | Needs a binding export or an explicit native adapter. |
+| Send port with retry or a transmit pipeline | Blocked | The child Deliver is kept; retry and pipeline order need review. |
+| Delay (whole seconds, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait. Sub-second and nested forms are Blocked. |
+| Terminate (literal message) | Supported | Dynamic messages are Blocked. |
+| Expression / variable / message assignment | Supported | Statement subset, see "Source expressions" below. |
+| Transform shape | Blocked | Maps run through supported assignments or the dynamic-transform pattern instead. |
+| Call Rules | Blocked by default | The policy proposal is attached. With an explicit version choice it can become native Apply XML Rules (single XML fact, conflict-free). |
+| Call / Start Orchestration, Parallel Actions, Throw, Suspend, Compensate, Task and other shapes | Not recognized | Default is Blocked, with the shape type named. |
+| Port, port type, operation, message and multipart declarations | Supported | Named declarations. Message declarations with an initial value are Blocked. |
+| Message part reference (`MessagePartRef`) | Blocked | |
+| Scalar variables (String, Int32, Boolean, DateTime) | Supported | DateTime is UTC (assumption stated at import). Other variable types are Blocked. |
+
+### Source expressions
+
+| Construct | Status | Notes |
+|---|---|---|
+| Literals, comparison, arithmetic, logical operators | Supported | |
+| String members (`Length`, `IndexOf`, `LastIndexOf`, `Substring`) and `Regex.IsMatch` | Supported | Only when operand types are proven. Search is ordinal, not culture-sensitive (warned). |
+| `Convert.ToString`, `Convert.ToInt32` | Supported | Only for proven operand types. |
+| `DateTime.Subtract`, `DateTime` values | Supported | UTC. |
+| XPath and distinguished-field reads, XML construction | Supported | |
+| Context properties declared in a property schema | Supported | Needs one exact declared schema identity. |
+| `BTS.MessageID` | Supported (read only) | See the `BTS.MessageID` increment. |
+| Adapter and HL7 assembler properties (FTP.*, FILE.*, SMTP.*, MIME.FileName, BTAHL7Schemas.*, nsoftware.*) | Evidence only | Stored as importer metadata keys; no native module reads them. Configure the Deliver settings. Writes of literal credentials are Blocked. |
+| Other platform properties (for example `WCF.*`) | Blocked | |
+| Part-level context | Blocked | Native messages carry message-level metadata only. |
+| Host configuration getters and similar pure helpers | Supported | Pinned as editable literals from a supplied snapshot. |
+| Arbitrary .NET helper calls | Blocked | Known helpers can be added as pure transforms (for example the filename template). |
+| `System.Type.GetType` / compiled-map transform calls | Supported | Dynamic transforms from the shared renderer table. |
+
+### Maps and functoids
+
+| Construct | Status | Notes |
+|---|---|---|
+| Schema-tree XML maps, direct links, nested and repeating records | Supported | Converted to native maps; compare with real output before use. |
+| Multi-input maps | Supported | Inline aggregate source schema. |
+| Custom XSLT map | Supported | Becomes an XSLT render choice. |
+| String: Left, Right, Size, Concatenate, Uppercase, Lowercase, Trim Left/Right (FIDs 102-105, 107-110) | Supported | Some are verified against compiled helper code; the rest follow documented behavior and are reported as unverified. |
+| Math: Int, Abs, Add, Subtract, Multiply, Divide (FIDs 111, 112, 118-121) | Supported | |
+| Date: Current Date, Current Date and Time (FIDs 123, 125) | Supported | UTC. |
+| Logical: comparisons, And, Or, Not, Existence (FIDs 311-316, 320, 321, 701, 705) | Supported | Records created only when a logical functoid is true are supported. |
+| Iteration, Record Count, Index (FIDs 474, 322, 323) | Supported | |
+| Cumulative: Sum, Average, Min, Max, Concatenate (FIDs 324-328) | Supported | |
+| Looping (424, single input) and Mass Copy (802) | Supported | |
+| Value Mapping (375) and Value Mapping (Flattening) (374) | Supported | Conditional target. 374 is equivalent only for single-value inputs. A Value Mapping feeding another functoid is not converted. |
+| Scripting functoid (260): inline C# and XSLT | Stub | Documented stub with editable settings; the script is not run. Other script languages are not imported. |
+| Any other functoid ID | Blocked | The map is left unconverted and the error names the FID. |
+| Maps in assemblies that were not supplied | Blocked | Reported as "map class not found". |
+
+### Adapters and ports
+
+| Construct | Status | Notes |
+|---|---|---|
+| Send: FILE, FTP, SFTP (including nsoftware variants), SMTP, HTTP | Supported | |
+| Send: WCF-*, SQL, MSMQ, POP3, SOAP, Service Bus and other adapters | Blocked | |
+| Receive locations: FILE, SFTP, HTTP | Supported | Draft trigger step chosen from the address and transport. |
+| Other receive transports | Stub | Falls back to a document-repository placeholder step to configure; confirm the source. |
+| Receive-location service window, start and end dates | Supported | Imported as operational settings or warnings. |
+| MessageBox direct binding | Supported (receive) | The host must supply the channel and filter metadata; outbound direct-bound Sends are Blocked. |
+| Dynamic send ports | Supported | See the Send rows above. |
+
+### Pipelines
+
+| Construct | Status | Notes |
+|---|---|---|
+| Pipeline stages (Decode, Disassemble, Validate, ResolveParty, PreAssemble, Assemble, Encode) | Evidence only | Inventoried per stage and component. |
+| `SetProperty` / property-promotion components | Supported | Become set-context-property steps. |
+| HL7 type caster | Supported | Becomes the HL7 message-type step. |
+| BTAHL7 assembler | Supported | Becomes the HL7 XML render step. Delimiters and escaping need verification with synthetic messages. |
+| HL7 add-delimiter component | Evidence only | Source passes the message through unchanged; MLLP framing is a Deliver setting. |
+| Flat-file assembler and disassembler | Not recognized | Only the migration report points to the flat-file modules; no step is generated and the layout is not translated. |
+| MIME / S-MIME encoder | Blocked | Warned. No native module. Use the SMTP attachment settings and decide separately about signing and encryption. |
+| XML disassembler / assembler, JSON, custom pipeline components | Not recognized | Warned as unsupported; custom pipelines produce no native flow. |
+
+### Business rules (BRE)
+
+| Construct | Status | Notes |
+|---|---|---|
+| Policy export read (versions, facts) | Supported | The latest exported version is not proof of the deployed version. |
+| Typed equality conditions with literal XML assignments, single pass | Supported | Proposal can be run natively on an explicit selection. |
+| Potentially conflicting matches | Blocked | Agenda and priority order are not guessed. |
+| Priorities, forward chaining (update/halt), .NET object facts, database facts, functions | Not recognized | No proposal is produced; the rule needs manual translation. |
+
+### How to read the Billing blockers against this table
+
+The remaining Billing blockers (`orch39`) fall in these rows: outbound ports without an exported binding (47), `MessagePartRef` (3), `RulesParameterRef` and Call Rules review (3 each), a receive filter mixing AND and OR (1), a sub-second Delay (1), part-level context (1), a message copy without a declared source (1), a Transform shape (1). Converter gaps (26 maps) are in the maps and functoids section.
+
 ## Current continuation: isolated testing and Billing migration
 
 - **Partial:** the native control-flow editor now offers a one-shot isolated test with synthetic text input, editable input and mock-output metadata, explicit mock outputs and captured deliveries/replies. Native decisions and message operations use the existing executor; no real source, destination, module catalog or workspace checkpoint is accessed. Unresolved nodes still block, and missing mocks fail explicitly. Each kind/module has one response, with additional dynamic-module mocks available.
@@ -128,6 +243,18 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
   - Explicit (non-derived) map choices are shared the same way.
 - **Tests:** executor (shared table, node override, unlisted identity fails closed, validation), dependency scan, importer (nodes have no settings, table written once), editor render, model round trip, config deferral. Suite: 2,518 passed.
 - **Billing result (`orch38`):** LegacyBillingProcess now imports with its 58 dynamic transforms resolved (28 blocked nodes, all genuine: outbound bindings, part-level context, a sub-second delay, context properties, Retrieve Map, RulesParameterRef). Batch-level counts: 64 blocked rows, 2 clean, 33 none. The row count rose from 36 because the one whole-flow size failure became 28 specific blocked nodes.
+
+### Increment: `BTS.MessageID` is readable
+
+- **Construct:** the BizTalk system context property `BTS.MessageID` (the message's GUID) can now be read in a source expression, for example `Convert.ToString(msg(BTS.MessageID))`. It becomes a String metadata fact on the flow's message-id key (`messageId`, the default of "Message id metadata key" under Execution and message settings), which every received message of a durable native flow must already carry.
+- **Implications (please review):**
+  - BizTalk assigns a new GUID to each message. A native flow uses the id the host supplied when the message arrived, so the value's format can differ from a GUID. The importer adds a draft warning whenever a flow reads it.
+  - A message built inside the flow has no id, so reading its `BTS.MessageID` fails closed. Nothing is invented.
+  - If you change the flow's message-id key in the UI, update the nodes that read the id as well; they name the key explicitly.
+  - It is read-only, as in BizTalk: assigning `BTS.MessageID` stays Blocked. Every other platform property stays write-only (adapter-property writes) and unlisted ones stay Blocked.
+  - The mapping is a small table in the context catalog (`ReadOnlySystemProperties`). Other system properties are added only when their behavior can be proven.
+- **Tests:** 2 synthetic tests (read maps to the key, evaluates, and fails closed without an id; assignment stays Blocked with no read warning). Suite: 2,520 passed.
+- **Billing result (`orch39`):** the 3 "context property requires one exact declared property-schema identity" blocks are gone (all were `BTS.MessageID` reads). 61 blocked rows, 2 clean, 33 none.
 
 ### Increment: native Listen and correlation following
 

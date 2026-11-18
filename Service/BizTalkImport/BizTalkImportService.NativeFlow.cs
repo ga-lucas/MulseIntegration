@@ -654,6 +654,8 @@ public sealed partial class BizTalkImportService
             }
             if (configuration is not null)
                 warnings.Add("Explicit host configuration and pure getter source files are native test snapshots, not proof of deployed assembly identity or inherited machine configuration. Referenced getter results are pinned as editable scalar literals; absent keys retain the proven empty-string return. No configuration file or helper assembly is read at execution time.");
+            if (JsonSerializer.Serialize(definition, NativeJson).Contains("\"metadataKey\":\"" + NativeSourceContextCatalog.MessageIdKey + "\"", StringComparison.Ordinal))
+                warnings.Add("A source read of BTS.MessageID is mapped to the received message's '" + NativeSourceContextCatalog.MessageIdKey + "' metadata (the flow's message-id key, editable under Execution and message settings; if you change that key, update these reads too). BizTalk assigns a new GUID to every message; native flows use the id supplied when the message was received, so its format can differ. A message built inside the flow has no id and the read fails closed.");
             if (definition.AllNodes().Any(node => node.Expression?.RequiresInstance == true || node.NamespaceExpression?.RequiresInstance == true))
                 warnings.Add("Source instance identity reads use the stable new native instance GUID, not a legacy BizTalk instance ID. This identity survives waits and restart; review any external identity contract before activation.");
             var json = JsonSerializer.Serialize(definition, NativeJson);

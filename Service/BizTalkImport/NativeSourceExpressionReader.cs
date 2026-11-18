@@ -307,6 +307,8 @@ internal sealed class NativeSourceExpressionReader
                 {
                     if (pendingEmptyDocument is not null) throw new NotSupportedException("Context assignment cannot reuse a previous snapshot of the empty document being replaced.");
                     var context = ReadContext(name, out var contextSymbol);
+                    if (NativeSourceContextCatalog.IsReadOnlySystemProperty(contextSymbol) && context.MetadataKey == NativeSourceContextCatalog.MessageIdKey)
+                        throw new NotSupportedException("System property '" + contextSymbol + "' is read-only in BizTalk; assigning it is not translated.");
                     Expect("="); var expression = Read(); Expect(";"); NativeExpression.Validate(expression);
                     if (NativeSourceContextCatalog.IsPlatformKey(context.MetadataKey)) context = TypePlatformWrite(context, contextSymbol, expression);
                     nodes.Add(new() { Id = id + "-context-" + nodes.Count, Kind = NativeFlowNodeKind.SetMessageValue, Target = context, Expression = expression });
