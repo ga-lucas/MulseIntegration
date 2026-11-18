@@ -28,8 +28,8 @@ The AI is an assistant to the person responsible. It never decides that a flow i
 3. **Read-only features come first.** Explaining, diagnosing and reviewing change nothing, so they carry the least risk and ship first. Proposals that change a draft come next.
 4. **Nothing is applied silently.** Proposals are shown as a diff against the unsaved draft, applied only on an explicit action, and can be undone. Saving, enabling and running stay separate actions. The AI never retries, resends, acknowledges, deletes or reconciles anything on its own.
 5. **Fail closed.** A proposal that does not validate is shown with the reason, and nothing changes.
-6. **Least data.** Flow structure is the default disclosure. Settings values, config values, secrets, message data, run logs and sample values are each a separate, visible choice with a payload preview. Secrets and config values are never sent.
-7. **Local first.** A local model (Ollama) is a supported and recommended provider where flows touch sensitive systems. Hosted providers are opt-in. The settings page makes the choice and its implication visible.
+6. **Least data.** Structure only is the default disclosure. Source expressions, settings values, run logs, message data and sample values are each a separate, visible choice with a payload preview. Secrets and config values are never sent.
+7. **No default provider.** AI is off until an administrator chooses a provider and model on the settings page; nothing is preselected. A local model (Ollama) is supported and the documentation explains why it suits sensitive systems, but it is not the default. Choosing a hosted provider shows a notice stating what categories of data can leave the organization.
 8. **All text from outside is untrusted.** Message content, file names, error text, run logs, imported source, descriptions and comments can contain text that looks like instructions. It is passed as delimited data, the model has no tools that act on its own, and server-side validation is the control.
 9. **The assistant has the user's permissions and no more.** It reads only what the signed-in user can open, and proposals go through the same authorization as manual edits.
 10. **Everything is configurable in the UI.** Provider, model, disclosure categories, limits and which features are on use the existing AI settings page.
@@ -101,6 +101,17 @@ Each lists what the user gets, the deterministic part, the AI part, and the chec
 
 **T3. Regression check on change.** Re-run saved scenarios when a flow or map changes and explain which outputs changed.
 
+#### Saved real-data scenarios
+
+Scenarios built from history (T2) and BizTalk comparison pairs (M6) can be saved by the user. Because they hold real data, saving is explicit and has rules:
+
+- A saved scenario is marked **contains real data**, shows who saved it and when, and can be deleted at any time.
+- It is stored in workspace storage, separate from the flow definition, so exporting or copying a flow does not carry it.
+- It is never sent to a model unless the user enables the message-data category for that request and sees the payload preview. Synthetic copies (values replaced, shape kept) can be saved without the marker and used freely.
+- It is included in Backup & Restore only if the user chooses to include scenarios in the backup, and the backup page says so.
+- Retention is configurable per workspace (keep until deleted, or expire after N days). Expired scenarios are deleted, not archived.
+- Results (pass or fail and the classified differences) are kept with the scenario; the data itself is not copied into the audit trail.
+
 ### Operate
 
 **O1. Explain this run.** On a history entry: a plain-language account of what happened, where it stopped, and the error in context ("the SFTP fetch could not connect: host name did not resolve"). Deterministic: the run record, the failing step and the error category. AI (optional): wording, likely causes ranked, and what to check. Error text is redacted by default.
@@ -139,7 +150,7 @@ BizTalk migration is the first migration area; the importer, its blocked nodes, 
 
 **M5. Custom pipeline mapper.** Propose an ordered chain of native steps from a custom pipeline's component list; components with no known equivalent stay blocked or a named stub.
 
-**M6. Compare with real output.** The user supplies pairs: source-system input and the output captured from the real server. Mulse runs the native flow on the input and compares. Deterministic: an XML-aware diff (declaration, encoding, byte-order mark, ordering, whitespace, namespaces, date/time format) with each difference classified. Optional AI: explains each class and proposes an edit through B4 or B6. A passing comparison is the strongest evidence the tool can produce, and it is reported as "matches N supplied samples", never as "equivalent". The pairs are real data and follow the strictest disclosure rules.
+**M6. Compare with real output.** The user supplies pairs: source-system input and the output captured from the real server. Mulse runs the native flow on the input and compares. Deterministic: an XML-aware diff (declaration, encoding, byte-order mark, ordering, whitespace, namespaces, date/time format) with each difference classified. Optional AI: explains each class and proposes an edit through B4 or B6. A passing comparison is the strongest evidence the tool can produce, and it is reported as "matches N supplied samples", never as "equivalent". The pairs are real data and follow the strictest disclosure rules. The user can save a pair as a named **comparison scenario** (see "Saved real-data scenarios" below), so the comparison can be re-run after a change.
 
 **M7. Map review.** A checklist of unsupported or stubbed functoids and suspicious links in an imported map, with proposed replacements through B3 and B4.
 
@@ -159,7 +170,7 @@ BizTalk migration is the first migration area; the importer, its blocked nodes, 
 4. **Proposal pipeline.** One pipeline for every proposal kind (flow draft, native subtree, mapping, formula with test table, config requirement list, documentation): parse, validate, diff, apply to the draft, Undo. Reuse `AiAuthoringProposalProcessor`.
 5. **Provenance.** Native nodes, stubs and mappings carry `source` (`import`, `ai`, `user`) and `reviewed`. The editor shows an "AI-suggested, unreviewed" badge, and R1 lists unreviewed items. Enabling a flow with them requires a visible acknowledgement.
 6. **Prompt-injection handling.** Delimited data blocks, fixed instructions before and after, no autonomous tools, validation on every proposal. Injection test cases come from every kind of untrusted text (messages, file names, errors, expressions, descriptions).
-7. **Audit trail.** Per request: time, user, surface, provider and model, categories disclosed, proposal, whether it was applied, and check results. No secrets and no sample values. Kept with flow history.
+7. **Audit trail.** A separate, append-only **AI activity log** per workspace, linked to flows by flow ID and shown as a tab on a flow and on the AI settings page. Per request: time, user, surface, provider and model, categories disclosed, proposal, whether it was applied, and check results. No secrets and no sample values. It is separate from run history because it records authoring and help requests (including on pages that are not tied to a flow, such as Config values), it should not be pruned with run history, and run-history retention is a different policy.
 8. **Limits and cost.** Token budgets per surface, batching for grouped analysis, caching of explanations keyed by input and product version, and a visible usage summary on the settings page.
 9. **Workspaces.** AI settings, disclosure defaults and audit trail are per workspace if multiple workspaces are ever supported.
 10. **No-provider mode.** Every deterministic feature (indexes, checklists, groupings, glossary, comparisons, synthetic sample generation) works with no provider configured.
@@ -201,15 +212,20 @@ Recommended order: A, B, C, D, E, F, G, H. If the migration work is the priority
 | Cost or latency at scale. | Deterministic grouping first, batching, caching, budgets, usage summary. |
 | Prompts drift from the product. | Catalogs are generated and tested. |
 
-## Decisions needed
+## Decisions
 
-1. **Provider default.** Recommend local Ollama where flows touch sensitive systems, with a notice when a hosted provider is chosen. Acceptable?
-2. **Default disclosure.** Structure only, with settings values, run logs, message data and expressions each on request. Acceptable?
-3. **Who may use AI.** Every signed-in user, or a permission an administrator grants?
-4. **Audit trail.** Kept with the flow history (proposed), or a separate log?
-5. **Retained samples.** Comparison pairs and history-derived scenarios are session-only (proposed), or may be saved as named scenarios on the flow?
-6. **Enable gate.** Block enabling a flow with unreviewed AI items until acknowledged (proposed), or warn only?
-7. **First phase.** Foundations then Understand (proposed), or move the migration deterministic parts (M1, M2, M6) up?
+Decided:
+
+1. **Provider.** There is no default provider. AI stays off until one is chosen. A notice appears for hosted providers.
+2. **Disclosure.** Structure only by default; source expressions and the other categories are sent only on request, per request.
+3. **Audit trail.** A separate AI activity log per workspace, linked to flows (see Shared engineering work, item 7). You were unsure; this is the recommended option and can be changed before it is built.
+4. **Saved real-data scenarios.** The user can save comparison pairs and history-derived scenarios, under the rules in "Saved real-data scenarios".
+5. **Enable gate.** A flow with unreviewed AI items cannot be enabled until the user acknowledges them.
+
+Still open:
+
+6. **Who may use AI.** Every signed-in user, or a permission an administrator grants?
+7. **First phase.** Foundations then Understand (proposed), or move the deterministic migration parts (M1 blocker triage, M2 glossary, M6 compare with real output) up after Foundations?
 
 ## Out of scope
 
