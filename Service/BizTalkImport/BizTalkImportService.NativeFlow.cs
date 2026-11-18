@@ -99,6 +99,10 @@ public sealed partial class BizTalkImportService
                 .GroupBy(node => node.Name, StringComparer.Ordinal).Where(group => group.Count() == 1).Select(group => group.Key)
                 .Where(port => !scalarTypes.ContainsKey(NativeSourceExpressionReader.DynamicPortVariable(port, "Address")) && !scalarTypes.ContainsKey(NativeSourceExpressionReader.DynamicPortVariable(port, "TransportType")))
                 .ToHashSet(StringComparer.Ordinal);
+            var directBoundPorts = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "PortDeclaration" && node.Name.Length > 0
+                    && node.Children.Any(child => child.ShapeType == "DirectBindingAttribute" && child.Properties.GetValueOrDefault("DirectBindingType") == "MessageBox"))
+                .GroupBy(node => node.Name, StringComparer.Ordinal).Where(group => group.Count() == 1).Select(group => group.Key)
+                .ToHashSet(StringComparer.Ordinal);
             var hiddenDeclarations = new List<NativeFlowNode>();
             void DeclareHidden(string name)
             {
@@ -228,10 +232,10 @@ public sealed partial class BizTalkImportService
                 var unsupportedAllowed = allowed.Where(transport => !branches.Any(branch => branch.Transport.Equals(transport, StringComparison.OrdinalIgnoreCase))).ToArray();
                 if (unsupportedAllowed.Length > 0)
                     Warn($"Dynamic send port '{send.Name}' also allows transports with no native adapter ({string.Join(", ", unsupportedAllowed)}); those values terminate the flow.");
-                if (!string.IsNullOrWhiteSpace(send.TransmitPipeline))
+                if (!TransmitPipelineNeedsNoStep(send, Warn))
                 {
                     translated.Id += "-delivery";
-                    return Block(node, $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the dynamic deliveries at that output. No serializer, component equivalence or pass-through is inferred.", [translated]);
+                    return Block(node, $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the dynamic deliveries at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(send), [translated]);
                 }
                 return translated;
             }
@@ -419,7 +423,7 @@ public sealed partial class BizTalkImportService
                     case "CorrelationType": case "PartDeclaration": case "MultipartMessageType":
                     case "DirectBindingAttribute" when node.Properties.GetValueOrDefault("DirectBindingType") == "MessageBox":
                         if (node.ShapeType == "DirectBindingAttribute")
-                            Warn("Ports bound directly to the MessageBox (publish/subscribe) are kept as named declarations. A Receive on such a port keeps its channel and translated filter as native conditions, but nothing here publishes or subscribes: the host must deliver messages with the port name as 'channel' metadata and the filter properties as metadata. Outbound direct-bound Sends stay blocked until a native publish route is configured.");
+                            Warn("Ports bound directly to the MessageBox (publish/subscribe) are kept as named declarations. A Receive on such a port keeps its channel and translated filter as native conditions, but nothing here publishes or subscribes: the host must deliver messages with the port name as 'channel' metadata and the filter properties as metadata. Outbound direct-bound Sends become flow-link deliveries whose channel you choose.");
                         // Contract/wiring declarations carry no execution semantics; wiring is resolved from bindings (Send) or channel names (Receive).
                         translated.Name = node.ShapeType + ": " + translated.Name;
                         return translated;
@@ -583,6 +587,16 @@ public sealed partial class BizTalkImportService
                         var port = node.Properties.GetValueOrDefault("PortName", "");
                         var matches = owners.SelectMany(owner => owner.Service.LogicalPorts.Where(logical => logical.Name == port)
                             .SelectMany(logical => logical.SendPortNames.Select(name => (owner.Binding, Name: name)))).ToArray();
+                        if (matches.Length == 0 && directBoundPorts.Contains(port))
+                        {
+                            // BizTalk publishes to the MessageBox and any subscriber receives it. The native equivalent is a named channel; which flow listens is the user's choice.
+                            var linkChannel = AddRequirement(requirements, candidate.SuggestedFlowId, $"deliveries[{translated.Id}].delivers[0].deliver.settings.channel", "Config",
+                                $"Flow-link channel for the MessageBox-bound port '{port}'. BizTalk publishes the message and every matching subscription receives it; choose the channel that a flow-link-fetch source in the subscribing flow listens on, or change this node to another deliver module.", appliedToDraft: true);
+                            Warn("Sends on ports bound directly to the MessageBox are imported as flow-link deliveries with an unset channel (a placeholder that fails closed until you choose one). BizTalk publish/subscribe delivers to every subscription whose filter matches, and subscribers are found at runtime; a flow-link channel reaches only the flows whose flow-link-fetch source names it, with no filter. Review which BizTalk subscribers exist (receive port filters, send port filters and activating receives) and create one flow-link-fetch source per subscriber flow.");
+                            translated.Kind = NativeFlowNodeKind.Deliver; translated.Module = "flow-link-deliver"; translated.MessageName = outboundMessage;
+                            translated.Settings = new(StringComparer.OrdinalIgnoreCase) { ["channel"] = linkChannel };
+                            return translated;
+                        }
                         if (matches.Length != 1) return Block(node, "Outbound logical port has no unique explicit physical binding. Direct subscriptions/dynamic routes are not guessed.");
                         var physical = matches[0].Binding.SendPorts.Where(send => send.Name == matches[0].Name).ToArray();
                         if (physical.Length != 1) return Block(node, "Bound physical send port is missing or ambiguous.");
@@ -601,13 +615,14 @@ public sealed partial class BizTalkImportService
                         translated.Kind = NativeFlowNodeKind.Deliver; translated.Module = settings.Module;
                         translated.Settings = new(settings.Settings, StringComparer.OrdinalIgnoreCase); translated.MessageName = outboundMessage;
                         if (physical[0].IsTwoWay) translated.Settings["expectsResponse"] = "true";
-                        if (physical[0].RetryCount > 0 || !string.IsNullOrWhiteSpace(physical[0].TransmitPipeline))
+                        var pipelineNeedsStep = !TransmitPipelineNeedsNoStep(physical[0], Warn);
+                        if (physical[0].RetryCount > 0 || pipelineNeedsStep)
                         {
                             translated.Id += "-delivery";
                             var reason = physical[0].RetryCount > 0
                                 ? "Physical send retry semantics require reviewed native effect reconciliation; no automatic resend is inferred. " : "";
-                            if (!string.IsNullOrWhiteSpace(physical[0].TransmitPipeline))
-                                reason += $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the child delivery at that output. No serializer, component equivalence or pass-through is inferred.";
+                            if (pipelineNeedsStep)
+                                reason += $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the child delivery at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(physical[0]);
                             return Block(node, reason, [translated]);
                         }
                         return translated;
@@ -721,6 +736,31 @@ public sealed partial class BizTalkImportService
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException) { /* No readable owning project: no sibling evidence. */ }
         return result;
     }
+
+    /// <summary>
+    /// True when a send port's transmit pipeline needs no native step: none is set, or it is one of BizTalk's two stock transmit pipelines with no per-port component configuration.
+    /// PassThruTransmit does no processing. XMLTransmit is the XML assembler with default settings; its effect on the output text is not reproduced, so it is warned. Any other pipeline stays blocked.
+    /// </summary>
+    private static bool TransmitPipelineNeedsNoStep(SendPortAnalysis send, Action<string> warn)
+    {
+        var name = send.TransmitPipeline.Split(',')[0].Trim();
+        if (name.Length == 0) return true;
+        if (send.Operational.HasSendPipelineConfiguration) return false;
+        if (name.Equals("Microsoft.BizTalk.DefaultPipelines.PassThruTransmit", StringComparison.OrdinalIgnoreCase))
+        {
+            warn("Send ports using the stock PassThruTransmit pipeline (which does no processing) are imported without a pipeline step.");
+            return true;
+        }
+        if (name.Equals("Microsoft.BizTalk.DefaultPipelines.XMLTransmit", StringComparison.OrdinalIgnoreCase))
+        {
+            warn("Send ports using the stock XMLTransmit pipeline (the XML assembler with default settings, no per-port configuration) are imported without a pipeline step: the message is delivered as the native XML text. The assembler can add an XML declaration or convert the character set; native output is not checked against that, so compare a delivered file with a real BizTalk output (XML declaration, encoding, byte-order mark) before use.");
+            return true;
+        }
+        return false;
+    }
+
+    private static string PipelineBlockDetail(SendPortAnalysis send)
+        => send.Operational.HasSendPipelineConfiguration ? " The port carries its own pipeline component configuration, so even a stock pipeline is not assumed to be unmodified." : "";
 
     private static int? ReadConstantTimeoutSeconds(string expression)
     {

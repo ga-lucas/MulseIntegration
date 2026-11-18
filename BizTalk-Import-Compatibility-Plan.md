@@ -52,7 +52,7 @@ Status key:
 | Send with `Response` operation | Supported | Becomes a Reply. |
 | Send to a dynamic port (FILE, FTP, HTTP, SMTP) | Supported | Explicit transport dispatch on the assigned TransportType. |
 | Send to an unbound, ambiguous, direct-bound or other-transport port (WCF, SQL, MSMQ, ...) | Blocked | Needs a binding export or an explicit native adapter. |
-| Send port with retry or a transmit pipeline | Blocked | The child Deliver is kept; retry and pipeline order need review. |
+| Send port with retry or a custom transmit pipeline | Blocked | The child Deliver is kept; retry and pipeline order need review. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
 | Delay (whole seconds, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait. Sub-second and nested forms are Blocked. |
 | Terminate (literal message) | Supported | Dynamic messages are Blocked. |
 | Expression / variable / message assignment | Supported | Statement subset, see "Source expressions" below. |
@@ -109,7 +109,7 @@ Status key:
 | Receive locations: FILE, SFTP, HTTP | Supported | Draft trigger step chosen from the address and transport. |
 | Other receive transports | Stub | Falls back to a document-repository placeholder step to configure; confirm the source. |
 | Receive-location service window, start and end dates | Supported | Imported as operational settings or warnings. |
-| MessageBox direct binding | Supported (receive) | The host must supply the channel and filter metadata; outbound direct-bound Sends are Blocked. |
+| MessageBox direct binding | Supported (receive); Stub (send) | The host must supply the channel and filter metadata for receives. Outbound direct-bound Sends import as a flow-link deliver with an unset channel you choose. |
 | Dynamic send ports | Supported | See the Send rows above. |
 
 ### Pipelines
@@ -255,6 +255,27 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
   - The mapping is a small table in the context catalog (`ReadOnlySystemProperties`). Other system properties are added only when their behavior can be proven.
 - **Tests:** 2 synthetic tests (read maps to the key, evaluates, and fails closed without an id; assignment stays Blocked with no read warning). Suite: 2,520 passed.
 - **Billing result (`orch39`):** the 3 "context property requires one exact declared property-schema identity" blocks are gone (all were `BTS.MessageID` reads). 61 blocked rows, 2 clean, 33 none.
+
+### Increment: stock transmit pipelines and MessageBox direct sends
+
+- **Binding file in use.** Report `orch40` was the first run with the real binding export (`ORCH_BINDINGS`). It resolved 35 of the 47 "no unique physical binding" Sends to a send port; those became "uses a transmit pipeline" blocks.
+- **Stock transmit pipelines import without a pipeline step** when the port carries no component configuration of its own:
+  - `Microsoft.BizTalk.DefaultPipelines.PassThruTransmit` does no processing.
+  - `Microsoft.BizTalk.DefaultPipelines.XMLTransmit` is the XML assembler with default settings.
+  - Applies to both static and dynamic Sends. A draft warning is added for each.
+- **Implications (please review):**
+  - For `XMLTransmit` the native output is the native XML text. The assembler can add an XML declaration or convert the character set, and that is **not** reproduced or checked. Compare one delivered file with real BizTalk output (declaration, encoding, byte-order mark) before use. Envelopes and document-spec properties are not evaluated.
+  - A stock pipeline whose port carries its own pipeline component configuration stays Blocked, because it is no longer known to be unmodified.
+  - Custom pipelines (and `EdiSend`) stay Blocked and the pipeline is named.
+  - Retry above 0 stays Blocked with its own reason, separate from the pipeline reason. No automatic resend is inferred.
+- **MessageBox direct-bound Sends** (the ODX port has `DirectBindingType=MessageBox` and no bound send port) now import as a `flow-link-deliver` node, not Blocked:
+  - Its `channel` is a `Config` placeholder, listed in the configuration requirements. The flow stays disabled and the unresolved placeholder fails closed until you choose a channel.
+  - You can change the node to another deliver module in the editor.
+  - A warning explains the difference: BizTalk publishes to the MessageBox and every subscription whose filter matches receives the message. A flow-link channel reaches only flows whose flow-link-fetch source names it, with no filter. Review the real BizTalk subscribers and create one flow-link-fetch source per subscriber flow.
+  - An explicit send-port binding still wins over the direct binding.
+  - A Send on an unbound port that is not MessageBox-bound stays Blocked.
+- **Tests:** 7 synthetic tests (stock pipelines pass with warnings, custom and EdiSend blocked with the name, per-port configuration blocked, retry blocked separately, direct send becomes a flow-link deliver with an unset channel, unbound send still blocked). Suite: 2,527 passed.
+- **Billing result (`orch42`):** 61 → 40 blocked rows, 2 clean, 33 none. The "no unique physical binding" blocks dropped from 47 to 0 (the 12 genuinely direct-bound ones now import as flow-link deliveries). Remaining send blockers are custom pipelines (23 sends, 1 of them also with retry) and retry alone (3).
 
 ### Increment: native Listen and correlation following
 
@@ -494,7 +515,7 @@ Review rule: a module with no hard-coded customer schema is generic. No aliases 
 ### Increment: receive filters and MessageBox direct binding
 
 - **Importer:** a Receive's `DNFPredicate` filter becomes native Receive **conditions** (already evaluated for the activating and every resumed message, and editable in the flow editor). Each predicate's property must resolve to an exact declared property schema (or the platform symbol `BTS.ReceivePortName`); the metadata key, type and literal are checked together (string `"x"` without escapes, Boolean `true`/`false`, Int32 decimal). Accepted shapes: all-AND (or one predicate) with `Equals`/`Exists`; and all-OR `Equals` on one property, translated to a single `In` condition (no commas or padding in values). Mixed AND/OR, other operators, independent OR groups and unresolved or unsupported property types keep the Receive as a visible Blocked node with the reason.
-- **`DirectBindingAttribute(MessageBox)`** is kept as a named declaration; other direct-binding kinds stay blocked. Nothing publishes or subscribes natively: the host must deliver messages with the port name as `channel` and the filter properties as metadata keys. Outbound direct-bound Sends are still blocked ("no unique physical binding") pending a native publish route.
+- **`DirectBindingAttribute(MessageBox)`** is kept as a named declaration; other direct-binding kinds stay blocked. Nothing publishes or subscribes natively: the host must deliver messages with the port name as `channel` and the filter properties as metadata keys. Outbound direct-bound Sends were blocked at this increment; the later "stock transmit pipelines and MessageBox direct sends" increment imports them as a flow-link deliver with a configurable channel.
 - **Known deviations (warned at import):** native comparisons are case-insensitive (BizTalk filters are case-sensitive); `Exists` requires a non-blank value; non-matching messages are rejected, not routed elsewhere. `BTS.ReceivePortName` is the BizTalk *receive port* name and is stored under an importer-defined platform key, so the host/ingress must populate it.
 - **Measured effect (whole `ClientIntegration Interface` repo, 53 candidates, 18 flows analysed in the audit):** the 38 `DNFPredicate`, 38 `DirectBindingAttribute` and 16 receive-filter blockers are cleared; 14 of 16 filters translate. Two stay blocked (one mixed AND/OR in UHS, one non-scalar property type). LegacyBillingProcess 71 -> 66, batch flows 38 -> 33 and UHS 22 -> 7 unresolved nodes. Flows stay disabled; no BizTalk equivalence is claimed.
 - **Verification:** 21 new tests (typed conditions and runtime matching, OR to `In`, 13 fail-closed shapes, platform key, direct-binding kinds, executor rejects non-matching messages); 1,694 service tests passed.
