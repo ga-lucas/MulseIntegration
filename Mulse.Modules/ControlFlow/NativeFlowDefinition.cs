@@ -45,6 +45,20 @@ public sealed class NativeFlowNode
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionMessageVariable { get; set; }
     /// <summary>Try only: optional String variable that receives the exception type and message (never a CLR stack trace).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionDetailsVariable { get; set; }
+    /// <summary>Deliver only: bounded automatic retry. Retries only when the deliver module proves nothing was sent, unless <see cref="NativeDeliverRetry.RetryAmbiguous"/> opts in.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeDeliverRetry? Retry { get; set; }
+}
+
+public sealed class NativeDeliverRetry
+{
+    public const int MaxAttempts = 100;
+    public const int MaxIntervalSeconds = 604800;
+    /// <summary>Additional attempts after the first (1-100).</summary>
+    public int Attempts { get; set; }
+    /// <summary>Seconds between a failed attempt and the next (0-604800). The instance is parked meanwhile and resumes on the flow's next run after the interval.</summary>
+    public int IntervalSeconds { get; set; }
+    /// <summary>Also retry failures where the destination may already have received the data. This can duplicate a send. Off by default.</summary>
+    public bool RetryAmbiguous { get; set; }
 }
 
 public sealed class NativeFlowDefinition
@@ -207,6 +221,9 @@ public sealed class NativeFlowDefinition
                         throw new ArgumentException($"Native node '{node.Id}' allows a duration expression only on a Wait without a fixed duration.");
                     NativeExpression.Validate(node.DurationExpression);
                 }
+                if (node.Retry is { } retry && (node.Kind != NativeFlowNodeKind.Deliver || retry.Attempts is < 1 or > NativeDeliverRetry.MaxAttempts
+                    || retry.IntervalSeconds is < 0 or > NativeDeliverRetry.MaxIntervalSeconds))
+                    throw new ArgumentException($"Native node '{node.Id}' allows a retry policy only on a Deliver, with 1-{NativeDeliverRetry.MaxAttempts} additional attempts and an interval of 0-{NativeDeliverRetry.MaxIntervalSeconds} seconds.");
                 if (node.Kind == NativeFlowNodeKind.Receive)
                 {
                     if (string.IsNullOrWhiteSpace(node.Channel) || node.Channel.Length > 128 || node.Channel != node.Channel.Trim()

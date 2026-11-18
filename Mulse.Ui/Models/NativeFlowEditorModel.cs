@@ -46,6 +46,14 @@ public sealed class NativeFlowNodeViewModel
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionDetailsVariable { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<NativeExpressionViewModel>? TransformInputs { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Dictionary<string, NativeExpressionViewModel>? SettingExpressions { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeDeliverRetryViewModel? Retry { get; set; }
+}
+
+public sealed class NativeDeliverRetryViewModel
+{
+    public int Attempts { get; set; } = 3;
+    public int IntervalSeconds { get; set; } = 60;
+    public bool RetryAmbiguous { get; set; }
 }
 
 public sealed class NativeExpressionViewModel

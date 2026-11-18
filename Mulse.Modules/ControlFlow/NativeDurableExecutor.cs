@@ -399,14 +399,39 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                                     ?? throw new InvalidOperationException("Native renderer selected an unconfigured identity; no CLR type is loaded.");
                                 rendererModule = choice.Module; rendererSettings = choice.Settings;
                             }
+                            if (node.Kind == NativeFlowNodeKind.Deliver && cursor.Phase == 1)
+                            {
+                                if (clock.GetUtcNow() < cursor.DeadlineUtc)
+                                {
+                                    await Save(cancellationToken).ConfigureAwait(false);
+                                    context.Suspend("Native deliver retry wait: " + node.Id); return batch;
+                                }
+                                cursor.Phase = 0; cursor.DeadlineUtc = null;
+                            }
                             state.EffectNodeId = node.Id; state.EffectKind = node.Kind; state.EffectModule = node.Module;
                             await Save(cancellationToken).ConfigureAwait(false);
-                            var result = node.Kind switch
+                            IntegrationBatch result;
+                            try
                             {
-                                NativeFlowNodeKind.Augment => await augments.AugmentAsync(node.Module, context, effectBatch, node.Settings, cancellationToken).ConfigureAwait(false),
-                                NativeFlowNodeKind.Render => await renderers.RenderAsync(rendererModule, context, effectBatch, rendererSettings, cancellationToken).ConfigureAwait(false),
-                                _ => await deliveries!.DeliverAsync(node.Module, context, effectBatch, deliverSettings, cancellationToken).ConfigureAwait(false)
-                            };
+                                result = node.Kind switch
+                                {
+                                    NativeFlowNodeKind.Augment => await augments.AugmentAsync(node.Module, context, effectBatch, node.Settings, cancellationToken).ConfigureAwait(false),
+                                    NativeFlowNodeKind.Render => await renderers.RenderAsync(rendererModule, context, effectBatch, rendererSettings, cancellationToken).ConfigureAwait(false),
+                                    _ => await deliveries!.DeliverAsync(node.Module, context, effectBatch, deliverSettings, cancellationToken).ConfigureAwait(false)
+                                };
+                            }
+                            catch (Exception failure) when (node.Kind == NativeFlowNodeKind.Deliver && node.Retry is { } retry && cursor.Iterations < retry.Attempts
+                                && failure is not (OperationCanceledException or NativePersistenceException or NativeAmbiguousEffectException)
+                                && (failure is DeliveryNotSentException || retry.RetryAmbiguous))
+                            {
+                                // Only a failure the module proves sent nothing is safe to repeat; an opted-in ambiguous retry may duplicate the send.
+                                cursor.Iterations++; cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow().AddSeconds(retry.IntervalSeconds);
+                                state.EffectNodeId = null; state.EffectKind = null; state.EffectModule = null;
+                                await Save(CancellationToken.None).ConfigureAwait(false);
+                                var detail = failure.Message.Length > 300 ? failure.Message[..300] + "..." : failure.Message;
+                                context.Suspend($"Native deliver '{node.Id}' attempt {cursor.Iterations} of {retry.Attempts + 1} failed ({(failure is DeliveryNotSentException ? "nothing was sent" : "ambiguous; retry of ambiguous failures is enabled")}): {detail} Next attempt at {cursor.DeadlineUtc:O}.");
+                                return batch;
+                            }
                             if (context.Disposition != FlowExecutionDisposition.Continue || context.DeliveryFailures.Count != 0)
                                 throw new InvalidOperationException($"Native effect '{node.Id}' suspended or reported delivery failure; its intent requires reconciliation.");
                             if (node.Kind == NativeFlowNodeKind.Deliver)
@@ -518,8 +543,10 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                 || node?.Kind is NativeFlowNodeKind.If or NativeFlowNodeKind.Try && (cursor.Iterations != 0 || cursor.Phase == 0 && cursor.Position != 0)
                 || node?.Kind == NativeFlowNodeKind.ForEach && (cursor.Phase > 1 || cursor.Inputs.Count > node.MaxIterations || cursor.Iterations > cursor.Inputs.Count
                     || cursor.Phase == 0 && (cursor.Position != 0 || cursor.Iterations != 0 || cursor.Inputs.Count != 0 || cursor.Outputs.Count != 0))
-                || node is not null && node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.Try or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen)
+                || node is not null && node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.Try or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen or NativeFlowNodeKind.Deliver)
                     && (cursor.Position != 0 || cursor.Phase != 0 || cursor.Iterations != 0)
+                || node?.Kind == NativeFlowNodeKind.Deliver && (cursor.Position != 0 || cursor.Phase > 1 || cursor.Iterations > (node.Retry?.Attempts ?? 0)
+                    || (cursor.Phase == 1) != (cursor.DeadlineUtc is not null) || cursor.Phase == 1 && cursor.Iterations == 0)
                 || node?.Kind == NativeFlowNodeKind.While && (cursor.Phase > 1 || cursor.Iterations > node.MaxIterations)
                 || node?.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive && (cursor.Phase > 1 || cursor.Position != 0 || cursor.Iterations != 0)
                 || node?.Kind == NativeFlowNodeKind.Wait && cursor.Phase == 1 && cursor.DeadlineUtc is null
@@ -528,7 +555,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                     || cursor.Phase != 2 && cursor.Position != 0
                     || cursor.Phase == 1 && (node.Children.Any(branch => branch.Children[0].Kind == NativeFlowNodeKind.Wait) ? cursor.DeadlineUtc is null : cursor.DeadlineUtc is not null)
                     || cursor.Phase == 0 && cursor.DeadlineUtc is not null)
-                || node?.Kind is not (NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen) && cursor.DeadlineUtc is not null
+                || node?.Kind is not (NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen or NativeFlowNodeKind.Deliver) && cursor.DeadlineUtc is not null
                 || node?.Kind != NativeFlowNodeKind.ForEach && (cursor.Inputs.Count != 0 || cursor.Outputs.Count != 0))
                 throw new InvalidOperationException("Invalid persisted native cursor state.");
             if (index + 1 < state.Stack.Count && (cursor.Position == 0 || children[cursor.Position - 1].Id != state.Stack[index + 1].NodeId))

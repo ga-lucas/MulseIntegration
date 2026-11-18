@@ -116,7 +116,7 @@ Scenarios built from history (T2) and BizTalk comparison pairs (M6) can be saved
 
 **O1. Explain this run.** On a history entry: a plain-language account of what happened, where it stopped, and the error in context ("the SFTP fetch could not connect: host name did not resolve"). Deterministic: the run record, the failing step and the error category. AI (optional): wording, likely causes ranked, and what to check. Error text is redacted by default.
 
-**O2. Held and ambiguous work.** For work that is held or whose effect is ambiguous (a delivery that may or may not have completed), the assistant explains what the state means, why Mulse did not retry, and how to check the destination by hand. It never retries, resends or reconciles.
+**O2. Held and ambiguous work.** For work that is held or whose effect is ambiguous (a delivery that may or may not have completed), the assistant explains what the state means, why Mulse did not retry, and how to check the destination by hand. It never retries, resends or reconciles. It can explain a Deliver node's configured retry (including the "retry ambiguous failures" opt-in and its duplicate risk), and can propose a change to it only through the normal diff-and-apply path.
 
 **O3. Failure patterns.** Group recent failures by cause across flows and say which one change would clear most of them. The grouping is code; the summary is optional AI.
 

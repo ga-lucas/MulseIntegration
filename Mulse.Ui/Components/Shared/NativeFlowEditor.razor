@@ -327,6 +327,7 @@
                 || node.DurationMilliseconds is < 0 or > 999 || node.DurationMilliseconds != 0 && (node.Kind != "Wait" || node.DurationSeconds >= 31622400)
                 || node.DurationExpression is not null && (node.Kind != "Wait" || node.DurationSeconds != 0 || node.DurationMilliseconds != 0 || !CompleteExpression(node.DurationExpression))
                 || node.Kind == "Receive" && (string.IsNullOrWhiteSpace(node.Channel) || node.CorrelationKeys.Any(string.IsNullOrWhiteSpace))
+                || node.Retry is { } deliverRetry && (node.Kind != "Deliver" || deliverRetry.Attempts is < 1 or > 100 || deliverRetry.IntervalSeconds is < 0 or > 604800)
                 || node.Kind == "Listen" && !ValidListen(node)
                 || !_model.Durable && (node.Kind is "Wait" or "Receive" or "Listen" or "Deliver" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate")
                 || _model.Durable && (string.IsNullOrWhiteSpace(_model.CorrelationMetadataKey) || string.IsNullOrWhiteSpace(_model.MessageIdMetadataKey))

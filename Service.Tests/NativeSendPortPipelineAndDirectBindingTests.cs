@@ -76,12 +76,16 @@ public sealed class NativeSendPortPipelineAndDirectBindingTests : IDisposable
     }
 
     [Fact]
-    public async Task RetryStaysBlockedEvenWithAStockPipeline()
+    public async Task RetryWithAStockPipelineBecomesANativeDeliverRetry()
     {
-        var (_, definition) = await Import(SendPort(Stock + "PassThruTransmit", retry: 3));
-        var blocked = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
-        Assert.Contains("retry", blocked.BlockReason!, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("transmit pipeline", blocked.BlockReason!, StringComparison.Ordinal);
+        var (candidate, definition) = await Import(SendPort(Stock + "PassThruTransmit", retry: 3));
+        Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
+        var deliver = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Deliver);
+        Assert.Equal(3, deliver.Retry!.Attempts);
+        Assert.Equal(300, deliver.Retry.IntervalSeconds);
+        Assert.False(deliver.Retry.RetryAmbiguous);
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("retries 3 time(s)", StringComparison.Ordinal) && warning.Contains("backup transport", StringComparison.Ordinal));
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("cannot prove that a failed send sent nothing", StringComparison.Ordinal));
     }
 
     [Fact]

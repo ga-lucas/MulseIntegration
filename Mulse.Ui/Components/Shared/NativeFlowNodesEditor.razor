@@ -156,6 +156,24 @@
                     }
                     <button type="button" class="secondary-button" disabled="@((node.SettingExpressions?.Count ?? 0) >= 32)" @onclick="() => AddSettingExpression(node)">Add dynamic setting</button>
                 </fieldset>
+                <fieldset><legend>Retry</legend>
+                    <p class="field-hint">Repeats the send only when the destination module proves nothing was sent (connection refused, name not found, login rejected before any data). A timeout or a drop after sending began is ambiguous and is never retried unless you opt in below. Between attempts the instance is parked and resumes on the flow's next run after the interval, so the interval is a minimum. Every attempt is recorded in the run history.</p>
+                    <label class="field-label"><input type="checkbox" aria-label="Retry failed sends" checked="@(node.Retry is not null)" @onchange="args => ToggleRetry(node, args.Value is true)" /> Retry failed sends</label>
+                    @if (node.Retry is { } retry)
+                    {
+                        <label class="field-label">Additional attempts (1-100, after the first)
+                            <input type="number" min="1" max="100" aria-label="Retry attempts" @bind="retry.Attempts" @bind:after="Notify" />
+                        </label>
+                        <label class="field-label">Seconds between attempts (0-604800)
+                            <input type="number" min="0" max="604800" aria-label="Retry interval seconds" @bind="retry.IntervalSeconds" @bind:after="Notify" />
+                        </label>
+                        <label class="field-label"><input type="checkbox" aria-label="Also retry ambiguous failures" @bind="retry.RetryAmbiguous" @bind:after="Notify" /> Also retry ambiguous failures (may send the same data twice)</label>
+                        @if (retry.RetryAmbiguous)
+                        {
+                            <p class="field-hint">Warning: after a timeout or dropped connection the destination may already have received the data. Retrying can duplicate it. Enable this only if the destination tolerates duplicates.</p>
+                        }
+                    }
+                </fieldset>
             }
         }
         @if (node.Kind == "InvokeTransform" && node.TransformInputs is { } transformInputs)
@@ -314,6 +332,7 @@
         node.Variable = kind is "DeclareVariable" or "SetVariable" or "InvokeTransform" ? "" : null;
         node.TransformInputs = kind == "InvokeTransform" ? [new()] : null;
         node.SettingExpressions = null;
+        node.Retry = null;
         node.VariableType = kind == "DeclareVariable" ? "String" : null;
         node.Expression = kind is "DeclareVariable" or "SetVariable" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" ? new() : null;
         node.Target = kind == "SetMessageValue" ? new() { Kind = "XmlString" } : null;
@@ -324,6 +343,12 @@
         node.ExceptionMessageVariable = null; node.ExceptionDetailsVariable = null;
         node.InputMessages = null; node.SelectionExpression = null;
         if (kind is "If" or "While") node.Conditions.Add(new());
+        await Notify();
+    }
+    private async Task ToggleRetry(NativeFlowNodeViewModel node, bool enabled)
+    {
+        if (enabled == (node.Retry is not null)) return;
+        node.Retry = enabled ? new() : null;
         await Notify();
     }
     private async Task ChangeWaitMode(NativeFlowNodeViewModel node, string? mode)

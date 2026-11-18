@@ -74,7 +74,9 @@ public sealed class SftpDeliverModule : IDeliverModule
         var expected = fingerprint?.Trim().Replace("SHA256:", string.Empty, StringComparison.OrdinalIgnoreCase).TrimEnd('=');
         client.HostKeyReceived += (_, e) =>
             e.CanTrust = acceptAny || string.Equals(e.FingerPrintSHA256?.TrimEnd('='), expected, StringComparison.Ordinal);
-        await Task.Run(client.Connect, cancellationToken).ConfigureAwait(false);
+        try { await Task.Run(client.Connect, cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        { throw new DeliveryNotSentException($"SFTP connection or authentication failed before any file was sent: {exception.Message}", exception); }
 
         try
         {

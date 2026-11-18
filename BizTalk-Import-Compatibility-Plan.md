@@ -52,7 +52,7 @@ Status key:
 | Send with `Response` operation | Supported | Becomes a Reply. |
 | Send to a dynamic port (FILE, FTP, HTTP, SMTP) | Supported | Explicit transport dispatch on the assigned TransportType. |
 | Send to an unbound, ambiguous, direct-bound or other-transport port (WCF, SQL, MSMQ, ...) | Blocked | Needs a binding export or an explicit native adapter. |
-| Send port with retry | Blocked | The child Deliver is kept; retry needs reviewed effect reconciliation. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
+| Send port with retry | Supported (warned) | Maps to the Deliver node's retry (attempts, interval). Only failures a module proves sent nothing are retried automatically (HTTP, FTP/SFTP, SMTP); ambiguous failures are held unless the node opts in. Backup transport not imported. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
 | Send port with a custom transmit pipeline | Supported for a proven subset | Components translate to an ordered chain of named Augment/Render nodes in front of the Deliver: `HL7TypeCaster`, `.SetProperty`, promotion tables, the HL7 assembler and a MIME/S-MIME encoder (as an SMTP attachment). Any other component (for example the flat-file assembler) keeps the send Blocked and names the component. |
 | Delay (constant `TimeSpan` to the millisecond, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait; a fixed sub-second wait pauses in place. Non-millisecond, zero and nested forms are Blocked. |
 | Terminate (literal message) | Supported | Dynamic messages are Blocked. |
@@ -319,6 +319,18 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Importer:** constant `TimeSpan` delays now import with millisecond precision (constructor, `FromMilliseconds`, whole-millisecond tick values). Delays that are not a whole number of milliseconds, are zero, or exceed 366 days stay Blocked. A sub-second delay adds a warning.
 - **Billing result:** `orch49` 23 blocked → `orch50` 22 blocked (the 200 ms throttle delay).
 - **Tests:** `NativeSubSecondWaitTests` (validation bounds, back-compat JSON, in-place pause, one-second-plus still parks, editor field) and the import cases in `BizTalkTransportMappingTests`. Suite: 2,556 passed.
+
+### Increment: deliver retry
+
+- **Model:** a native Deliver node gets an optional `Retry` (additional attempts 1-100, interval 0-604800 s, `RetryAmbiguous`). It is only valid on a Deliver; older flow JSON is unchanged (not written when absent).
+- **Safety rule:** a send repeats automatically only when the module proves nothing was sent (`DeliveryNotSentException`). HTTP (connection refused, name not found, TLS handshake failure on the first request), FTP/FTPS and SFTP (connect phase) and SMTP (connect phase, first message) classify this way. Timeouts, dropped connections and anything after sending began are ambiguous and stay held for reconciliation. FILE and other modules never prove it.
+- **Opt-in:** `RetryAmbiguous` (off by default) also retries ambiguous failures and can duplicate data. The editor shows a warning when it is on. The AI assistant never triggers retries.
+- **Runtime:** after a failed attempt the instance parks with an exact deadline and resumes on the flow's next run, so the interval is a minimum. Each attempt is a suspension with its reason in the run history. When attempts are exhausted the existing ambiguous-effect hold applies, so nothing is dropped silently.
+- **UI:** a Retry section on Deliver nodes (enable, attempts, interval seconds, ambiguous opt-in with warning); validity is checked.
+- **Importer:** BizTalk `RetryCount` and `RetryInterval` (minutes) map onto the node, with warnings that BizTalk also retried after timeouts, that a backup transport is not imported, and (for FILE and other modules) that retry only runs with the ambiguous opt-in. Counts or intervals above the native limits stay Blocked. Stock and translated pipelines keep their chain with the retrying Deliver.
+- **Billing result:** `orch50` 22 blocked → `orch51` 18 blocked (the four retry-only sends). Of the 21 retrying send ports in the sample binding, 20 use FTP/SFTP/SMTP and 1 uses FILE.
+- **Tests:** `NativeDeliverRetryTests` (bounds, back-compat JSON, park then resume, exhaustion, ambiguous held by default and retried on opt-in, no retry without the setting, classifier cases, a real refused-versus-dropped HTTP connection, editor) and updated importer tests. Suite: 2,571 passed.
+
 
 ### Increment: native Listen and correlation following
 

@@ -156,12 +156,13 @@ public sealed class NativeSendPipelineChainTests : IDisposable
     }
 
     [Fact]
-    public async Task RetryKeepsATranslatedPipelineBlocked()
+    public async Task RetryOnATranslatedPipelineSendKeepsTheChainAndRetriesTheDelivery()
     {
         var (_, definition) = await Import(Pipeline(Component("Example.CPC.HL7TypeCaster")), retry: 2);
-        var blocked = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
-        Assert.Contains("retry", blocked.BlockReason!, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("no proven native equivalent", blocked.BlockReason!, StringComparison.Ordinal);
+        Assert.True(string.IsNullOrEmpty(Blockers(definition)), Blockers(definition));
+        var deliver = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Deliver);
+        Assert.Equal(2, deliver.Retry!.Attempts);
+        Assert.Contains(definition.AllNodes(), node => node.Id.Contains("-pipe-", StringComparison.Ordinal));
     }
 
     public void Dispose()

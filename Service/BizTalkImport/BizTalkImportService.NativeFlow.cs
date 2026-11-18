@@ -659,16 +659,22 @@ public sealed partial class BizTalkImportService
                         if (chain is not null) translated.MessageName = chain.FinalMessage;
                         var chainBlockers = chain?.Blockers.ToList() ?? [];
                         if (chain is not null && chainBlockers.Count == 0 && ApplyMimeAttachment(chain, translated, Warn) is { } mimeReason) chainBlockers.Add(mimeReason);
-                        if (physical[0].RetryCount > 0 || pipelineNeedsStep)
+                        if (physical[0].RetryCount > 0)
+                        {
+                            if (physical[0].RetryCount > NativeDeliverRetry.MaxAttempts || physical[0].RetryIntervalMinutes < 0 || physical[0].RetryIntervalMinutes * 60L > NativeDeliverRetry.MaxIntervalSeconds)
+                                return Block(node, $"Send port '{physical[0].Name}' retries {physical[0].RetryCount} time(s) every {physical[0].RetryIntervalMinutes} minute(s), which is outside the native retry limits ({NativeDeliverRetry.MaxAttempts} attempts, {NativeDeliverRetry.MaxIntervalSeconds / 60} minutes apart); configure the retry explicitly.");
+                            translated.Retry = new() { Attempts = physical[0].RetryCount, IntervalSeconds = physical[0].RetryIntervalMinutes * 60 };
+                            Warn($"Send port '{physical[0].Name}' retries {physical[0].RetryCount} time(s), {physical[0].RetryIntervalMinutes} minute(s) apart. The native Deliver node has an equivalent retry policy, but it repeats a send only when the transport proves nothing was sent (connection refused, name not found, login rejected). BizTalk also retried after a timeout or dropped connection; the native node holds those for reconciliation unless 'also retry ambiguous failures' is turned on (it can send the same data twice). Attempts are not parked exactly: the next attempt runs on the flow's next run after the interval. A BizTalk backup transport, if configured on the port, is not imported.");
+                            if (!SupportsNotSentClassification(settings.Module))
+                                Warn($"Send port '{physical[0].Name}' uses transport module '{settings.Module}', which cannot prove that a failed send sent nothing, so its retry only runs if 'also retry ambiguous failures' is turned on.");
+                        }
+                        if (pipelineNeedsStep)
                         {
                             var sendId = translated.Id;
                             translated.Id += "-delivery";
-                            if (chain is not null && chainBlockers.Count == 0 && physical[0].RetryCount == 0)
+                            if (chain is not null && chainBlockers.Count == 0)
                                 return new() { Id = sendId, Name = translated.Name, Kind = NativeFlowNodeKind.Sequence, Children = [.. chain.Nodes, translated] };
-                            var reason = physical[0].RetryCount > 0
-                                ? "Physical send retry semantics require reviewed native effect reconciliation; no automatic resend is inferred. " : "";
-                            if (pipelineNeedsStep)
-                                reason += chain is null
+                            var reason = chain is null
                                     ? $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}' whose components are not known (no per-port configuration in the binding and no pipeline file in the import). Add the pipeline project to the import, or configure named-message augment/render nodes on a separate output message and point the child delivery at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(physical[0])
                                     : chainBlockers.Count > 0
                                         ? $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}', which has no proven native equivalent for: {string.Join("; ", chainBlockers)}. The translated components are shown as children; configure the remaining step explicitly. No serializer or pass-through is inferred." + PipelineBlockDetail(physical[0])
@@ -811,6 +817,9 @@ public sealed partial class BizTalkImportService
 
     private static string PipelineBlockDetail(SendPortAnalysis send)
         => send.Operational.HasSendPipelineConfiguration ? " The port carries its own pipeline component configuration, so even a stock pipeline is not assumed to be unmodified." : "";
+
+    private static bool SupportsNotSentClassification(string module) =>
+        module is "http-deliver" or "ftp-deliver" or "sftp-deliver" or "smtp-email-deliver";
 
     private static long? ReadConstantTimeoutMilliseconds(string expression)
     {

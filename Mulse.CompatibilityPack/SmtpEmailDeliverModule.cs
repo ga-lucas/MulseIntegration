@@ -70,6 +70,7 @@ public sealed class SmtpEmailDeliverModule : IDeliverModule
             client.Credentials = new NetworkCredential(username, password);
         }
 
+        var messageSent = false;
         foreach (var payload in batch.Payloads)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -95,7 +96,10 @@ public sealed class SmtpEmailDeliverModule : IDeliverModule
                 message.Attachments.Add(attachment);
             }
 
-            await client.SendMailAsync(message).WaitAsync(cancellationToken).ConfigureAwait(false);
+            try { await client.SendMailAsync(message).WaitAsync(cancellationToken).ConfigureAwait(false); }
+            catch (Exception exception) when (!messageSent && exception is not OperationCanceledException && DeliveryFailureClassifier.IsConnectPhaseFailure(exception))
+            { throw new DeliveryNotSentException($"SMTP connection or authentication failed before any message was sent: {exception.Message}", exception); }
+            messageSent = true;
         }
     }
 
