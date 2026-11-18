@@ -35,13 +35,22 @@ public sealed partial class BizTalkImportService
         });
     }
 
+    /// <summary>The HL7 schema setting of the flow's shared HL7 renderer choice (a <c>{{config:...}}</c> reference or the schema text), or null when no converted map wrote an HL7 schema.</summary>
+    private static string? ReadHl7SchemaText(string? mapChoices)
+    {
+        if (mapChoices is null) return null;
+        var choice = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(mapChoices, allowEmpty: true)
+            .FirstOrDefault(entry => entry.Value == BizTalkHl7SchemaEvidence.ChoiceValue && entry.Module == BizTalkHl7SchemaEvidence.ModuleId);
+        return choice is not null && choice.Settings.TryGetValue("schemaText", out var text) && !string.IsNullOrWhiteSpace(text) ? text : null;
+    }
+
     /// <summary>
     /// Translates the components of a send port's custom transmit pipeline (from the binding, or the design-time pipeline file) into a chain of named
     /// Augment/Render nodes. Only components whose behavior is proven are translated: property setters, the HL7 type caster, the BTAHL7 assembler,
     /// pass-through block-character adders, and a MIME encoder with no signing or encryption. Anything else is listed as a blocker by name.
     /// Returns null when the port's pipeline components are unknown.
     /// </summary>
-    private static TransmitPipelineChain? BuildTransmitPipelineChain(SendPortAnalysis send, string nodeId, string inputMessage, Action<string> warn, FlatFileChoices? flatFile = null)
+    private static TransmitPipelineChain? BuildTransmitPipelineChain(SendPortAnalysis send, string nodeId, string inputMessage, Action<string> warn, FlatFileChoices? flatFile = null, string? hl7SchemaText = null)
     {
         var components = send.Operational.PipelineComponents;
         if (components.Count == 0) return null;
@@ -92,9 +101,17 @@ public sealed partial class BizTalkImportService
             else if (IsBtaHl7Assembler(className))
             {
                 var trailing = component.Properties.GetValueOrDefault("TrailingDelimiterAllowed");
-                Add(NativeFlowNodeKind.Render, "hl7-xml-render", "HL7 XML to ER7", new()
-                    { ["trimTrailingDelimiters"] = trailing is not null && !IsTrue(trailing) && trailing != "-1" ? "true" : "false" });
-                warn("The BTAHL7 assembler is imported as the 'hl7-xml-render' node (HL7 XML to ER7 text). Delimiters come from the message's MSH segment; escape-sequence encoding, segment validation and batch handling are not applied. Compare the output with a real BizTalk-assembled message.");
+                var trim = trailing is not null && !IsTrue(trailing) && trailing != "-1" ? "true" : "false";
+                if (hl7SchemaText is not null)
+                {
+                    Add(NativeFlowNodeKind.Render, BizTalkHl7SchemaEvidence.ModuleId, "HL7 XML to ER7", new() { ["schemaText"] = hl7SchemaText, ["trimTrailingDelimiters"] = trim });
+                    warn("The BTAHL7 assembler is imported as the 'hl7-schema-render' node (HL7 schema XML to ER7 text), using the HL7 schemas that the flow's converted maps write (config value '" + BizTalkHl7SchemaEvidence.StoredName + "'). Field, component and sub-component order come from the schemas. Assumed and editable on the node: escape sequences are written as is, trailing component delimiters are kept, the field separator and encoding characters come from the MSH segment or the node's settings, and segments are ended with CR. A message that does not match its schema stops the flow. Segment validation and batch handling are not applied. Compare the output with a real BizTalk-assembled message.");
+                }
+                else
+                {
+                    Add(NativeFlowNodeKind.Render, "hl7-xml-render", "HL7 XML to ER7", new() { ["trimTrailingDelimiters"] = trim });
+                    warn("The BTAHL7 assembler is imported as the 'hl7-xml-render' node (HL7 XML to ER7 text), because no converted map in this import writes an HL7 schema to render with. Delimiters come from the message's MSH segment; escape-sequence encoding, segment validation and batch handling are not applied. Compare the output with a real BizTalk-assembled message.");
+                }
             }
             else if (className.EndsWith("Hl7AddDelimit", StringComparison.OrdinalIgnoreCase))
             {

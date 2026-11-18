@@ -44,6 +44,7 @@ internal static class BizTalkNativeMapChoiceDeriver
         var report = new List<BizTalkDerivedMapChoiceResponse>();
         var flatSchemas = new SortedDictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         var conflictingFlat = new HashSet<string>(StringComparer.Ordinal);
+        var hl7Documents = new List<string>();
         foreach (var group in literals.GroupBy(static literal => literal.Value, StringComparer.Ordinal).OrderBy(static group => group.Key, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -88,6 +89,7 @@ internal static class BizTalkNativeMapChoiceDeriver
             string? flatType = null;
             IReadOnlyList<string>? flatDocuments = null;
             string? flatNote = null;
+            IReadOnlyList<string>? hl7Target = null;
             try { custom = BizTalkCustomXslt.Read(XmlMappingSchemas.ReadXmlFile(map.MapPath), map.MapPath); }
             catch (Exception exception) when (exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or XmlException)
             {
@@ -120,6 +122,7 @@ internal static class BizTalkNativeMapChoiceDeriver
                         continue;
                     }
                     conversion = BizTalkNativeMapConverter.Convert(document.ToString(SaveOptions.DisableFormatting), source, target, cancellationToken, embedSchemas: false);
+                    if (BizTalkHl7SchemaEvidence.IsMessageSchema(target)) hl7Target = target;
                     if (FlatFileSchema.IsFlatFile(target[0]))
                     {
                         try
@@ -155,6 +158,7 @@ internal static class BizTalkNativeMapChoiceDeriver
                 continue;
             }
             cases.Add(entry);
+            if (hl7Target is not null) hl7Documents.AddRange(hl7Target);
             if (flatType is not null && flatDocuments is not null && !flatSchemas.TryAdd(flatType, flatDocuments)
                 && !flatSchemas[flatType].SequenceEqual(flatDocuments, StringComparer.Ordinal)) conflictingFlat.Add(flatType);
             if (pendingStore is not null)
@@ -165,6 +169,7 @@ internal static class BizTalkNativeMapChoiceDeriver
             report.Add(Result(status, map.MapPath, detail, warnings));
         }
         AddFlatFileChoices(cases, explicitValues, flatSchemas, conflictingFlat, report, storedValues);
+        AddHl7Choice(cases, explicitValues, hl7Documents, report, storedValues);
         return new(report, JsonSerializer.Serialize(cases, Json));
     }
 
@@ -213,6 +218,45 @@ internal static class BizTalkNativeMapChoiceDeriver
     }
 
     private static readonly XNamespace Xsd = "http://www.w3.org/2001/XMLSchema";
+
+    // Every HL7 schema a converted map writes (the header, the bodies, and the segment and datatype schemas they import) becomes one renderer choice for the
+    // HL7 multipart wrapper. The renderer picks each part's schema by its root element, so one schema set serves every HL7 send in the flow.
+    private static void AddHl7Choice(List<RenderDispatchCase> cases, HashSet<string> explicitValues, List<string> documents,
+        List<BizTalkDerivedMapChoiceResponse> report, IDictionary<string, string>? storedValues)
+    {
+        if (documents.Count == 0) return;
+        BizTalkDerivedMapChoiceResponse Result(string status, string detail) => new(BizTalkHl7SchemaEvidence.ChoiceValue, status, null, detail, [], []);
+        if (explicitValues.Contains(BizTalkHl7SchemaEvidence.ChoiceValue)) { report.Add(Result("ExplicitChoice", "An explicit native choice already exists for HL7 messages and was kept unchanged.")); return; }
+        var distinct = documents.Distinct(StringComparer.Ordinal).ToArray();
+        try
+        {
+            if (BizTalkHl7SchemaEvidence.Conflicts(distinct))
+            {
+                report.Add(Result("AmbiguousMap", "Different maps write HL7 schemas that define the same segment or datatype differently; supply the HL7 renderer choice manually."));
+                return;
+            }
+        }
+        catch (XmlException exception) { report.Add(Result("ConversionFailed", Truncate(exception.Message))); return; }
+        var schemaText = JsonSerializer.Serialize(distinct, Json);
+        var entry = new RenderDispatchCase
+        {
+            Value = BizTalkHl7SchemaEvidence.ChoiceValue, Module = BizTalkHl7SchemaEvidence.ModuleId,
+            Settings = new() { ["schemaText"] = storedValues is null ? schemaText : "{{config:" + BizTalkHl7SchemaEvidence.StoredName + "}}" }
+        };
+        if (cases.Count >= MaximumCases || JsonSerializer.Serialize(cases.Append(entry), Json).Length > MaximumCasesJsonLength)
+        {
+            report.Add(Result("CapExceeded", "Adding the HL7 renderer choice would exceed the 128-case or 262,144-character render-dispatch limit; supply it manually."));
+            return;
+        }
+        cases.Add(entry);
+        var detail = $"HL7 renderer choice derived from the HL7 schemas that converted maps write ({distinct.Length} schema documents). The ER7 text it writes follows the schemas under stated assumptions (see the renderer's settings); it is not verified against real BizTalk output.";
+        if (storedValues is not null)
+        {
+            storedValues[BizTalkHl7SchemaEvidence.StoredName] = schemaText;
+            detail += $" Stored as config value '{BizTalkHl7SchemaEvidence.StoredName}' (edit it on the Config Values page).";
+        }
+        report.Add(Result("Converted", detail));
+    }
 
     // A multi-input map's inline aggregate wrapper names each input part's schema through xs:import schemaLocation (a BizTalk class name).
     // The converter adds the wrapper itself; the part schemas (and their imports) are resolved here through the source catalog.

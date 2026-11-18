@@ -120,4 +120,18 @@ public sealed class StoredMapChoiceTests
         Assert.Same(candidate, BizTalkImportService.AttachStoredConfigValues(candidate, new Dictionary<string, string> { ["biztalk-map.other"] = "x" }));
         Assert.DoesNotContain("StoredConfigValues", JsonSerializer.Serialize(attached, Web), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Candidate_AttachesStoredFlatFileAndHl7SchemaValuesToo()
+    {
+        var flow = "{\"nodes\":[{\"settings\":{\"casesJson\":\"[{\\\"settings\\\":{\\\"schemaText\\\":\\\"{{config:biztalk-flatfile.R-0123456789}}\\\"}},{\\\"settings\\\":{\\\"schemaText\\\":\\\"{{config:biztalk-hl7.schemas}}\\\"}}]\"}}]}";
+        var draft = new BizTalkDraftFlowResponse("f", false, new(PipelineTriggerMode.OnDemand, null, false), [], [],
+            [new("native-control-flow-augment", new Dictionary<string, string> { ["flowJson"] = flow })], [], [], []);
+        var candidate = new BizTalkFlowCandidateResponse("f", "p", "s", "", "", [], [], [], [], [], draft);
+        var stored = new Dictionary<string, string> { ["biztalk-flatfile.R-0123456789"] = "F", ["biztalk-hl7.schemas"] = "H", ["biztalk-hl7.other"] = "O" };
+
+        var attached = BizTalkImportService.AttachStoredConfigValues(candidate, stored);
+
+        Assert.Equal(new[] { "biztalk-flatfile.R-0123456789", "biztalk-hl7.schemas" }, attached.StoredConfigValues.Keys.Order(StringComparer.Ordinal));
+    }
 }

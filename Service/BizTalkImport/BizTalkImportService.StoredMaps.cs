@@ -5,7 +5,7 @@ namespace Service.BizTalkImport;
 
 public sealed partial class BizTalkImportService
 {
-    [GeneratedRegex("\\{\\{config:(?<reference>biztalk-map\\.[^{}\\r\\n\"\\\\]+)\\}\\}")]
+    [GeneratedRegex("\\{\\{config:(?<reference>biztalk-(?:map|flatfile|hl7)\\.[^{}\\r\\n\"\\\\]+)\\}\\}")]
     private static partial Regex StoredMapReferencePattern();
 
     /// <summary>
@@ -24,7 +24,7 @@ public sealed partial class BizTalkImportService
             StoredConfigValues = used,
             DraftFlow = candidate.DraftFlow with
             {
-                Warnings = [.. candidate.DraftFlow.Warnings, $"{used.Count} converted map(s) are stored as config values named 'biztalk-map.*' and referenced by the flow's dispatch choices. They are created with the flow when they do not exist yet, an existing value is kept, and each can be reviewed and edited on the Config Values page."]
+                Warnings = [.. candidate.DraftFlow.Warnings, $"{used.Count} converted map(s) and schema(s) are stored as config values named 'biztalk-map.*', 'biztalk-flatfile.*' and 'biztalk-hl7.*' and referenced by the flow's dispatch choices and nodes. They are created with the flow when they do not exist yet, an existing value is kept, and each can be reviewed and edited on the Config Values page."]
             }
         };
     }

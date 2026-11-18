@@ -79,6 +79,20 @@ public sealed class NativeSendPipelineChainTests : IDisposable
     }
 
     [Fact]
+    public async Task Hl7AssemblerUsesTheSchemaRendererWhenAConvertedMapWroteAnHl7Schema()
+    {
+        const string choices = "[{\"value\":\"HL7Multipart\",\"module\":\"hl7-schema-render\",\"settings\":{\"schemaText\":\"{{config:biztalk-hl7.schemas}}\"}}]";
+        var (candidate, definition) = await Import(Pipeline(Component("Microsoft.Solutions.BTAHL7.Pipelines.HL72fAsm", ("TrailingDelimiterAllowed", "false"))), mapChoices: choices);
+        Assert.True(string.IsNullOrEmpty(Blockers(definition)), Blockers(definition));
+        var render = Assert.Single(definition.AllNodes(), node => node.Id.Contains("-pipe-", StringComparison.Ordinal));
+        Assert.Equal("hl7-schema-render", render.Module);
+        Assert.Equal("{{config:biztalk-hl7.schemas}}", render.Settings["schemaText"]);
+        Assert.Equal("true", render.Settings["trimTrailingDelimiters"]);
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("'hl7-schema-render' node", StringComparison.Ordinal));
+        Assert.DoesNotContain(candidate.DraftFlow.Warnings, warning => warning.Contains("'hl7-xml-render' node", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task PerPortBindingConfigurationWinsOverTheDesignTimeFile()
     {
         var (candidate, definition) = await Import(Pipeline(Component("Example.CPC.PS.SetProperty", ("PropertyName", "FileName"), ("PropertyNamespace", "urn:mime"), ("PropertyValue", "design.txt"))),

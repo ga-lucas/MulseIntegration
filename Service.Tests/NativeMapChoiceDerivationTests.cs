@@ -463,6 +463,47 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
         Assert.Contains(result.Report.Single(item => item.Value == Good).Warnings, warning => warning.Contains("cannot reproduce", StringComparison.Ordinal));
     }
 
+    private static readonly string Hl7TargetXsd = NativeMapImportTests.TargetXsd.Replace("</xs:schema>",
+        "<xs:complexType name=\"PID\"><xs:sequence><xs:element name=\"PID_1_SetId\" type=\"xs:string\" minOccurs=\"0\" /></xs:sequence></xs:complexType></xs:schema>", StringComparison.Ordinal);
+
+    [Fact]
+    public void AMapWritingAnHl7SchemaAddsOneHl7RendererChoiceForTheMultipartWrapper()
+    {
+        var stored = new Dictionary<string, string>();
+
+        var result = Derive(WriteFlatTargetProject(Hl7TargetXsd), Literals(Good), stored: stored);
+
+        var hl7 = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "hl7-schema-render");
+        Assert.Equal("HL7Multipart", hl7.Value);
+        Assert.Equal("{{config:biztalk-hl7.schemas}}", hl7.Settings["schemaText"]);
+        Assert.Contains(result.Report, item => item.Value == "HL7Multipart" && item.Status == "Converted");
+        Assert.Contains("name=\"PID\"", Assert.Single(System.Text.Json.JsonSerializer.Deserialize<string[]>(stored["biztalk-hl7.schemas"])!), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnExplicitHl7ChoiceIsKeptAndANonHl7TargetAddsNone()
+    {
+        var explicitJson = "[{\"value\":\"HL7Multipart\",\"module\":\"hl7-schema-render\",\"settings\":{\"schemaText\":\"mine\"}}]";
+
+        var kept = Derive(WriteFlatTargetProject(Hl7TargetXsd), Literals(Good), explicitJson);
+        var none = Derive(WriteFlatTargetProject(NativeMapImportTests.TargetXsd), Literals(Good));
+
+        Assert.Contains(kept.Report, item => item.Value == "HL7Multipart" && item.Status == "ExplicitChoice");
+        Assert.Empty(RenderDispatchDefinition.Read(none.CasesJson).Where(entry => entry.Module == "hl7-schema-render"));
+        Assert.DoesNotContain(none.Report, item => item.Value == "HL7Multipart");
+    }
+
+    [Fact]
+    public void Hl7SchemaEvidenceNeedsASegmentAndAMessageElementAndDetectsConflicts()
+    {
+        Assert.True(BizTalkHl7SchemaEvidence.IsMessageSchema([Hl7TargetXsd]));
+        Assert.False(BizTalkHl7SchemaEvidence.IsMessageSchema([NativeMapImportTests.TargetXsd]));
+        Assert.False(BizTalkHl7SchemaEvidence.IsMessageSchema(["not xml"]));
+        var different = Hl7TargetXsd.Replace("PID_1_SetId", "PID_1_Other", StringComparison.Ordinal);
+        Assert.True(BizTalkHl7SchemaEvidence.Conflicts([Hl7TargetXsd, different]));
+        Assert.False(BizTalkHl7SchemaEvidence.Conflicts([Hl7TargetXsd, Hl7TargetXsd]));
+    }
+
     private DerivedMapChoices Derive(string project, IReadOnlyList<PolicyMapNameLiteral> literals, string? explicitJson = null, string[]? projects = null, IDictionary<string, string>? stored = null)
     {
         var paths = projects ?? [project];
