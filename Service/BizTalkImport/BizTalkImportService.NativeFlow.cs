@@ -146,8 +146,18 @@ public sealed partial class BizTalkImportService
             }
             void Warn(string text) { if (!warnings.Contains(text)) warnings.Add(text); }
             var activeExceptionNames = new HashSet<string>(StringComparer.Ordinal);
+            var dateTimeNames = FlattenNativeSource(source.Roots).Where(declaration => declaration.ShapeType == "VariableDeclaration"
+                && declaration.Properties.GetValueOrDefault("Type") is "System.DateTime" or "System.TimeSpan").Select(declaration => declaration.Name).ToHashSet(StringComparer.Ordinal);
             NativeFlowNode Block(OdxNode node, string reason, List<NativeFlowNode>? children = null)
             {
+                // Without a date-time model the reader reports the first unknown member (e.g. 'dtEnd' or 'System.DateTime.Compare') as a missing schema field; name the real cause instead.
+                if (reason.Contains("no exact distinguished schema-field declaration", StringComparison.Ordinal))
+                {
+                    var text = string.Join(" ", node.Properties.Where(property => property.Key is "Expression" or "Timeout").Select(property => property.Value));
+                    if (text.Contains("System.DateTime", StringComparison.Ordinal) || text.Contains("System.TimeSpan", StringComparison.Ordinal)
+                        || dateTimeNames.Any(name => System.Text.RegularExpressions.Regex.IsMatch(text, @"(?<![A-Za-z_0-9.])" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?![A-Za-z_0-9])", System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))))
+                        reason = "Statement uses date and time values (System.DateTime/System.TimeSpan)." + UnsupportedVariableHint("System.DateTime");
+                }
                 diagnostics.Add(new("BT-NATIVE-UNRESOLVED", MigrationDiagnosticSeverity.Blocking, paths[0],
                     $"{node.ShapeType} '{node.Name}' at line {node.SourceLine}: {reason}", "Implement/review the explicit native blocker; no source statement is executed or silently omitted."));
                 return new() { Id = "source-" + node.Id, Name = node.Name.Length == 0 ? node.ShapeType : node.Name,

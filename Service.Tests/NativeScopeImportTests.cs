@@ -65,6 +65,18 @@ public sealed class NativeScopeImportTests : IDisposable
     }
 
     [Fact]
+    public async Task StatementsUsingDateTimeStayBlockedWithADateTimeReasonNotASchemaFieldReason()
+    {
+        var (_, definition) = await Import(N("VariableDeclaration", "windowEnd", P("Type", "System.DateTime")),
+            Assign("Fresh", "windowEnd = System.DateTime.Now;"), Assign("Hour", "result = windowEnd.Hour;"),
+            N("While", "Window", P("Expression", "System.DateTime.Compare(windowEnd, System.DateTime.Now) > 0")));
+        var reasons = definition.AllNodes().Where(node => node.Kind == NativeFlowNodeKind.Blocked && node.Name is "Fresh" or "Hour" or "Window").Select(node => node.BlockReason).ToArray();
+        Assert.Equal(3, reasons.Length);
+        Assert.All(reasons, reason => { Assert.Contains("date and time", reason, StringComparison.Ordinal); Assert.Contains("durable-batch-augment", reason, StringComparison.Ordinal); });
+        Assert.DoesNotContain(reasons, reason => reason.Contains("distinguished", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ScopeWithoutCatchIsAPlainSequenceAndScopeLocalScalarsAreDeclared()
     {
         var (candidate, definition) = await Import(N("Scope", "Work", N("VariableDeclaration", "local", P("Type", "System.Int32"), P("InitialValue", "3")),
