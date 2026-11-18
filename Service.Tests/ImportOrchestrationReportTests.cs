@@ -15,7 +15,7 @@ namespace Service.Tests;
 /// dotnet test Service.Tests --filter "FullyQualifiedName~ImportOrchestrationReport"
 /// </code>
 /// The report names real orchestrations and is written outside the repository by the caller, so do not commit it.
-/// A grouped summary of block reasons is written next to it as .summary.txt.
+/// A grouped summary of block reasons is written next to it as .summary.txt; with ORCH_DERIVE=1 the outcome per policy map name is written as .derived.tsv.
 /// Optional, semicolon-separated: ORCH_EXTRA (additional source paths such as schema projects), ORCH_BINDINGS, ORCH_RULES (policy exports); ORCH_DERIVE=1 derives native map choices.
 /// ORCH_HELPERS (configuration-helper .cs files) and ORCH_HOSTCONFIG (one host .config with the appSettings values) must be supplied together so helper calls resolve to their deployed values.
 /// </summary>
@@ -31,6 +31,7 @@ public sealed class ImportOrchestrationReportTests
         var output = Environment.GetEnvironmentVariable("ORCH_OUT");
         if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(output)) return;
         var rows = new List<(string Project, string Flow, string Status, string Detail)>();
+        var derivedRows = new Dictionary<string, BizTalkDerivedMapChoiceResponse>(StringComparer.Ordinal);
         // A solution lets the importer resolve schema projects that the orchestration project references; a lone project often cannot.
         var sources = File.Exists(root) ? [root] : Directory.EnumerateFiles(root, "*.sln", SearchOption.AllDirectories).Concat(Directory.EnumerateFiles(root, "*.slnx", SearchOption.AllDirectories)).ToArray();
         if (sources.Length == 0) sources = Directory.EnumerateFiles(root, "*.btproj", SearchOption.AllDirectories).ToArray();
@@ -44,6 +45,7 @@ public sealed class ImportOrchestrationReportTests
                     AdditionalRulePaths = List("ORCH_RULES"), DeriveNativeMapChoices = Environment.GetEnvironmentVariable("ORCH_DERIVE") == "1",
                     NativeConfigurationHelperPaths = List("ORCH_HELPERS"), NativeHostConfigurationPath = List("ORCH_HOSTCONFIG").FirstOrDefault()
                 }, default);
+                foreach (var derived in response.DerivedMapChoices) derivedRows.TryAdd(derived.Value, derived);
                 foreach (var candidate in response.FlowCandidates)
                 {
                     var json = candidate.DraftFlow.Augments.FirstOrDefault(step => step.Settings.ContainsKey("flowJson"))?.Settings["flowJson"];
@@ -51,7 +53,8 @@ public sealed class ImportOrchestrationReportTests
                     var nodes = NativeFlowDefinition.Read(json, allowBlocked: true).AllNodes().ToArray();
                     var blocked = nodes.Where(node => node.Kind == NativeFlowNodeKind.Blocked && !string.IsNullOrEmpty(node.BlockReason)).ToArray();
                     if (blocked.Length == 0) rows.Add((project, candidate.DraftFlow.Id, "CLEAN", nodes.Length + " nodes"));
-                    foreach (var node in blocked) rows.Add((project, candidate.DraftFlow.Id, "BLOCKED", (node.Name + ": " + node.BlockReason).ReplaceLineEndings(" ")));
+                    foreach (var node in blocked) rows.Add((project, candidate.DraftFlow.Id, "BLOCKED", (node.Name + ": " + node.BlockReason + (node.Id == "translation-failed"
+                        ? " " + string.Join(" ", candidate.DraftFlow.Migration?.Diagnostics.Where(item => item.Code == "BT-NATIVE-TRANSLATION-FAILED").Select(item => item.Message) ?? []) : "")).ReplaceLineEndings(" ")));
                 }
             }
             catch (Exception exception)
@@ -70,5 +73,8 @@ public sealed class ImportOrchestrationReportTests
             .OrderByDescending(group => group.Count()))
             summary.Append(group.Count()).Append('\t').Append(group.Key.Length > 240 ? group.Key[..240] : group.Key).Append('\n');
         File.WriteAllText(Path.ChangeExtension(output, ".summary.txt"), summary.ToString());
+        if (derivedRows.Count > 0)
+            File.WriteAllText(Path.ChangeExtension(output, ".derived.tsv"), string.Concat(derivedRows.Values.OrderBy(item => item.Status).ThenBy(item => item.Value, StringComparer.Ordinal)
+                .Select(item => $"{item.Status}\t{item.Value}\t{item.Detail.ReplaceLineEndings(" ")}\n")));
     }
 }
