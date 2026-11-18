@@ -16,7 +16,7 @@ namespace Service.Tests;
 /// </code>
 /// The report names real orchestrations and is written outside the repository by the caller, so do not commit it.
 /// A grouped summary of block reasons is written next to it as .summary.txt; with ORCH_DERIVE=1 the outcome per policy map name is written as .derived.tsv.
-/// Optional, semicolon-separated: ORCH_EXTRA (additional source paths such as schema projects), ORCH_BINDINGS, ORCH_RULES (policy exports); ORCH_DERIVE=1 derives native map choices.
+/// Optional, semicolon-separated: ORCH_EXTRA (additional source paths such as schema projects), ORCH_BINDINGS, ORCH_RULES (policy exports); ORCH_DERIVE=1 derives native map choices; ORCH_POLICY (name=version, e.g. "My Policy=1.2") selects an explicit native policy test version.
 /// ORCH_HELPERS (configuration-helper .cs files) and ORCH_HOSTCONFIG (one host .config with the appSettings values) must be supplied together so helper calls resolve to their deployed values.
 /// </summary>
 public sealed class ImportOrchestrationReportTests
@@ -43,7 +43,8 @@ public sealed class ImportOrchestrationReportTests
                 {
                     SourcePath = project, GenerateNativeFlow = true, AdditionalSourcePaths = List("ORCH_EXTRA"), AdditionalBindingPaths = List("ORCH_BINDINGS"),
                     AdditionalRulePaths = List("ORCH_RULES"), DeriveNativeMapChoices = Environment.GetEnvironmentVariable("ORCH_DERIVE") == "1",
-                    NativeConfigurationHelperPaths = List("ORCH_HELPERS"), NativeHostConfigurationPath = List("ORCH_HOSTCONFIG").FirstOrDefault()
+                    NativeConfigurationHelperPaths = List("ORCH_HELPERS"), NativeHostConfigurationPath = List("ORCH_HOSTCONFIG").FirstOrDefault(),
+                    NativePolicyVersions = List("ORCH_POLICY").Select(pair => pair.Split('=', 2)).Where(pair => pair.Length == 2).ToDictionary(pair => pair[0], pair => pair[1], StringComparer.Ordinal) is { Count: > 0 } targets ? targets : null
                 }, default);
                 foreach (var derived in response.DerivedMapChoices) derivedRows.TryAdd(derived.Value, derived);
                 foreach (var candidate in response.FlowCandidates)
