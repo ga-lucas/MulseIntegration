@@ -57,6 +57,7 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("MulseAdmin", policy => policy.RequireAuthenticatedUser().RequireRole(adminRole));
 builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddGitHubCopilotSignIn(builder.Configuration, builder.Environment);
 builder.Services.AddHttpClient("oidc-token");
 builder.Services.AddSingleton<MulseApiAccessTokenProvider>();
 builder.Services.AddTransient<MulseApiAccessTokenHandler>();
@@ -76,6 +77,17 @@ var migrationClient = builder.Services.AddHttpClient("mulse-storage-migration", 
 migrationClient.RemoveAllResilienceHandlers();
 #pragma warning restore EXTEXP0001
 migrationClient.AddHttpMessageHandler<MulseApiAccessTokenHandler>();
+var authoringClient = builder.Services.AddHttpClient("mulse-ai-authoring", (serviceProvider, httpClient) =>
+{
+    httpClient.BaseAddress = new Uri(serviceProvider.GetRequiredService<IConfiguration>()["MulseApi:BaseUrl"] ?? "http://localhost:5210");
+    httpClient.Timeout = TimeSpan.FromMinutes(2);
+});
+#pragma warning disable EXTEXP0001 // Do not automatically replay a billable model request.
+authoringClient.RemoveAllResilienceHandlers();
+#pragma warning restore EXTEXP0001
+authoringClient.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false });
+authoringClient.AddHttpMessageHandler<MulseApiAccessTokenHandler>();
+authoringClient.RedactLoggedHeaders(_ => true);
 
 var app = builder.Build();
 
@@ -104,6 +116,7 @@ app.MapPost("/auth/logout", async (HttpContext context, IAntiforgery antiforgery
     })
     .RequireAuthorization();
 
+app.MapGitHubCopilotSignIn();
 app.MapDefaultEndpoints();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()

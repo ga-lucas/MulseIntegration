@@ -125,4 +125,25 @@ public interface IMulseApiClient
     Task<WorkspaceRestorePreviewViewModel> RestoreWorkspaceAsync(RestoreWorkspaceRequestViewModel request, CancellationToken cancellationToken);
 
     Task<int> DeleteAllFlowsAsync(string confirmation, CancellationToken cancellationToken);
+
+    Task<AiAuthoringSettingsViewModel> GetAiAuthoringSettingsAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring.");
+
+    Task<AiAuthoringSettingsViewModel> SetAiAuthoringSettingsAsync(UpdateAiAuthoringSettingsViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring settings.");
+
+    Task<IReadOnlyList<AiAuthoringModelViewModel>> GetCopilotModelsAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support Copilot model discovery.");
+
+    Task<AiAuthoringTestViewModel> TestAiAuthoringAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring connection tests.");
+
+    Task<AiAuthoringResponseViewModel> ChatAuthoringAsync(AiAuthoringRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring.");
+
+    Task<ConnectionAnalysisViewModel> AnalyzeConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support connection analysis.");
+
+    Task<ConnectionAssistanceResponseViewModel> AssistConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support connection assistance.");
 }

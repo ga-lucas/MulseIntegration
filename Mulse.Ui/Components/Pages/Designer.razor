@@ -21,6 +21,11 @@
             <button class="secondary-button @(_showSamplePanel ? "active" : null)" aria-expanded="@(_showSamplePanel ? "true" : "false")" @onclick="() => { SetMappingWorkspace(false); ToggleSamplePanel(); }">Add sample data</button>
             <button class="secondary-button @(_showBizTalkPanel ? "active" : null)" aria-expanded="@(_showBizTalkPanel ? "true" : "false")" @onclick="() => { SetMappingWorkspace(false); ToggleBizTalkPanel(); }">Import from BizTalk</button>
             <button class="secondary-button" @onclick="RefreshCatalogAsync" disabled="@_isAnalyzingSample">Refresh modules</button>
+            <button class="secondary-button" aria-expanded="@(_showAssistant ? "true" : "false")" @onclick="() => _showAssistant = !_showAssistant">AI assistant</button>
+            @if (_assistantUndoDraft is not null)
+            {
+                <button class="secondary-button" @onclick="UndoAuthoringProposal">Undo AI proposal</button>
+            }
             <button class="secondary-button" @onclick="AutoLayout" disabled="@(_showMappingDesigner || _showAugmentDesigner)">Auto layout</button>
             <button class="secondary-button" @onclick="ClearCanvas" disabled="@(_showMappingDesigner || _showAugmentDesigner)">Clear canvas</button>
         </div>
@@ -36,9 +41,13 @@
         <div class="status-banner error designer-banner" role="alert">@_errorMessage</div>
     }
 
+    @if (_showAssistant)
+    {
+        <FlowAssistant @key="(typeof(FlowAssistant), FlowId)" CaptureDraft="CaptureAuthoringDraftAsync" Apply="ApplyAuthoringProposal" Close="() => _showAssistant = false" />
+    }
     @if (IsExistingFlow)
     {
-        <FlowCheckpoints @key="FlowId" FlowId="@FlowId" AllowRelease="@(_enabled && _migration is null)" />
+        <FlowCheckpoints @key="(typeof(FlowCheckpoints), FlowId)" FlowId="@FlowId" AllowRelease="@(_enabled && _migration is null)" />
     }
     <div class="workspace-tabs" role="tablist" aria-label="Designer workspace">
         <button @ref="_flowTab" id="flow-workspace-tab" role="tab" type="button" aria-selected="@(!_showMappingDesigner && !_showAugmentDesigner ? "true" : "false")" aria-controls="flow-workspace" tabindex="@(!_showMappingDesigner && !_showAugmentDesigner ? 0 : -1)" @onclick="() => SetMappingWorkspace(false)" @onkeydown="args => HandleWorkspaceKeyAsync(args, 0)">Flow</button>

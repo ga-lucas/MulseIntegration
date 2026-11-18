@@ -1,0 +1,209 @@
+@using System.Text.Json
+@implements IDisposable
+@inject IMulseApiClient ApiClient
+
+<section aria-labelledby="connection-assistant-heading">
+    <h3 id="connection-assistant-heading">Assist a connection</h3>
+    <p>First version: one parsed JSON source, one JSON renderer, no existing augments or dependent fetches. Creates an ordered mapping augment, not an isolated graph edge. Other pairs and custom plugin downloads are not available yet.</p>
+    <p>Paste parsed data, not raw Excel/XML files. Each scenario represents one parsed payload. Expected output must be an array of objects: the mapping's output passed to the JSON renderer. No parser, plugin, fetch, delivery or flow is executed by this preview.</p>
+    <p>Samples stay in this open panel and are sent to your Mulse Service for analysis and previews, not saved in flow history. The provider receives inferred field names/types and your instructions; sample values are included only for individually checked examples. Do not paste credentials. Sharing is not automatic secret detection; provider retention policies apply.</p>
+    <StatusBanner Error="@_error" Success="@_status" />
+    <fieldset disabled="@_busy">
+        <button type="button" class="secondary-button" @onclick="LoadDraftAsync">Refresh node choices</button>
+        <label>Parsed source
+            <select @bind="_sourceId" @bind:after="Invalidate">
+                <option value="">Select a parsed source</option>
+                @foreach (var source in _draft?.Parses ?? [])
+                {
+                    <option value="@source.Id">@source.Id (@source.Parse.Module)</option>
+                }
+            </select>
+        </label>
+        <label>Target renderer
+            <select @bind="_routeIndex" @bind:after="Invalidate">
+                <option value="-1">Select a renderer</option>
+                @if (_draft is not null)
+                {
+                    @for (var index = 0; index < _draft.Deliveries.Count; index++)
+                    {
+                        <option value="@index">Route @(index + 1): @_draft.Deliveries[index].Render.Module</option>
+                    }
+                }
+            </select>
+        </label>
+        <label>Desired mapping and business rules
+            <textarea @bind="_instructions" @bind:after="Invalidate" maxlength="4000" rows="3" placeholder="For example: copy orderId to invoiceId. Explain missing-field behavior; do not assume conversions." />
+        </label>
+        @foreach (var sample in _samples)
+        {
+            <section @key="sample" class="proposal-review" aria-label="Sample scenario">
+                <label>Scenario name <input @bind="sample.Name" @bind:after="Invalidate" maxlength="80" /></label>
+                <label>Parsed input JSON (object or array of objects)
+                    <textarea @bind="sample.Input" @bind:after="Invalidate" maxlength="32768" rows="5" spellcheck="false" />
+                </label>
+                <label>Expected JSON output (array of objects)
+                    <textarea @bind="sample.Expected" @bind:after="Invalidate" maxlength="32768" rows="5" spellcheck="false" />
+                </label>
+                <label class="checkbox-label"><input type="checkbox" @bind="sample.ShareInput" @bind:after="Invalidate" /> Share this input's values with the AI provider (use sanitized data)</label>
+                <label class="checkbox-label"><input type="checkbox" @bind="sample.ShareExpected" @bind:after="Invalidate" /> Share this expected output's values with the AI provider (use sanitized data)</label>
+                <button type="button" class="secondary-button" disabled="@(_samples.Count == 1)" @onclick="() => RemoveSample(sample)">Remove scenario</button>
+            </section>
+        }
+        <div class="action-row">
+            <button type="button" class="secondary-button" disabled="@(_samples.Count >= 8)" @onclick="AddSample">Add scenario</button>
+            <button type="button" class="secondary-button" @onclick="AnalyzeAsync">Analyze samples locally and review disclosure</button>
+        </div>
+        <p>Limits: 1-8 unique named scenarios; 32,768 characters per input/output; 16 JSON nesting levels; 20,000 values combined; 256 inferred paths per side. Add cases for missing fields, nulls and repeated records. Empty arrays alone cannot establish item shape.</p>
+    </fieldset>
+    @if (_analysis is not null)
+    {
+        <h4>Observed shapes (not a guarantee about production data)</h4>
+        @foreach (var side in new[] { ("Input", _analysis.InputShape), ("Output", _analysis.OutputShape) })
+        {
+            <h5>@side.Item1</h5>
+            <table><thead><tr><th>Path</th><th>Types</th><th>Optional</th><th>Nullable</th></tr></thead><tbody>
+                @foreach (var field in side.Item2)
+                {
+                    <tr><td><code>@(field.Path.Length == 0 ? "(record)" : field.Path)</code></td><td>@string.Join(", ", field.Types)</td><td>@field.Optional</td><td>@field.Nullable</td></tr>
+                }
+            </tbody></table>
+        }
+        @if (_analysis.Errors.Count > 0)
+        {
+            <ul role="alert">@foreach (var error in _analysis.Errors) { <li>@error</li> }</ul>
+        }
+        <details><summary>Exact shape/example context to share with the provider</summary><pre>@_analysis.DisclosureJson</pre></details>
+        <p>Your instructions above are also sent. The draft's settings, sample names, execution histories and stored secret values are not attached. Current support: direct field copies and object/repeating-array templates only; conversions and business logic may require manual mapping or a custom plugin.</p>
+        <button type="button" class="run-button" disabled="@(_busy || _analysis.Errors.Count > 0 || string.IsNullOrWhiteSpace(_instructions))" @onclick="GenerateAsync">@(_busy ? "Working..." : "Share reviewed context and propose mapping")</button>
+    }
+    @if (_result is not null)
+    {
+        <h4>Review connection proposal</h4>
+        <p>@_result.Reply</p>
+        @if (_result.MappingJson is not null) { <details open><summary>Proposed mapping</summary><pre>@_result.MappingJson</pre></details> }
+        @foreach (var error in _result.Errors) { <p class="status-banner error" role="alert">@error</p> }
+        @foreach (var preview in _result.Previews)
+        {
+            <section class="proposal-review"><h5>@preview.Name: @(preview.Matches ? "Matches expected JSON" : "Needs attention")</h5>
+                @if (preview.Error is not null) { <p role="alert">@preview.Error</p> }
+                @if (preview.ActualJson is not null) { <details><summary>Actual JSON output (local preview)</summary><pre>@preview.ActualJson</pre></details> }
+            </section>
+        }
+        @if (_result.ProposalJson is not null)
+        {
+            <p>Apply adds one source-filtered mapping augment to the ordered chain before the selected renderer. It leaves source, parser, renderer and delivery settings unchanged. All supplied scenarios matched; this does not prove production correctness. The draft will be disabled and left unsaved.</p>
+            <label class="checkbox-label"><input type="checkbox" @bind="_approved" disabled="@_busy" /> I reviewed the mapping and every scenario.</label>
+            <button type="button" class="run-button" disabled="@(_busy || !_approved)" @onclick="ApplyAsync">Apply connection to unsaved canvas</button>
+        }
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public Func<Task<string>> CaptureDraft { get; set; } = default!;
+    [Parameter] public EventCallback<FlowAuthoringProposal> Apply { get; set; }
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly List<SampleEditor> _samples = [new() { Name = "Scenario 1" }];
+    private FlowViewModel? _draft;
+    private string _sourceId = "", _instructions = "";
+    private int _routeIndex = -1;
+    private string? _error, _status;
+    private bool _busy, _approved, _disposed;
+    private ConnectionAnalysisViewModel? _analysis;
+    private ConnectionAssistanceRequestViewModel? _reviewed;
+    private ConnectionAssistanceResponseViewModel? _result;
+
+    protected override Task OnInitializedAsync() => LoadDraftAsync();
+
+    private async Task LoadDraftAsync()
+    {
+        _error = null;
+        Invalidate();
+        try
+        {
+            var json = await CaptureDraft();
+            _draft = JsonSerializer.Deserialize<FlowViewModel>(json, JsonSerializerOptions.Web)
+                ?? throw new InvalidOperationException("The draft could not be read.");
+            _sourceId = _draft.Parses.Count == 1 ? _draft.Parses[0].Id : "";
+            _routeIndex = _draft.Deliveries.Count == 1 ? 0 : -1;
+        }
+        catch (Exception exception) { _error = exception.Message; }
+    }
+
+    private void Invalidate() { _analysis = null; _reviewed = null; _result = null; _approved = false; _status = null; }
+    private void AddSample()
+    {
+        if (_samples.Count >= 8) return;
+        var index = 1;
+        while (_samples.Any(sample => string.Equals(sample.Name.Trim(), $"Scenario {index}", StringComparison.OrdinalIgnoreCase))) index++;
+        _samples.Add(new() { Name = $"Scenario {index}" });
+        Invalidate();
+    }
+    private void RemoveSample(SampleEditor sample) { if (_samples.Count > 1) { _samples.Remove(sample); Invalidate(); } }
+    private ConnectionAssistanceRequestViewModel Request(string draft) => new(draft, _sourceId, _routeIndex, _instructions,
+        _samples.Select(sample => new ConnectionSampleViewModel(sample.Name, sample.Input, sample.Expected, sample.ShareInput, sample.ShareExpected)).ToArray());
+
+    private async Task AnalyzeAsync()
+    {
+        if (_busy || _disposed) return;
+        _busy = true; _error = null;
+        Invalidate();
+        try
+        {
+            var request = Request(await CaptureDraft());
+            var analysis = await ApiClient.AnalyzeConnectionAsync(request, _lifetime.Token);
+            if (_disposed) return;
+            _reviewed = request; _analysis = analysis;
+        }
+        catch (OperationCanceledException) when (_disposed) { }
+        catch (Exception exception) { _error = exception.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task GenerateAsync()
+    {
+        if (_busy || _disposed || _analysis is null || _reviewed is null || _analysis.Errors.Count > 0) return;
+        _busy = true; _error = null; _result = null; _approved = false;
+        try
+        {
+            if (JsonSerializer.Serialize(Request(await CaptureDraft())) != JsonSerializer.Serialize(_reviewed))
+                throw new InvalidOperationException("The draft or samples changed. Analyze again and review the new disclosure.");
+            var result = await ApiClient.AssistConnectionAsync(_reviewed, _lifetime.Token);
+            if (!_disposed) _result = result;
+        }
+        catch (OperationCanceledException) when (_disposed) { }
+        catch (Exception exception) { _error = exception.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (_busy || !_approved || _reviewed is null || _result?.ProposalJson is null || _disposed) return;
+        _busy = true; _error = null;
+        try
+        {
+            if (_result.Errors.Count > 0 || _result.Previews.Count != _reviewed.Samples.Count || _result.Previews.Any(preview => !preview.Matches))
+                throw new InvalidOperationException("Every scenario must match before applying.");
+            if (await CaptureDraft() != _reviewed.DraftJson)
+                throw new InvalidOperationException("The draft changed. Analyze again and request a new proposal.");
+            await Apply.InvokeAsync(new FlowAuthoringProposal(_reviewed.DraftJson, _result.ProposalJson));
+            Invalidate();
+            _status = "Connection applied to the disabled unsaved draft. Nothing was saved or executed. Use Undo AI proposal to restore the prior draft.";
+        }
+        catch (Exception exception) { _error = exception.Message; }
+        finally { _busy = false; }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _lifetime.Cancel(); _lifetime.Dispose();
+        _samples.Clear(); _draft = null; _analysis = null; _reviewed = null; _result = null; _instructions = "";
+    }
+
+    private sealed class SampleEditor
+    {
+        public string Name = "", Input = "", Expected = "";
+        public bool ShareInput, ShareExpected;
+    }
+}

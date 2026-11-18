@@ -1,10 +1,11 @@
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Mulse.Ui.Models;
+using Mulse.ServiceDefaults.Security;
 
 namespace Mulse.Ui.Services;
 
-public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? clientFactory = null) : IMulseApiClient
+public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? clientFactory = null, IUserCopilotCredential? copilotCredential = null) : IMulseApiClient
 {
     public Task<IReadOnlyList<ModuleViewModel>> GetModulesAsync(CancellationToken cancellationToken)
         => GetListAsync<ModuleViewModel>("/api/modules", cancellationToken);
@@ -340,6 +341,81 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         using var response = await httpClient.PostAsJsonAsync("/api/workspace/flows/delete-all", new { Confirmation = confirmation }, cancellationToken).ConfigureAwait(false);
         var result = await ReadRequiredAsync<DeletedFlowsResult>(response, cancellationToken, "deleted flow count").ConfigureAwait(false);
         return result.DeletedCount;
+    }
+
+    public async Task<AiAuthoringSettingsViewModel> GetAiAuthoringSettingsAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/authoring/settings", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringSettingsViewModel>(response, cancellationToken, "AI authoring settings").ConfigureAwait(false);
+    }
+
+    public async Task<AiAuthoringSettingsViewModel> SetAiAuthoringSettingsAsync(UpdateAiAuthoringSettingsViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PutAsJsonAsync("/api/authoring/settings", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringSettingsViewModel>(response, cancellationToken, "AI authoring settings").ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<AiAuthoringModelViewModel>> GetCopilotModelsAsync(CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/copilot/models");
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, request, cancellationToken, requireCopilot: true).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringModelViewModel[]>(response, cancellationToken, "Copilot model list").ConfigureAwait(false);
+    }
+
+    public async Task<AiAuthoringTestViewModel> TestAiAuthoringAsync(CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/test");
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, request, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringTestViewModel>(response, cancellationToken, "AI connection test").ConfigureAwait(false);
+    }
+
+    public async Task<AiAuthoringResponseViewModel> ChatAuthoringAsync(AiAuthoringRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/chat") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringResponseViewModel>(response, cancellationToken, "AI authoring response").ConfigureAwait(false);
+    }
+
+    public async Task<ConnectionAnalysisViewModel> AnalyzeConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/connection/analyze", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ConnectionAnalysisViewModel>(response, cancellationToken, "connection analysis").ConfigureAwait(false);
+    }
+
+    public async Task<ConnectionAssistanceResponseViewModel> AssistConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/connection") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ConnectionAssistanceResponseViewModel>(response, cancellationToken, "connection assistance").ConfigureAwait(false);
+    }
+
+    private async Task AttachCopilotCredentialAsync(HttpClient destinationClient, HttpRequestMessage request, CancellationToken cancellationToken, bool requireCopilot = false)
+    {
+        if (copilotCredential is null)
+        {
+            if (requireCopilot) throw new InvalidOperationException("Connect your GitHub account under Configuration > My GitHub connection before loading Copilot models.");
+            return;
+        }
+        if (!requireCopilot)
+        {
+            var settings = await GetAiAuthoringSettingsAsync(cancellationToken).ConfigureAwait(false);
+            if (settings.Provider != "GitHubCopilot") return;
+        }
+        var token = await copilotCredential.GetTokenAsync(cancellationToken).ConfigureAwait(false);
+        if (token is null) throw new InvalidOperationException("Connect your GitHub account under Configuration > AI assistance before using Copilot.");
+        if (!CopilotUserCredential.IsValid(token)) throw new InvalidOperationException("Your GitHub credential is invalid. Reconnect your account.");
+        var destination = new Uri(destinationClient.BaseAddress ?? throw new InvalidOperationException("The Mulse API base URL is missing."), request.RequestUri!);
+        if (destination.Scheme != Uri.UriSchemeHttps && !(destination.Scheme == Uri.UriSchemeHttp && destination.IsLoopback))
+            throw new InvalidOperationException("Per-user GitHub credentials require an HTTPS Mulse API URL (HTTP is allowed only on loopback).");
+        request.Headers.Add(CopilotUserCredential.HeaderName, token);
     }
 
     private sealed record DeletedFlowsResult(int DeletedCount);

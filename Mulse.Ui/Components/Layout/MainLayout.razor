@@ -1,5 +1,6 @@
 ﻿@inherits LayoutComponentBase
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 
 <div class="layout-shell @(_menuCollapsed ? "sidebar-collapsed" : null)">
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -26,6 +27,13 @@
             <nav class="workspace-nav" aria-labelledby="configuration-nav-label">
                 <NavLink href="/config-values" aria-label="Config values" title="Config values"><span class="nav-icon" aria-hidden="true">&#9881;</span><span class="menu-text">Config values</span></NavLink>
                 <NavLink href="/storage" aria-label="Storage" title="Storage"><span class="nav-icon" aria-hidden="true">&#9636;</span><span class="menu-text">Storage</span></NavLink>
+                <details class="ai-nav-group" open="@IsAiPage">
+                    <summary aria-label="AI assistance" title="AI assistance"><span class="nav-icon" aria-hidden="true">&#10023;</span><span class="menu-text">AI assistance</span><span class="nav-chevron" aria-hidden="true">&#8250;</span></summary>
+                    <div class="ai-submenu">
+                        <NavLink href="/ai-assistance" aria-label="Provider settings" title="Provider settings"><span class="nav-icon" aria-hidden="true">&#9881;</span><span class="menu-text">Provider settings</span></NavLink>
+                        <NavLink href="/github-copilot" aria-label="My GitHub connection" title="My GitHub connection"><span class="nav-icon" aria-hidden="true">&#9679;</span><span class="menu-text">My GitHub connection</span></NavLink>
+                    </div>
+                </details>
                 <NavLink href="/backup-restore" aria-label="Backup & Restore" title="Backup & Restore"><span class="nav-icon" aria-hidden="true">&#8645;</span><span class="menu-text">Backup &amp; Restore</span></NavLink>
             </nav>
             <div class="sidebar-footer">
@@ -47,6 +55,7 @@
 
 @code {
     private bool _menuCollapsed;
+    private bool IsAiPage => new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/') is "/ai-assistance" or "/github-copilot";
     private void ToggleMenu() => _menuCollapsed = !_menuCollapsed;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

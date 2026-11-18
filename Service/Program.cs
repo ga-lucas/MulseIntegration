@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Mulse.ServiceDefaults.Security;
 using Service;
+using Service.Ai;
 using Service.Endpoints;
 using Service.Middleware;
 
@@ -51,6 +52,7 @@ builder.Services.AddValidation();
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddMulsePlatform(builder.Configuration, builder.Environment.ContentRootPath);
+builder.Services.AddAiAuthoring(builder.Configuration, builder.Environment);
 
 var app = builder.Build();
 
@@ -76,6 +78,7 @@ app.MapStorageEndpoints();
 app.MapHistoryEndpoints();
 app.MapProcessingEndpoints();
 app.MapHttpInboundEndpoints();
+app.MapAiAuthoringEndpoints();
 
 app.Run();
 

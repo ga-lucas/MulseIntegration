@@ -22,6 +22,7 @@ what needs human review - to make BizTalk migrations less painful.
 - [Excel files](#excel-files)
 - [BizTalk migration](#biztalk-migration)
 - [UI workspace](#ui-workspace)
+- [AI flow authoring](#ai-flow-authoring)
 - [API reference](#api-reference)
 - [Troubleshooting and limitations](#troubleshooting-and-limitations)
 
@@ -156,7 +157,8 @@ compatible. Modules execute with the Service process's permissions; loading is n
 | `Interval` | Polls on a positive `trigger.interval` such as `00:05:00`; scheduler checks every five seconds. `runOnStartup` controls the initial interval run, not all trigger modes. |
 | `Push` | Registers the first fetch node implementing `IPushTriggeredFetchModule`; other fetches still execute normally. Registrations reconcile about every five seconds. |
 
-Manual Run also works for enabled Interval/Push flows. It does not enable a disabled flow. Execution is
+Manual Run also works for enabled Interval/Push flows. It does not enable a disabled flow; the dashboard's
+**Run flow** button is unavailable until the flow is enabled. Execution is
 serialized per flow inside one Service instance; this is not a cross-process lock. Interval scheduling
 is in-memory and recalculated after restart rather than a durable calendar scheduler.
 
@@ -1740,7 +1742,9 @@ those separately before letting a flow modify source data.
 
 The admin UI menu links to the dashboard and groups **Config values**, **Modules**, **Module Packages**,
 and **Backup & Restore** under Configuration. Open the flow designer using create/configure links from
-the dashboard rather than a menu entry. `/modules` hosts the searchable module catalog with kind and source-package filters.
+the dashboard rather than a menu entry. **Configuration > AI assistance** is a single expandable menu group
+containing **Provider settings** and **My GitHub connection**; it opens automatically on either AI page.
+`/modules` hosts the searchable module catalog with kind and source-package filters.
 Each module links to its owning package and shows its source kind and assembly path. `/module-packages`
 lists the available modules in each loaded package, collapsed by default under **Show/hide modules**,
 with links back to a package-filtered catalog and load/unload/reload controls. Unloaded packages do not
@@ -2057,6 +2061,201 @@ Connected nodes remain; fetch/parse references are detached, and incomplete sour
 repaired before saving. Use the Properties panel's **Remove route** or **Remove source (with its fetches)**
 when you intentionally want grouped removal. Deletions affect the draft until you **Save flow**.
 
+## AI flow authoring
+
+The Designer's **AI assistant** uses Microsoft's experimental native Blazor AI components (`ChatPage` and
+`UIAgent`) with a Service-side model provider. No React frontend or separate agent server is required.
+Assistance is disabled by default and is not part of flow execution or recovery.
+
+1. Open **Configuration > AI assistance**. Select **OpenAI**, **OpenAI-compatible / local Ollama**, or
+   **GitHub Copilot** (setup below). Enter the model and backend credential; OpenAI-compatible providers also
+   accept an API base endpoint. A blank replacement key/token preserves
+   the saved key only for the same provider/endpoint; changing either requires its credential again.
+   **Clear saved credential** explicitly removes it. Save, then **Test saved connection**.
+   HTTPS is required except loopback HTTP in development. Ollama commonly uses `http://localhost:11434/v1`.
+2. Open or create a flow, enter its ID, then open **AI assistant**. Starting the assistant explicitly opts
+   into sending your prompt, recent conversation and a redacted snapshot of the **current unsaved draft**
+   to the configured provider. No request is sent merely by opening the panel.
+3. Describe a flow or ask for an explanation/change. The backend supplies loaded module descriptions and
+   validates proposals without invoking modules, fetching data, resolving stored secrets or executing flows.
+4. Review the proposed fields and approve **Apply to canvas (do not save)**. The resulting draft is disabled
+   with Run on startup cleared. Inspect settings in Properties before using the ordinary **Save flow** action.
+   Enabling/running remains a separate operator action. Saving an edited existing flow disabled pauses future
+   scheduling for that flow; applying to the canvas alone does not affect the running Service.
+5. **Undo AI proposal** restores the prior unsaved definition until you save or make further changes.
+   Proposals made against an older draft are rejected instead of overwriting intervening edits.
+
+Ordinary options such as filename wildcard patterns (`searchPattern`/`filePattern`) and bounded numeric
+settle/delay/timeout/count settings may be shared, including legacy modules that declare those numbers as text.
+Reference placeholders and module-declared boolean/select/small numeric options may also be shared. Paths and
+endpoints are hidden by default. Before starting a conversation, you may select **Include environment-specific
+settings (paths and endpoints)**; the choice is fixed for that conversation and resets off when closed/reopened.
+Credential/password fields, connection strings, unknown free text, and URLs with user credentials, query strings
+or fragments remain withheld even with that option. Secret/config references are never resolved for the model.
+This conservative classification is not a guarantee of detecting secrets placed in incorrectly named ordinary
+settings; use secret references, not embedded credentials. Opted-in values may appear in replies and be retained
+by the provider; starting a fresh conversation cannot retract previously sent information.
+Proposed setting values are hidden in the change summary;
+inspect them after applying, before saving. Do not paste
+credentials, private code, personal data or customer payloads into chat. Sample uploads, message histories and
+other customers' flows are not automatically attached. Categories are organizational, not isolation boundaries.
+Provider data-retention policies still apply. Conversations live only in the open assistant session and are
+not stored in execution history; closing it or navigating to another flow starts a new conversation.
+
+#### Sample-based connection assistance (initial JSON support)
+
+Before starting general chat, choose **AI assistant > Assist a connection with sample data** in the designer.
+Select a parsed source and renderer. This initial version requires one parsed source, one `json-render` route,
+no existing augments and no dependent fetches. It adds one source-filtered mapping augment to the ordered
+chain; it does not create an arbitrary per-edge branch. Other pairs require the manual mapping editor for now.
+
+Add up to eight named scenarios. Paste parsed JSON input (an object or array of objects), not raw Excel/XML,
+and expected mapping output (an array of objects passed to the JSON renderer). Select **Analyze samples locally
+and review disclosure**. The Mulse Service combines observed field types, optional/null fields and array shapes
+without contacting a provider. Conflicting types, all-null fields and arrays with no observed item shape require
+richer or normalized samples. Inferred structure is not a production schema guarantee.
+
+Review the exact shape/example context, then explicitly request a proposal. Sample values are excluded unless
+you check the separate input/output sharing choices for that scenario; field names/types and your instructions
+are shared. Draft settings, scenario names, histories and resolved secrets are not attached. Samples are held
+in the open panel/request memory, not persisted in flow history. Sharing controls do not automatically sanitize
+values or detect secrets; provider retention policies apply to approved information.
+
+Supported proposals copy fields or build nested object/repeating-array templates. Constants, conversion transforms,
+conditions and custom plugin generation are not implemented here yet. Every scenario runs through the pure mapping
+engine, without invoking parsers, plugins, fetches or deliveries. JSON differences or failures block Apply; previews
+check mapping output, not complete rendered files. Review and apply only after all scenarios match; the resulting
+draft stays disabled and unsaved, and **Undo AI proposal** restores the prior draft unless newer edits intervened.
+Editing samples invalidates disclosure review, and draft changes invalidate generation/application.
+
+Limits: 32,768 characters per input/output; 16 JSON nesting levels; 20,000 values across scenarios; 256 inferred
+paths per side; 150,000 characters of provider disclosure; 131,072 characters per returned preview. Raw-file
+parsing, schema-only evidence, other pairs and downloadable C# stubs remain in the
+[connection assistance plan](docs/connection-assistance-plan.md).
+
+OpenAI/OpenAI-compatible credentials are write-only through the authoring settings API and protected on the Service.
+GitHub Copilot uses separate per-user UI connections described below. These credentials are separate
+from ordinary Config Values and workspace backups; preserve the Service's data-protection keys and authoring
+settings when moving the installation. UI overrides and their key ring default to `Service\Data\ai-authoring`
+(`AiAuthoring:SettingsDirectory` changes this directory). Restrict filesystem access: the key ring is sensitive.
+Windows additionally uses DPAPI, so moving to another account/machine may require re-entering the credential;
+elsewhere, possession of both settings and keys permits decryption. Deployment defaults use the `AiAuthoring`
+section's `Enabled`, `Provider`, `Model`, `Endpoint`, `MaxOutputTokens` and `ApiKey` settings (environment variables
+such as `AiAuthoring__ApiKey` or user secrets). Do not put keys in checked-in configuration or frontend assets.
+Model calls are bounded and cancelable. Mulse does not automatically retry authoring requests; OpenAI transport
+retries are disabled, while GitHub Copilot's internal authentication/network behavior is owned by its SDK runtime.
+Responses are displayed after validation, not as partially editable streamed model JSON. Invalid proposals
+remain unapplied and show validation errors. The assistant has no tool for saving/enabling/running flows,
+loading plugins, changing configuration values, migration approval, storage management or arbitrary code execution.
+Existing save-time validation and durable-work editing guards still apply.
+
+The preview UI dependency is pinned because its API is experimental. `Microsoft.Extensions.AI` provides the
+model abstraction; this first version uses a bounded proposal exchange, not autonomous multi-agent execution,
+AG-UI remote-agent hosting or persistent/resumable agent sessions. No live model is needed for the automated tests.
+
+### GitHub Copilot provider
+
+Mulse uses the official `GitHub.Copilot.SDK` (pinned to 1.0.33), not an OpenAI endpoint or an extracted
+Visual Studio credential. To use your Copilot access:
+
+**Default: device-code sign-in for private installations.** UI hostnames can differ freely: no public inbound
+access, per-installation callback registration, client secret or central authentication broker is needed.
+The UI makes outbound HTTPS requests to `github.com` and `api.github.com`; the Service needs outbound access
+for GitHub/Copilot model requests. The user's browser must reach GitHub and the private Mulse UI, for example
+through a VPN. Keep Mulse behind its normal authentication/network controls; do not expose it to enable Copilot.
+
+**Publisher setup (once for Mulse, not once per installation):** GitHub still requires a registered app identity.
+The Mulse publisher must register a GitHub OAuth App and enable **Device Flow**, then distribute its **public
+client ID** with Mulse. This build has no publisher registration/client ID bundled, so Connect remains unavailable
+until that ID is provided. Mulse cannot register the app automatically or borrow Visual Studio's/CLI's app ID.
+If GitHub's registration form requires homepage/callback fields, use publisher-controlled URLs; the device flow
+does not send a `redirect_uri` or invoke that callback. All installations can reuse the same publisher client ID;
+GitHub's app-level limits, organization approval and revocation also apply to that shared registration. A customer
+may optionally supply their own registration instead. See [GitHub device-flow documentation](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow).
+
+**Deployment configuration:**
+
+1. Set **the UI's** `GitHubCopilot:ClientId` (environment variable `GitHubCopilot__ClientId`) to the publisher's
+   public client ID, or include it in the packaged UI configuration. Leave `GitHubCopilot:SignInMode` at its
+   default `Device`; no `ClientSecret` is needed or sent. Restart the UI after changing sign-in configuration.
+2. Connect your GitHub account as described below. In **Configuration > AI assistance**, select **GitHub Copilot**,
+   click **Load available models**, choose a model, enable assistance and save. Loading works before saving
+   the provider or choosing a model, including while assistance is disabled. These provider/model settings
+   are shared; credentials are not. Deployment
+   equivalents are `AiAuthoring__Provider=GitHubCopilot` and `AiAuthoring__Model=<available-model-id>` on the
+   Service, with `AiAuthoring__Enabled=true`. Leave `AiAuthoring__Endpoint` unset.
+3. Keep HTTPS for browser access and `MulseApi:BaseUrl` between UI and Service (HTTP is allowed only for
+   loopback Service addresses). Authoring transport redacts headers and does not follow redirects or
+   automatically retry. Device authorization also uses no-redirect, no-retry outbound transport.
+
+**Each user:** sign in to Mulse normally, open **Configuration > AI assistance > My GitHub connection**, choose **Connect GitHub**,
+open `https://github.com/login/device` and enter the displayed code. Authorize the app on GitHub and keep the
+Mulse account page open: it checks automatically, respecting GitHub's polling interval and `slow_down` responses.
+Only enter a code generated by your own sign-in; never approve codes supplied by someone else. The server-only
+device credential never reaches the browser; the displayed user code is short-lived. Pending attempts are held
+in UI process memory and do not survive a UI restart. Navigation stops page polling; return before expiry to
+resume if the attempt is still available, or Connect again. Canceling an in-flight poll also invalidates that
+attempt. Disconnect/reconnect fences late responses so they cannot restore an old connection.
+
+In **AI assistance**, **Load available models** queries the official SDK using only your connected account's
+credential and displays model names and exact IDs in a dropdown. It requests no chat completion, changes no
+settings and has no cross-user catalog cache. Models explicitly disabled by policy are omitted. Use **Refresh
+available models** after changes to your access; disconnected, expired, empty-catalog and network failures are
+shown explicitly. A saved model missing from your list remains marked as unavailable rather than being silently
+replaced. Your choice is shared Service configuration, so other users' accounts may have different access.
+OpenAI/OpenAI-compatible providers retain their manual model/deployment-name field.
+
+Save the selected model, then use **Test saved connection** and the Designer assistant. Testing makes a real model
+request and can consume that user's allowance. Personal GitHub accounts and accounts with organization-provided Copilot access are
+supported, subject to GitHub entitlement, organization approval, SSO and model policies. Authorizing the app does
+not itself provide Copilot access. The requested `read:user` scope identifies the account; Mulse does not request
+private repository access.
+
+**Optional callback OAuth:** retained only for deployments that explicitly set `GitHubCopilot__SignInMode=Callback`.
+Configure their own `GitHubCopilot__ClientId`, secret-store `GitHubCopilot__ClientSecret`, and registered callback
+`https://<UI-host>/signin-github-copilot`. Never commit the secret. The browser must reach that exact UI address;
+GitHub does not need inbound access to Mulse even in this mode, but each different callback hostname needs a
+matching app registration. Device mode registers no GitHub callback handler and ignores any old client secret.
+
+The GitHub connection is bound to the existing Mulse login's issuer and stable subject. GitHub authorization
+never replaces the Mulse login, and each authoring request uses only its requesting user's connection. No
+shared-account fallback is offered: old `AiAuthoring:ApiKey` values for Copilot are ignored, rejected on new
+writes and removed from stored overrides when Copilot settings are saved. Remove obsolete deployment secrets.
+Existing Visual Studio, GitHub CLI and Copilot CLI logins are not inherited. See the SDK's
+[OAuth guidance](https://github.com/github/copilot-sdk/blob/v1.0.33/docs/setup/github-oauth.md).
+
+Connections are encrypted with **the UI's ASP.NET Core data-protection keys**, stored under UI content-root
+`Data\github-copilot` (override with `GitHubCopilot:SettingsDirectory`) and excluded from workspace backups.
+Persist both these files and the UI's key ring across restarts/moves; restrict their filesystem access to the
+UI service account. Containers need persistent key storage too. This is separate from the Service's authoring
+key ring. Use one UI writer process; the file store does not coordinate writes between replicas.
+Tokens never enter browser storage, Mulse authentication cookies, settings responses or model prompts; they
+are forwarded only on authenticated server-to-server authoring requests. Keep this credential header
+(`X-Mulse-Copilot-Token`) out of reverse-proxy, tracing and custom HTTP logs as well.
+
+**Reconnect GitHub** replaces your connection; **Disconnect GitHub** deletes it locally and cancels pending
+sign-in attempts without affecting another Mulse user. It blocks subsequent requests, not requests already
+sent. To revoke access at GitHub too, remove the OAuth App in **GitHub Settings > Applications**. Expired or
+revoked tokens require reconnecting; automatic refresh-token rotation is not implemented. Corrupt/unreadable
+connections fail closed and can be removed with Disconnect before reconnecting.
+
+The SDK build targets download and checksum-verify their pinned native runtime, and copy it into build/publish
+output under `runtimes`. Deploy those files along with the Service; the host needs permission to launch child
+processes and write to its temporary directory, plus network access to GitHub/Copilot. A separate CLI install
+is not needed for the standard build. Offline builds can use the SDK's documented release-mirror/preinstalled
+runtime build settings; do not omit runtime assets when publishing. Unsupported host/container environments
+must be validated before deployment.
+
+Each request owns a separate SDK **Empty-mode** runtime with an empty tool allow-list, denied permissions,
+no repository/configuration discovery, no skills/MCP/custom agents and no cross-session store. The configured
+output-token limit is passed through the SDK's pinned experimental model-capability API. Mulse stops the owned
+runtime after completion or cancellation; canceling cannot undo provider charges already incurred. SDK session
+artifacts use isolated `mulse-copilot-<random-id>` directories under the Service account's OS temp directory and
+are deleted after runtime shutdown. A crash or cleanup failure can leave those directories behind; restrict
+access and remove orphaned directories only after confirming their runtime is no longer active. Failures are
+logged without prompts or credentials. Existing draft redaction, validation, explicit apply, disabled drafts
+and separate save/run safeguards are unchanged.
+
 ## API reference
 
 Use the Development-only `/openapi/v1.json` document for complete request/response schemas. API bodies
@@ -2070,6 +2269,7 @@ UI URL. Main surfaces:
 | Source recovery | `POST /api/flows/{flowId}/source-outcomes/retry` (no body; exhausted callback recovery only). |
 | Catalog/packages | `GET /api/modules`; `GET`/`POST /api/module-packages`; `GET`/`PUT`/`DELETE /api/module-packages/{packageId}`; `PATCH .../enabled`, `POST .../reload`. |
 | Sample design | `POST /api/flow-designer/analyze`, `POST /api/flow-designer/flows`. |
+| AI authoring | `GET`/`PUT /api/authoring/settings` (credential status only, key write-only); `POST /api/authoring/copilot/models` (current user's authenticated model catalog, no-store, array of `{id,name}`, no saved provider/model required); `POST /api/authoring/test`; `POST /api/authoring/chat` (current draft and bounded conversation, no flow mutation). |
 | BizTalk import | `POST /api/biztalk-import/analyze`, `POST /api/biztalk-import/flows`, `POST /api/biztalk-import/rules/preview`, and scaffolded-module download endpoints. |
 | Config values | `GET /api/config-values`, `GET /api/config-values/references`, `GET /api/config-values/usages`; `PUT`/`DELETE /api/config-values/{reference}`. |
 | Workspace | `GET`/`PUT /api/workspace/encryption`; `POST /api/workspace/backup`, `/api/workspace/restore/preview`, `/api/workspace/restore`, `/api/workspace/flows/delete-all`. |

@@ -1,0 +1,174 @@
+@page "/ai-assistance"
+@implements IDisposable
+@inject IMulseApiClient ApiClient
+
+<PageTitle>AI assistance | Mulse</PageTitle>
+<div class="page-shell">
+    <header class="page-hero">
+        <div><p class="eyebrow">Configuration</p><h1>AI assistance</h1>
+        <p class="lede">Configure the backend model used by the flow designer's assistant. Assistance is optional and disabled by default.</p></div>
+    </header>
+    <StatusBanner Error="@_error" Success="@_success" />
+    @if (_loading)
+    {
+        <p role="status">Loading AI settings...</p>
+    }
+    else if (!_settingsLoaded)
+    {
+        <button class="secondary-button" type="button" @onclick="LoadAsync">Retry loading settings</button>
+    }
+    else
+    {
+        <Panel Title="Authoring provider" Description="Credentials stay on the backend, never enter model conversation content, and are never returned by this page. GitHub connections are per user; other API keys are held by the Service.">
+            <form @onsubmit="SaveAsync" @onsubmit:preventDefault>
+                <label class="checkbox-label"><input type="checkbox" @bind="_enabled" /> Enable AI authoring assistance</label>
+                <label>Provider
+                    <select @bind="_provider" @bind:after="ProviderChanged"><option value="OpenAI">OpenAI</option><option value="OpenAICompatible">OpenAI-compatible / local Ollama</option><option value="GitHubCopilot">GitHub Copilot</option></select>
+                </label>
+                @if (IsCopilot)
+                {
+                    <label>Model
+                        <select @bind="_model" required="@_enabled" disabled="@_busy" aria-describedby="copilot-model-help">
+                            <option value="">Load available models, then select one</option>
+                            @if (!string.IsNullOrEmpty(_model) && !_models.Any(model => model.Id == _model))
+                            {
+                                <option value="@_model">@_model (@(_modelsLoaded ? "not in your available models" : "current selection; availability not checked"))</option>
+                            }
+                            @foreach (var model in _models)
+                            {
+                                <option value="@model.Id">@model.Name (@model.Id)</option>
+                            }
+                        </select>
+                    </label>
+                    <button class="secondary-button" type="button" @onclick="LoadModelsAsync" disabled="@_busy">@(_modelsLoading ? "Loading models..." : _modelsLoaded ? "Refresh available models" : "Load available models")</button>
+                    <p id="copilot-model-help" class="field-hint">Load the model catalog for your connected GitHub account. No settings need to be saved first and no chat completion is requested. The selected model is shared configuration; availability for other users may differ. Mulse uses the official GitHub Copilot SDK; no custom API endpoint is needed.</p>
+                    <p><a href="/github-copilot">Connect or manage your GitHub account</a>. Personal accounts and accounts with organization-provided Copilot access are supported, subject to GitHub policies.</p>
+                    <p>Each Mulse user connects their own account and uses its allowance. Visual Studio and CLI sign-ins are not inherited, and shared Service tokens are not used. Saving these provider settings does not connect an account.</p>
+                }
+                else
+                {
+                    <label>Model <input @bind="_model" required="@_enabled" maxlength="128" placeholder="Provider model or deployment name" /></label>
+                    <label>API endpoint <input @bind="_endpoint" required placeholder="https://api.openai.com/v1" /></label>
+                    <p class="field-hint">Use the API base URL, not a chat completions URL. Local Ollama normally uses http://localhost:11434/v1. HTTP is allowed only for loopback in development.</p>
+                }
+                <label>Maximum output tokens <input type="number" @bind="_maxOutputTokens" min="256" max="16384" required /></label>
+                @if (!IsCopilot)
+                {
+                    <p>Saved configuration credential: @(_credentialConfigured ? "Configured (hidden)" : "Not configured")</p>
+                    <label>Replace API key <input type="password" @bind="_apiKey" autocomplete="new-password" placeholder="Leave blank to keep the credential for the same provider/endpoint" /></label>
+                    <p class="field-hint">Changing the provider or endpoint requires configuring its credential again; the old key is not forwarded to a new destination.</p>
+                    <label class="checkbox-label"><input type="checkbox" @bind="_clearApiKey" /> Clear saved credential</label>
+                }
+                <div class="action-row">
+                    <button class="run-button" type="submit" disabled="@_busy">Save settings</button>
+                    <button class="secondary-button" type="button" @onclick="TestAsync" disabled="@_busy">Test saved connection</button>
+                </div>
+            </form>
+        </Panel>
+        <Panel Title="Data and approvals" Description="AI assistance proposes drafts; it does not operate your integrations.">
+            <p>The designer sends your prompt, recent conversation and a redacted snapshot of the current draft to the configured provider only after you opt in. Do not paste credentials or customer payloads into chat.</p>
+            <p>Ordinary settings such as file patterns and delays may be shared. Paths and endpoints are hidden unless you opt in for that assistant conversation. Credential fields, connection strings, unknown free text and resolved secrets stay hidden; URLs with credentials, queries or fragments are withheld even with the opt-in. Configuration references may be shared without resolving their values. Review proposed changes before applying them to the canvas. Applied drafts are disabled; saving, enabling and running remain separate manual actions.</p>
+            <p>Conversations are limited to the open assistant session, not saved in flow execution history. Provider retention policies still apply. Credentials/settings are separate from workspace backups; preserve the Service's authoring settings and data-protection keys, plus the UI's GitHub connections and its data-protection keys, when moving the installation.</p>
+            <p>The Blazor AI components are an experimental preview. Responses appear after backend validation, not as partially editable streamed JSON.</p>
+        </Panel>
+    }
+</div>
+
+@code {
+    private bool _loading = true, _busy, _enabled, _credentialConfigured, _clearApiKey, _settingsLoaded;
+    private string _provider = "OpenAI", _model = "", _endpoint = "https://api.openai.com/v1", _apiKey = "";
+    private int _maxOutputTokens = 4096;
+    private string? _error, _success;
+    private bool IsCopilot => _provider == "GitHubCopilot";
+    private IReadOnlyList<AiAuthoringModelViewModel> _models = [];
+    private bool _modelsLoaded, _modelsLoading, _disposed;
+    private CancellationTokenSource? _modelCancellation;
+
+    private void ProviderChanged()
+    {
+        _modelCancellation?.Cancel();
+        _models = []; _modelsLoaded = false;
+        _apiKey = ""; _clearApiKey = false; _success = null;
+        _model = "";
+        _endpoint = IsCopilot ? "" : "https://api.openai.com/v1";
+    }
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _error = null;
+        try { SetSettings(await ApiClient.GetAiAuthoringSettingsAsync(default)); }
+        catch (Exception exception) { _error = $"Unable to load AI settings: {exception.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private void SetSettings(AiAuthoringSettingsViewModel settings)
+    {
+        _settingsLoaded = true;
+        _enabled = settings.Enabled; _provider = settings.Provider; _model = settings.Model;
+        _endpoint = IsCopilot ? "" : string.IsNullOrWhiteSpace(settings.Endpoint) ? "https://api.openai.com/v1" : settings.Endpoint;
+        _maxOutputTokens = settings.MaxOutputTokens;
+        _credentialConfigured = settings.CredentialConfigured;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_busy || !_settingsLoaded) return;
+        _busy = true; _error = _success = null;
+        var key = IsCopilot || string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey;
+        _apiKey = "";
+        try
+        {
+            SetSettings(await ApiClient.SetAiAuthoringSettingsAsync(new(_enabled, _provider, _model.Trim(), IsCopilot ? "" : _endpoint.Trim(),
+                _maxOutputTokens, key, _clearApiKey), default));
+            _clearApiKey = false;
+            _success = "AI authoring settings saved. Test the saved connection before opening the designer assistant.";
+        }
+        catch (Exception exception) { _error = $"Unable to save AI settings: {exception.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private async Task LoadModelsAsync()
+    {
+        if (_busy || !_settingsLoaded || !IsCopilot || _disposed) return;
+        _busy = _modelsLoading = true;
+        _models = []; _modelsLoaded = false;
+        _error = _success = null;
+        using var cancellation = new CancellationTokenSource();
+        _modelCancellation = cancellation;
+        try
+        {
+            var models = await ApiClient.GetCopilotModelsAsync(cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (models.Count == 0) throw new InvalidOperationException("No available models were returned. Check your Copilot account and organization policies.");
+            _models = models;
+            _modelsLoaded = true;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            if (!_disposed && !cancellation.IsCancellationRequested) _error = $"Unable to load Copilot models: {exception.Message}";
+        }
+        finally
+        {
+            _modelCancellation = null;
+            _busy = _modelsLoading = false;
+        }
+    }
+
+    private async Task TestAsync()
+    {
+        if (_busy || !_settingsLoaded) return;
+        _busy = true; _error = _success = null;
+        try { _success = (await ApiClient.TestAiAuthoringAsync(default)).Message; }
+        catch (Exception exception) { _error = $"AI connection test failed: {exception.Message}"; }
+        finally { _busy = false; }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _modelCancellation?.Cancel();
+    }
+}

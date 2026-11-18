@@ -496,6 +496,8 @@ public partial class Designer : IAsyncDisposable
         _bizTalkRequirements = [];
         _bizTalkWarnings = [];
         _migration = null;
+        _authoringCategory = null;
+        _assistantUndoDraft = _assistantAppliedDraft = null;
         _selectedNodeId = null;
         _selectedAugmentNodeId = null;
         _showAugmentDesigner = false;
@@ -521,10 +523,12 @@ public partial class Designer : IAsyncDisposable
         var flowId = _flowId;
         var flowName = _flowName;
         var migration = _migration;
+        var category = _authoringCategory;
         ResetGraph();
         _flowId = flowId;
         _flowName = flowName;
         _migration = migration;
+        _authoringCategory = category;
         _seedSource = IsExistingFlow ? SeedSource.ExistingFlow : SeedSource.Manual;
         _statusMessage = "Canvas cleared.";
     }
@@ -536,6 +540,8 @@ public partial class Designer : IAsyncDisposable
         _bizTalkRequirements = [];
         _bizTalkWarnings = [];
         _migration = flow.Migration;
+        _authoringCategory = flow.Category;
+        _assistantUndoDraft = _assistantAppliedDraft = null;
         _selectedNodeId = null;
         _selectedAugmentNodeId = null;
         _showAugmentDesigner = false;
@@ -854,6 +860,8 @@ public partial class Designer : IAsyncDisposable
             _enabled = saved.Enabled;
             _flowName = saved.Name ?? string.Empty;
             _migration = saved.Migration;
+            _authoringCategory = saved.Category;
+            _assistantUndoDraft = _assistantAppliedDraft = null;
             await RefreshConfigUsagesAsync();
         }
         catch (Exception exception)
