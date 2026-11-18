@@ -20,6 +20,10 @@
         <label class="field-label">Exact metadata key <input class="mapping-input" @bind="Value.MetadataKey" @bind:after="Notify" /></label>
         <p class="field-hint">Metadata returns String; MetadataInt32/MetadataBoolean parse XML lexical values into typed scalars. Writes require that exact scalar type. Keys are case-sensitive and missing keys fail. Imported context properties use {namespace}property keys proven by declared schemas, not similarly named body fields or metadata.</p>
     }
+    else if (MessageType)
+    {
+        <p class="field-hint">Reads the type of the message's XML document as BizTalk names it: the root element's namespace, '#', and its local name (just the local name when there is no namespace). Returns String and needs no path. Useful to choose a flat-file schema or map by the message that was built.</p>
+    }
     else
     {
         <p class="field-hint">Path from the document root, using exact local names and namespace URIs. The first step may be a descendant step (//name), and each element step may carry one exact attribute filter (name = value, case-sensitive, no namespace). XmlCount returns Int32; XmlExists returns Boolean; XmlText returns the first text in document order (empty when absent). XmlString/XmlInt32/XmlBoolean require one simple non-nil element at every step, with exact child paths only, and parse the explicit XML scalar type; missing/duplicate/invalid values fail. Requires one payload. No arbitrary XPath is executed.</p>
@@ -56,10 +60,11 @@
     [Parameter] public IReadOnlyList<string> MessageNames { get; set; } = [];
     [Parameter] public EventCallback Changed { get; set; }
     [Parameter] public bool Writable { get; set; }
-    private static readonly string[] Kinds = ["Metadata", "XmlText", "XmlCount", "XmlExists", "XmlString", "XmlInt32", "XmlBoolean", "MetadataInt32", "MetadataBoolean"];
+    private static readonly string[] Kinds = ["Metadata", "XmlText", "XmlCount", "XmlExists", "XmlString", "XmlInt32", "XmlBoolean", "MetadataInt32", "MetadataBoolean", "XmlMessageType"];
     private IEnumerable<string> AvailableKinds => Writable ? Kinds.Where(kind => kind is "Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlString" or "XmlInt32" or "XmlBoolean") : Kinds;
     private bool Metadata => Value.Kind is "Metadata" or "MetadataInt32" or "MetadataBoolean";
     private bool TypedScalar => Value.Kind is "XmlString" or "XmlInt32" or "XmlBoolean";
+    private bool MessageType => Value.Kind == "XmlMessageType";
     private string _sample = "";
     private string? _sampleError;
     private List<List<NativeXmlStepViewModel>> _paths = [];
@@ -69,7 +74,7 @@
     {
         if (args.Value is not string kind || !AvailableKinds.Contains(kind) || kind == Value.Kind) return;
         Value.Kind = kind; Value.MetadataKey = "";
-        if (Metadata || TypedScalar && Value.Steps.Any(step => step.Attribute || step.Descendant || step.FilterAttribute.Length != 0)) Value.Steps.Clear();
+        if (Metadata || MessageType || TypedScalar && Value.Steps.Any(step => step.Attribute || step.Descendant || step.FilterAttribute.Length != 0)) Value.Steps.Clear();
         ClearSample();
         await Notify();
     }

@@ -137,7 +137,8 @@ public sealed partial class ConfigValueResolver(IRuntimeConfigurationStore runti
 
     /// <summary>Choice settings that may hold one large definition (a map or stylesheet) stored as a config value.</summary>
     internal static bool IsStoredDefinitionKey(string? key)
-        => key is not null && (key.Equals("mappingJson", StringComparison.OrdinalIgnoreCase) || key.Equals("xsltText", StringComparison.OrdinalIgnoreCase));
+        => key is not null && (key.Equals("mappingJson", StringComparison.OrdinalIgnoreCase) || key.Equals("xsltText", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("schemaText", StringComparison.OrdinalIgnoreCase));
 
     [GeneratedRegex(@"\A\{\{config:(?<reference>[^{}\r\n]+)\}\}\z")]
     private static partial Regex WholeConfigTokenPattern();

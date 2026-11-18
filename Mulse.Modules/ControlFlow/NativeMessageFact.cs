@@ -7,7 +7,7 @@ using Mulse.Modules.Payloads;
 namespace Mulse.Modules.ControlFlow;
 
 [JsonConverter(typeof(JsonStringEnumConverter<NativeMessageFactKind>))]
-public enum NativeMessageFactKind { Metadata, XmlText, XmlCount, XmlExists, XmlString, XmlInt32, XmlBoolean, MetadataInt32, MetadataBoolean }
+public enum NativeMessageFactKind { Metadata, XmlText, XmlCount, XmlExists, XmlString, XmlInt32, XmlBoolean, MetadataInt32, MetadataBoolean, XmlMessageType }
 
 public sealed class NativeXmlStep
 {
@@ -38,6 +38,10 @@ public sealed class NativeMessageFact
         {
             if (string.IsNullOrWhiteSpace(MetadataKey) || MetadataKey.Length > 2048 || Steps.Count != 0)
                 throw new ArgumentException("Metadata facts require an exact key and no inactive XML steps.");
+        }
+        else if (Kind == NativeMessageFactKind.XmlMessageType)
+        {
+            if (MetadataKey.Length != 0 || Steps.Count != 0) throw new ArgumentException("The message-type fact reads the document root and takes no metadata key or XML steps.");
         }
         else
         {
@@ -75,6 +79,11 @@ public sealed class NativeMessageFact
             return Kind == NativeMessageFactKind.Metadata ? Checked(matches[0].Value) : ParseScalar(matches[0].Value);
         }
         var document = XmlMappingSchemas.ReadXml(payload.GetText(), preserveWhitespace: true);
+        if (Kind == NativeMessageFactKind.XmlMessageType)
+        {
+            var rootName = document.Root!.Name;
+            return Checked(rootName.NamespaceName.Length == 0 ? rootName.LocalName : rootName.NamespaceName + "#" + rootName.LocalName);
+        }
         if (Kind is NativeMessageFactKind.XmlString or NativeMessageFactKind.XmlInt32 or NativeMessageFactKind.XmlBoolean)
             return ParseScalar(ScalarElement(document).Value);
         IEnumerable<XElement> elements = document.Elements();

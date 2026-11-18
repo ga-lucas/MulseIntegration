@@ -18,7 +18,12 @@ public sealed class NativeSendPipelineChainTests : IDisposable
     private static string Pipeline(params string[] components)
         => $"<Document><Stages><Stage CategoryId=\"9d0e4101-4cce-4536-83fa-4a5040674ad6\"><Components>{string.Concat(components)}</Components></Stage></Stages></Document>";
 
-    private async Task<(BizTalkFlowCandidateResponse Candidate, NativeFlowDefinition Definition)> Import(string pipelineFile, string transport = "FILE", int retry = 0, string? pipelineData = null)
+    private const string FlatSchema = "<xs:schema xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" xmlns:b=\"http://schemas.microsoft.com/BizTalk/2003\" targetNamespace=\"urn:flat\"><xs:annotation><xs:appinfo><b:schemaInfo standard=\"Flat File\" root_reference=\"Out\" /></xs:appinfo></xs:annotation>"
+        + "<xs:element name=\"Out\"><xs:annotation><xs:appinfo><b:recordInfo structure=\"delimited\" child_delimiter_type=\"char\" child_delimiter=\",\" child_order=\"infix\" sequence_number=\"1\" /></xs:appinfo></xs:annotation>"
+        + "<xs:complexType><xs:sequence><xs:element name=\"A\" type=\"xs:string\"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number=\"1\" justification=\"left\" /></xs:appinfo></xs:annotation></xs:element></xs:sequence></xs:complexType></xs:element></xs:schema>";
+    private const string FlatChoices = "[{\"value\":\"urn:flat#Out\",\"module\":\"flat-file-schema-render\",\"settings\":{\"schemaText\":\"unused\"}}]";
+
+    private async Task<(BizTalkFlowCandidateResponse Candidate, NativeFlowDefinition Definition)> Import(string pipelineFile, string transport = "FILE", int retry = 0, string? pipelineData = null, string? mapChoices = null)
     {
         Directory.CreateDirectory(_directory);
         var source = new XElement(Ns + "MetaModel", N("ServiceDeclaration", "Service",
@@ -28,7 +33,8 @@ public sealed class NativeSendPipelineChainTests : IDisposable
                 N("Receive", "input", P("MessageName", "request"), P("PortName", "input")),
                 N("Send", "Out", P("MessageName", "request"), P("PortName", "outPort")))));
         var project = Path.Combine(_directory, "Fixture.btproj");
-        await File.WriteAllTextAsync(project, "<Project><PropertyGroup><AssemblyName>Fixture</AssemblyName></PropertyGroup><ItemGroup><XLang Include='Flow.odx'/><Pipeline Include='SendX.btp'/></ItemGroup></Project>");
+        await File.WriteAllTextAsync(project, "<Project><PropertyGroup><AssemblyName>Fixture</AssemblyName></PropertyGroup><ItemGroup><XLang Include='Flow.odx'/><Pipeline Include='SendX.btp'/><Schema Include='Flat.xsd'><Namespace>Fixture.S</Namespace><TypeName>Flat</TypeName></Schema></ItemGroup></Project>");
+        await File.WriteAllTextAsync(Path.Combine(_directory, "Flat.xsd"), FlatSchema);
         await File.WriteAllTextAsync(Path.Combine(_directory, "Flow.odx"), "<?xml version='1.0'?>" + source);
         await File.WriteAllTextAsync(Path.Combine(_directory, "SendX.btp"), pipelineFile);
         var address = transport == "SMTP" ? "mailto:synthetic@example.com" : "C:\\synthetic\\out\\%MessageID%.xml";
@@ -42,7 +48,7 @@ public sealed class NativeSendPipelineChainTests : IDisposable
             <SendPortCollection><SendPort Name="Output"><TransmitPipeline Name="Example.Pipelines.SendX"/>{data}
             <PrimaryTransport><Address>{address}</Address><TransportType Name="{transport}"/><RetryCount>{retry}</RetryCount><RetryInterval>5</RetryInterval></PrimaryTransport></SendPort></SendPortCollection></BindingInfo>
             """);
-        var request = new AnalyzeBizTalkSolutionRequest { SourcePath = project, GenerateNativeFlow = true, AdditionalBindingPaths = [binding] };
+        var request = new AnalyzeBizTalkSolutionRequest { SourcePath = project, GenerateNativeFlow = true, AdditionalBindingPaths = [binding], NativeMapChoicesJson = mapChoices };
         var candidate = Assert.Single((await new BizTalkImportService().AnalyzeAsync(request, default)).FlowCandidates);
         return (candidate, NativeFlowDefinition.Read(candidate.DraftFlow.Augments.Single().Settings["flowJson"], allowBlocked: true));
     }
@@ -121,7 +127,47 @@ public sealed class NativeSendPipelineChainTests : IDisposable
             Component("Microsoft.BizTalk.Component.FFAsmComp", ("DocumentSpecName", ""))));
         var blocked = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
         Assert.Contains("flat-file assembler", blocked.BlockReason!, StringComparison.Ordinal);
+        Assert.Contains("has no flat-file schema to render with", blocked.BlockReason!, StringComparison.Ordinal);
         Assert.Contains(blocked.Children, child => child.Module == "set-context-property-augment");
+    }
+
+    [Fact]
+    public async Task FlatFileAssemblerWithoutASpecNameRendersThroughTheChoiceTableByTheMessageType()
+    {
+        var (candidate, definition) = await Import(Pipeline(Component("Microsoft.BizTalk.Component.FFAsmComp", ("DocumentSpecName", ""))), mapChoices: FlatChoices);
+        Assert.True(string.IsNullOrEmpty(Blockers(definition)), Blockers(definition));
+        var render = Assert.Single(definition.AllNodes(), node => node.Name!.StartsWith("Flat-file assembler", StringComparison.Ordinal));
+        Assert.Equal(Mulse.Modules.Mapping.RenderDispatchDefinition.ModuleId, render.Module);
+        Assert.Equal(NativeExpressionKind.MessageValue, render.SelectionExpression!.Kind);
+        Assert.Equal(NativeMessageFactKind.XmlMessageType, render.SelectionExpression.Fact!.Kind);
+        Assert.Equal("request", render.SelectionExpression.Fact.MessageName);
+        Assert.Contains("urn:flat#Out", definition.RenderChoicesJson!, StringComparison.Ordinal);
+        Assert.Equal(render.MessageName, Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Deliver).MessageName);
+        Assert.False(candidate.DraftFlow.Enabled);
+    }
+
+    [Fact]
+    public async Task FlatFileAssemblerThatNamesItsSchemaSelectsThatSchemasMessageType()
+    {
+        var (_, definition) = await Import(Pipeline(Component("Microsoft.BizTalk.Component.FFAsmComp", ("DocumentSpecName", "Fixture.S.Flat, Fixture, Version=1.0.0.0, Culture=neutral, PublicKeyToken=0123456789abcdef"))), mapChoices: FlatChoices);
+        Assert.True(string.IsNullOrEmpty(Blockers(definition)), Blockers(definition));
+        var render = Assert.Single(definition.AllNodes(), node => node.Name!.StartsWith("Flat-file assembler", StringComparison.Ordinal));
+        Assert.Equal(NativeExpressionKind.Literal, render.SelectionExpression!.Kind);
+        Assert.Equal("urn:flat#Out", render.SelectionExpression.Literal!.Value);
+    }
+
+    [Theory]
+    [InlineData("DocumentSpecName", "Not.In.Import, Fixture", "not a flat-file schema")]
+    [InlineData("HeaderSpecName", "Fixture.S.Flat, Fixture", "header")]
+    [InlineData("TrailerSpecName", "Fixture.S.Flat, Fixture", "trailer")]
+    [InlineData("TargetCodePage", "1252", "code page")]
+    [InlineData("TargetCharset", "iso-8859-1", "character set")]
+    [InlineData("PreserveBom", "true", "byte-order mark")]
+    public async Task FlatFileAssemblerWithSettingsTheRendererDoesNotReproduceStaysBlockedAndNamesThem(string property, string value, string expected)
+    {
+        var (_, definition) = await Import(Pipeline(Component("Microsoft.BizTalk.Component.FFAsmComp", property == "DocumentSpecName" ? [(property, value)] : [("DocumentSpecName", ""), (property, value)])), mapChoices: FlatChoices);
+        var blocked = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
+        Assert.Contains(expected, blocked.BlockReason!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
+using Mulse.CompatibilityPack;
 using Mulse.Modules.Mapping;
 using Service.Mapping;
 using Service.Models;
@@ -41,6 +42,8 @@ internal static class BizTalkNativeMapChoiceDeriver
         var explicitValues = cases.Select(static entry => entry.Value).ToHashSet(StringComparer.Ordinal);
         var maps = ReadMapClasses(projectPaths);
         var report = new List<BizTalkDerivedMapChoiceResponse>();
+        var flatSchemas = new SortedDictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        var conflictingFlat = new HashSet<string>(StringComparer.Ordinal);
         foreach (var group in literals.GroupBy(static literal => literal.Value, StringComparer.Ordinal).OrderBy(static group => group.Key, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -82,6 +85,9 @@ internal static class BizTalkNativeMapChoiceDeriver
             }
             IReadOnlyList<string> warnings;
             BizTalkCustomXsltMap? custom;
+            string? flatType = null;
+            IReadOnlyList<string>? flatDocuments = null;
+            string? flatNote = null;
             try { custom = BizTalkCustomXslt.Read(XmlMappingSchemas.ReadXmlFile(map.MapPath), map.MapPath); }
             catch (Exception exception) when (exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or XmlException)
             {
@@ -114,6 +120,18 @@ internal static class BizTalkNativeMapChoiceDeriver
                         continue;
                     }
                     conversion = BizTalkNativeMapConverter.Convert(document.ToString(SaveOptions.DisableFormatting), source, target, cancellationToken, embedSchemas: false);
+                    if (FlatFileSchema.IsFlatFile(target[0]))
+                    {
+                        try
+                        {
+                            flatType = FlatFileSchema.Compile(target).MessageType;
+                            flatDocuments = target;
+                        }
+                        catch (NotSupportedException exception)
+                        {
+                            flatNote = $"The target is a flat-file schema that the native flat-file renderer cannot reproduce ({Truncate(exception.Message)}); a send that needs it stays blocked.";
+                        }
+                    }
                 }
                 catch (Exception exception) when (exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or XmlException)
                 {
@@ -125,6 +143,7 @@ internal static class BizTalkNativeMapChoiceDeriver
                     Value = group.Key, Module = "xml-mapping-render", Settings = new() { ["mappingJson"] = Stored(conversion.MappingJson) }
                 };
                 warnings = conversion.Warnings;
+                if (flatNote is not null) warnings = [.. warnings, flatNote];
                 status = conversion.PendingFunctions.Count == 0 ? "Converted" : "ConvertedWithStubs";
                 detail = conversion.PendingFunctions.Count == 0
                     ? Limitation
@@ -136,6 +155,8 @@ internal static class BizTalkNativeMapChoiceDeriver
                 continue;
             }
             cases.Add(entry);
+            if (flatType is not null && flatDocuments is not null && !flatSchemas.TryAdd(flatType, flatDocuments)
+                && !flatSchemas[flatType].SequenceEqual(flatDocuments, StringComparer.Ordinal)) conflictingFlat.Add(flatType);
             if (pendingStore is not null)
             {
                 storedValues![storedName] = pendingStore;
@@ -143,7 +164,52 @@ internal static class BizTalkNativeMapChoiceDeriver
             }
             report.Add(Result(status, map.MapPath, detail, warnings));
         }
+        AddFlatFileChoices(cases, explicitValues, flatSchemas, conflictingFlat, report, storedValues);
         return new(report, JsonSerializer.Serialize(cases, Json));
+    }
+
+    internal static string FlatFileStoredName(string messageType)
+    {
+        var local = messageType[(messageType.LastIndexOf('#') + 1)..];
+        var label = new string(local.Where(char.IsLetterOrDigit).Take(48).ToArray());
+        return "biztalk-flatfile." + (label.Length == 0 ? "schema" : label) + "-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(messageType)))[..10].ToLowerInvariant();
+    }
+
+    // Each flat-file schema that a converted map writes becomes one renderer choice keyed by its message type (namespace#root), the value the
+    // send node reads from the message at run time.
+    private static void AddFlatFileChoices(List<RenderDispatchCase> cases, HashSet<string> explicitValues, SortedDictionary<string, IReadOnlyList<string>> flatSchemas,
+        HashSet<string> conflicting, List<BizTalkDerivedMapChoiceResponse> report, IDictionary<string, string>? storedValues)
+    {
+        foreach (var (messageType, documents) in flatSchemas)
+        {
+            BizTalkDerivedMapChoiceResponse Result(string status, string detail) => new(messageType, status, null, detail, [], []);
+            if (explicitValues.Contains(messageType)) { report.Add(Result("ExplicitChoice", "An explicit native choice already exists for this flat-file message type and was kept unchanged.")); continue; }
+            if (conflicting.Contains(messageType))
+            {
+                report.Add(Result("AmbiguousMap", $"Different maps write different flat-file schemas for message type '{messageType}'; supply the flat-file choice manually."));
+                continue;
+            }
+            var schemaText = documents.Count == 1 ? documents[0] : JsonSerializer.Serialize(documents, Json);
+            var storedName = FlatFileStoredName(messageType);
+            var entry = new RenderDispatchCase
+            {
+                Value = messageType, Module = "flat-file-schema-render",
+                Settings = new() { ["schemaText"] = storedValues is null ? schemaText : "{{config:" + storedName + "}}" }
+            };
+            if (cases.Count >= MaximumCases || JsonSerializer.Serialize(cases.Append(entry), Json).Length > MaximumCasesJsonLength)
+            {
+                report.Add(Result("CapExceeded", "Adding this flat-file choice would exceed the 128-case or 262,144-character render-dispatch limit; supply it manually."));
+                continue;
+            }
+            cases.Add(entry);
+            var detail = "Flat-file renderer choice derived from a converted map's target schema. The text it writes follows the schema's annotations under stated assumptions (see the renderer's settings); it is not verified against real BizTalk output.";
+            if (storedValues is not null)
+            {
+                storedValues[storedName] = schemaText;
+                detail += $" Stored as config value '{storedName}' (edit it on the Config Values page).";
+            }
+            report.Add(Result("Converted", detail));
+        }
     }
 
     private static readonly XNamespace Xsd = "http://www.w3.org/2001/XMLSchema";

@@ -53,7 +53,7 @@ Status key:
 | Send to a dynamic port (FILE, FTP, HTTP, SMTP) | Supported | Explicit transport dispatch on the assigned TransportType. |
 | Send to an unbound, ambiguous, direct-bound or other-transport port (WCF, SQL, MSMQ, ...) | Blocked | Needs a binding export or an explicit native adapter. |
 | Send port with retry | Supported (warned) | Maps to the Deliver node's retry (attempts, interval). Only failures a module proves sent nothing are retried automatically (HTTP, FTP/SFTP, SMTP); ambiguous failures are held unless the node opts in. Backup transport not imported. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
-| Send port with a custom transmit pipeline | Supported for a proven subset | Components translate to an ordered chain of named Augment/Render nodes in front of the Deliver: `HL7TypeCaster`, `.SetProperty`, promotion tables, the HL7 assembler and a MIME/S-MIME encoder (as an SMTP attachment). Any other component (for example the flat-file assembler) keeps the send Blocked and names the component. |
+| Send port with a custom transmit pipeline | Supported for a proven subset | Components translate to an ordered chain of named Augment/Render nodes in front of the Deliver: `HL7TypeCaster`, `.SetProperty`, promotion tables, the HL7 assembler and a MIME/S-MIME encoder (as an SMTP attachment). Any other component (for example a signing or encrypting encoder) keeps the send Blocked and names the component. The flat-file assembler is translated when the flow's choice table has a flat-file schema (see the flat-file renderer increment). |
 | Delay (constant `TimeSpan` to the millisecond, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait; a fixed sub-second wait pauses in place. Non-millisecond, zero and nested forms are Blocked. |
 | Terminate (literal message) | Supported | Dynamic messages are Blocked. |
 | Expression / variable / message assignment | Supported | Statement subset, see "Source expressions" below. |
@@ -122,7 +122,8 @@ Status key:
 | HL7 type caster | Supported | Becomes the HL7 message-type step. |
 | BTAHL7 assembler | Supported | Becomes the HL7 XML render step. Delimiters and escaping need verification with synthetic messages. |
 | HL7 add-delimiter component | Evidence only | Source passes the message through unchanged; MLLP framing is a Deliver setting. |
-| Flat-file assembler and disassembler | Not recognized | Only the migration report points to the flat-file modules; no step is generated and the layout is not translated. |
+| Flat-file assembler (send pipeline) | Supported for a proven schema subset | Becomes a render node that picks the flat-file schema from the message type (`namespace#root`), or from `DocumentSpecName` when set, in the flow's shared choice table. The importer adds one `flat-file-schema-render` choice for each flat-file schema a converted map writes. Header/trailer specs, non-UTF-8 charsets or code pages, BOM preservation and unsupported schema features stay Blocked and named. Output follows stated assumptions that are editable; it is not verified against real BizTalk output. |
+| Flat-file disassembler | Not recognized | Only the migration report points to the flat-file modules; no step is generated and the layout is not translated. |
 | MIME / S-MIME encoder | Blocked | Warned. No native module. Use the SMTP attachment settings and decide separately about signing and encryption. |
 | XML disassembler / assembler, JSON, custom pipeline components | Not recognized | Warned as unsupported; custom pipelines produce no native flow. |
 
@@ -338,6 +339,18 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Model/UI:** `ApplyXmlRules.StopWhenNoRuleMatches` (off when absent, so older flows are unchanged) with a checkbox and explanation on the node. `xml-rules-augment` gets an `onNoMatch` setting (Stop by default, or Continue unchanged).
 - **Importer:** sets Stop on the imported call and warns that BizTalk continued.
 - **Tests:** `NativeRuleNoMatchTests` (default continue, stop, back-compat JSON, validity, module setting, editor).
+
+### Increment: schema-driven flat-file renderer
+
+- **Module:** `flat-file-schema-render` (Compatibility Pack) writes an XML message as delimited/positional text from a BizTalk flat-file XSD (`b:schemaInfo`/`recordInfo`/`fieldInfo`/`groupInfo`). The schema is compiled strictly: anything it cannot reproduce rejects the schema, with the feature named. Compiled schemas are cached by hash.
+- **Supported:** delimited and positional records, infix/prefix/postfix child order, tag names (also with prefix order), repeat delimiters, `suppress_trailing_delimiters`, wrapping, justification and padding, `datetime_format`, nillable (a nil value fails), attributes before child elements (one `sequence_number` order), nested `xs:sequence` groups that repeat as a whole, `ref` and imported schemas.
+- **Blocked and named:** `escape_char`, choice/all, global groups, simple types, non-zero `pos_offset`, `include`/`redefine`, `substitutionGroup`/`abstract`, header/trailer specs, non-UTF-8 code pages. A `ref` use whose recordInfo lacks the delimiters of its definition stays blocked.
+- **Editable settings:** `schemaText` (a stored config value), `wrapValues`, `tooLongValues`, `delimiterInValue`, `hourClock`, `absentOptional`. Each default is an assumption: infix default order; non-empty values wrapped when a wrap character is set; a delimiter inside an unwrapped value or a too-long positional value fails; `hh` is 24-hour; an absent optional field keeps its delimiter place; an absent optional group writes nothing; UTF-8 without BOM.
+- **Flow model:** new fact kind `XmlMessageType` (root `namespace#local`, or the local name) selects the renderer choice; it has an editor entry.
+- **Importer:** the map-choice deriver adds a flat-file choice for each converted map whose target is a supported flat-file schema, stored as `biztalk-flatfile.*` config values when a store is supplied; a schema it cannot compile is reported on the map. The FFAsm component builds the render node; with no table or an unsupported setting the send stays Blocked with the reason.
+- **Billing result:** `orch52` 18 blocked → `orch53` 3 blocked. The 15 flat-file sends now translate. 58 of the 61 flat-file schemas the Billing catalog declares compile; the other three (a shared definitions schema and two with a missing child delimiter) stay Blocked.
+- **Evidence still needed:** a real BizTalk output, to confirm the assumptions above (see the AI plan's compare-with-real-output tool).
+- **Tests:** `FlatFileSchemaRenderTests` (29), deriver and pipeline-chain importer tests, `XmlMessageType` fact, executor and editor tests.
 
 
 

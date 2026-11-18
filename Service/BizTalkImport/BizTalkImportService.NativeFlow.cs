@@ -53,6 +53,7 @@ public sealed partial class BizTalkImportService
         try
         {
             var source = OdxProgramReader.ReadFile(paths[0]);
+            var flatFile = ReadFlatFileChoices(mapChoices, schemas);
             var services = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "ServiceDeclaration").ToArray();
             if (services.Length != 1) throw new ArgumentException("Native translation requires exactly one source service declaration.");
             var owners = bindings.SelectMany(binding => binding.Services
@@ -173,7 +174,7 @@ public sealed partial class BizTalkImportService
             {
                 if (send.IsTwoWay) return Block(node, $"Dynamic send port '{send.Name}' is two-way; native request/response over a runtime-selected transport is not inferred.");
                 var pipelineNeedsStep = !TransmitPipelineNeedsNoStep(send, Warn);
-                var pipeline = pipelineNeedsStep ? BuildTransmitPipelineChain(send, translated.Id, message, Warn) : null;
+                var pipeline = pipelineNeedsStep ? BuildTransmitPipelineChain(send, translated.Id, message, Warn, flatFile) : null;
                 var chainBlockers = pipeline?.Blockers.ToList() ?? [];
                 if (pipeline is not null) message = pipeline.FinalMessage;
                 NativeExpression Variable(string name) => new() { Kind = NativeExpressionKind.Variable, Variable = name };
@@ -656,7 +657,7 @@ public sealed partial class BizTalkImportService
                         translated.Settings = new(settings.Settings, StringComparer.OrdinalIgnoreCase); translated.MessageName = outboundMessage;
                         if (physical[0].IsTwoWay) translated.Settings["expectsResponse"] = "true";
                         var pipelineNeedsStep = !TransmitPipelineNeedsNoStep(physical[0], Warn);
-                        var chain = pipelineNeedsStep ? BuildTransmitPipelineChain(physical[0], translated.Id, outboundMessage, Warn) : null;
+                        var chain = pipelineNeedsStep ? BuildTransmitPipelineChain(physical[0], translated.Id, outboundMessage, Warn, flatFile) : null;
                         if (chain is not null) translated.MessageName = chain.FinalMessage;
                         var chainBlockers = chain?.Blockers.ToList() ?? [];
                         if (chain is not null && chainBlockers.Count == 0 && ApplyMimeAttachment(chain, translated, Warn) is { } mimeReason) chainBlockers.Add(mimeReason);

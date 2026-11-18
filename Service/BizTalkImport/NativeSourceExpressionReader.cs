@@ -464,7 +464,7 @@ internal sealed class NativeSourceExpressionReader
         NativeExpressionKind.Variable => _variables.TryGetValue(expression.Variable!, out var type) ? type : null,
         NativeExpressionKind.MessageValue => expression.Fact!.Kind switch
         {
-            NativeMessageFactKind.Metadata or NativeMessageFactKind.XmlText or NativeMessageFactKind.XmlString => NativeScalarType.String,
+            NativeMessageFactKind.Metadata or NativeMessageFactKind.XmlText or NativeMessageFactKind.XmlString or NativeMessageFactKind.XmlMessageType => NativeScalarType.String,
             NativeMessageFactKind.XmlInt32 or NativeMessageFactKind.MetadataInt32 or NativeMessageFactKind.XmlCount => NativeScalarType.Int32,
             _ => NativeScalarType.Boolean
         },

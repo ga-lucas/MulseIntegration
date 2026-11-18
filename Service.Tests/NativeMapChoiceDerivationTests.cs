@@ -406,6 +406,63 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
         }
     }
 
+    private const string FlatTargetXsd = """
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:b="http://schemas.microsoft.com/BizTalk/2003" targetNamespace="urn:target">
+          <xs:annotation><xs:appinfo><b:schemaInfo standard="Flat File" root_reference="Result" default_pad_char=" " pad_char_type="char" /></xs:appinfo></xs:annotation>
+          <xs:element name="Result"><xs:annotation><xs:appinfo><b:recordInfo structure="delimited" child_delimiter_type="char" child_delimiter="," child_order="infix" sequence_number="1" preserve_delimiter_for_empty_data="true" /></xs:appinfo></xs:annotation>
+            <xs:complexType><xs:sequence>
+              <xs:element name="Number" type="xs:string"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number="2" justification="left" /></xs:appinfo></xs:annotation></xs:element>
+              <xs:element name="Text" type="xs:string" minOccurs="0"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number="3" justification="left" /></xs:appinfo></xs:annotation></xs:element>
+            </xs:sequence>
+            <xs:attribute name="code" type="xs:string" use="required"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number="1" justification="left" /></xs:appinfo></xs:annotation></xs:attribute></xs:complexType></xs:element>
+        </xs:schema>
+        """;
+
+    private string WriteFlatTargetProject(string targetXsd)
+    {
+        var project = WriteProject();
+        File.WriteAllText(Path.Combine(_directory, "Schemas", "Result.xsd"), targetXsd);
+        return project;
+    }
+
+    [Fact]
+    public void AMapWritingAFlatFileSchemaAddsAFlatFileRenderChoiceKeyedByMessageTypeThatRendersTheMapOutput()
+    {
+        var result = Derive(WriteFlatTargetProject(FlatTargetXsd), Literals(Good));
+
+        var flat = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "flat-file-schema-render");
+        Assert.Equal("urn:target#Result", flat.Value);
+        Assert.Contains(result.Report, item => item.Value == "urn:target#Result" && item.Status == "Converted");
+        var map = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "xml-mapping-render");
+        var mapped = new XmlMappingEngine(map.Settings["mappingJson"]).Transform("<Order xmlns='urn:source' code='A'><Id>42</Id></Order>");
+        Assert.Equal("A,42,<&>{'quoted'}", FlatFileSchema.Compile([flat.Settings["schemaText"]]).Render(mapped));
+    }
+
+    [Fact]
+    public void TheFlatFileSchemaIsStoredAsAConfigValueWhenAStoreIsSupplied()
+    {
+        var stored = new Dictionary<string, string>();
+
+        var result = Derive(WriteFlatTargetProject(FlatTargetXsd), Literals(Good), stored: stored);
+
+        var flat = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "flat-file-schema-render");
+        var name = BizTalkNativeMapChoiceDeriver.FlatFileStoredName("urn:target#Result");
+        Assert.Equal("{{config:" + name + "}}", flat.Settings["schemaText"]);
+        Assert.StartsWith("biztalk-flatfile.Result-", name, StringComparison.Ordinal);
+        Assert.Equal("urn:target#Result", FlatFileSchema.Compile([stored[name]]).MessageType);
+    }
+
+    [Fact]
+    public void AFlatFileSchemaTheRendererCannotReproduceGetsNoChoiceAndAReportedReason()
+    {
+        var unsupported = FlatTargetXsd.Replace("child_order=\"infix\"", "child_order=\"infix\" escape_char=\"\\\"", StringComparison.Ordinal);
+
+        var result = Derive(WriteFlatTargetProject(unsupported), Literals(Good));
+
+        Assert.DoesNotContain(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "flat-file-schema-render");
+        Assert.Contains(result.Report.Single(item => item.Value == Good).Warnings, warning => warning.Contains("cannot reproduce", StringComparison.Ordinal));
+    }
+
     private DerivedMapChoices Derive(string project, IReadOnlyList<PolicyMapNameLiteral> literals, string? explicitJson = null, string[]? projects = null, IDictionary<string, string>? stored = null)
     {
         var paths = projects ?? [project];

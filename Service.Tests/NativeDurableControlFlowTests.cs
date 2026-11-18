@@ -407,6 +407,22 @@ public sealed class NativeDurableControlFlowTests
         Assert.Equal(["shared-a", "shared-b", "own-a"], invoker.Calls.Select(call => call.Split(':')[0]));
     }
 
+    [Theory]
+    [InlineData("<r xmlns='urn:x'/>", "urn:x#r")]
+    [InlineData("<r/>", "r")]
+    public async Task TheMessageTypeFactPicksTheSharedChoiceFromTheDocumentRoot(string xml, string messageType)
+    {
+        var choices = "[{\"value\":\"" + messageType + "\",\"module\":\"typed\"},{\"value\":\"other\",\"module\":\"wrong\"}]";
+        var selecting = Selecting("one", "unused");
+        selecting.SelectionExpression = new() { Kind = NativeExpressionKind.MessageValue, Fact = new() { Kind = NativeMessageFactKind.XmlMessageType, MessageName = "source" } };
+        var definition = SharedFlow(choices, selecting);
+        definition.Nodes[0].Expression = new() { Literal = NativeScalar.From(xml) };
+        var flow = NativeFlowDefinition.Read(JsonSerializer.Serialize(definition, JsonSerializerOptions.Web));
+        var clock = new Clock(); var invoker = new Invoker();
+        await Run(new InMemoryFlowOrchestrationStateStore(), clock, invoker, flow, Context(clock), Input("one"));
+        Assert.Equal(["typed"], invoker.Calls.Select(call => call.Split(':')[0]));
+    }
+
     [Fact]
     public async Task UnlistedIdentityInTheSharedTableFailsClosedWithoutRendering()
     {

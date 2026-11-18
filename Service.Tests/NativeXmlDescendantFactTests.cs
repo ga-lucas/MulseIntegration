@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Xml.Linq;
 using System.Xml.XPath;
+using Microsoft.Extensions.DependencyInjection;
 using Mulse.Modules.ControlFlow;
 using Mulse.Modules.Payloads;
 using Mulse.Ui.Models;
@@ -66,6 +67,48 @@ public sealed class NativeXmlDescendantFactTests
     [InlineData("count(///Item)")]
     public void OnlyTheLeadingDescendantAndSingleExactFilterAreRecognized(string xpath)
         => Assert.Throws<NotSupportedException>(() => NativeSourceXmlFactReader.Read("m", xpath));
+
+    [Theory]
+    [InlineData("<p:r xmlns:p='urn:r'><a/></p:r>", "urn:r#r")]
+    [InlineData("<r xmlns='urn:d'/>", "urn:d#r")]
+    [InlineData("<r/>", "r")]
+    public void TheMessageTypeFactReadsTheRootAsNamespaceHashLocalNameOrJustTheLocalName(string xml, string expected)
+    {
+        var fact = new NativeMessageFact { Kind = NativeMessageFactKind.XmlMessageType, MessageName = "m" };
+        fact.Validate();
+        Assert.Equal(expected, fact.Read(Input(xml)).Value);
+        Assert.Equal(NativeScalarType.String, fact.Read(Input(xml)).Type);
+    }
+
+    [Fact]
+    public void TheMessageTypeFactTakesNoStepsOrMetadataKeyAndRoundTripsThroughJson()
+    {
+        Assert.Throws<ArgumentException>(() => new NativeMessageFact { Kind = NativeMessageFactKind.XmlMessageType, Steps = [new() { Name = "r" }] }.Validate());
+        Assert.Throws<ArgumentException>(() => new NativeMessageFact { Kind = NativeMessageFactKind.XmlMessageType, MetadataKey = "k" }.Validate());
+        var fact = new NativeMessageFact { Kind = NativeMessageFactKind.XmlMessageType, MessageName = "m" };
+        var back = JsonSerializer.Deserialize<NativeMessageFact>(JsonSerializer.Serialize(fact, Json), Json)!;
+        Assert.Equal(NativeMessageFactKind.XmlMessageType, back.Kind);
+        Assert.Throws<ArgumentException>(() => fact.Read(Input("<?xml version='1.0'?>")));
+    }
+
+    [Fact]
+    public async Task TheEditorOffersTheMessageTypeKindClearsStepsAndExplainsItWithoutAPathEditor()
+    {
+        var value = new NativeMessageFactViewModel { Kind = "XmlText", MessageName = "m", Steps = [new() { Name = "r" }] };
+        var editor = new Mulse.Ui.Components.Shared.NativeMessageFactEditor();
+        typeof(Mulse.Ui.Components.Shared.NativeMessageFactEditor).GetProperty("Value")!.SetValue(editor, value);
+        var change = typeof(Mulse.Ui.Components.Shared.NativeMessageFactEditor).GetMethod("ChangeKind", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        await (Task)change.Invoke(editor, [new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "XmlMessageType" }])!;
+        Assert.Equal("XmlMessageType", value.Kind);
+        Assert.Empty(value.Steps);
+        await using var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection().AddLogging().BuildServiceProvider();
+        await using var renderer = new Microsoft.AspNetCore.Components.Web.HtmlRenderer(services, services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>());
+        var html = await renderer.Dispatcher.InvokeAsync(async () => (await renderer.RenderComponentAsync<Mulse.Ui.Components.Shared.NativeMessageFactEditor>(
+            Microsoft.AspNetCore.Components.ParameterView.FromDictionary(new Dictionary<string, object?> { ["Value"] = value }))).ToHtmlString());
+        Assert.Contains("XmlMessageType", html, StringComparison.Ordinal);
+        Assert.Contains("needs no path", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("XML path step", html, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void FactValidationRejectsMisplacedDescendantsOrFiltersAndTypedScalarsKeepExactChildPaths()

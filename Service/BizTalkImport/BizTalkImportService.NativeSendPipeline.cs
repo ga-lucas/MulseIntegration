@@ -11,13 +11,37 @@ public sealed partial class BizTalkImportService
     /// <param name="MimeAttachment">The pipeline wraps the body in a MIME message with no signing or encryption; only an SMTP delivery can express that.</param>
     private sealed record TransmitPipelineChain(List<NativeFlowNode> Nodes, string FinalMessage, List<string> Blockers, bool MimeAttachment);
 
+    /// <summary>The flat-file renderer choices that exist in the flow's shared choice table, and a way to find the message type a named flat-file schema writes.</summary>
+    /// <param name="MessageTypes">Message types (<c>namespace#root</c>) that have a flat-file renderer choice.</param>
+    /// <param name="MessageTypeOfSchema">Resolves a schema class name (an assembler's DocumentSpecName) to its message type, or null when it is not a supported flat-file schema.</param>
+    private sealed record FlatFileChoices(IReadOnlySet<string> MessageTypes, Func<string, string?> MessageTypeOfSchema);
+
+    private static FlatFileChoices? ReadFlatFileChoices(string? mapChoices, BizTalkSchemaSourceCatalog schemas)
+    {
+        if (mapChoices is null) return null;
+        var types = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(mapChoices, allowEmpty: true)
+            .Where(choice => choice.Module == "flat-file-schema-render").Select(choice => choice.Value).ToHashSet(StringComparer.Ordinal);
+        if (types.Count == 0) return null;
+        return new(types, specification =>
+        {
+            var evidence = schemas.Resolve(specification.Split(',')[0].Trim());
+            if (evidence.Status != "SourceCandidate" || evidence.Candidates.Count != 1) return null;
+            try
+            {
+                var documents = schemas.ReadSchemaDocuments(evidence.Candidates[0].SourcePath);
+                return Mulse.CompatibilityPack.FlatFileSchema.IsFlatFile(documents[0]) ? Mulse.CompatibilityPack.FlatFileSchema.Compile(documents).MessageType : null;
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or System.Xml.XmlException) { return null; }
+        });
+    }
+
     /// <summary>
     /// Translates the components of a send port's custom transmit pipeline (from the binding, or the design-time pipeline file) into a chain of named
     /// Augment/Render nodes. Only components whose behavior is proven are translated: property setters, the HL7 type caster, the BTAHL7 assembler,
     /// pass-through block-character adders, and a MIME encoder with no signing or encryption. Anything else is listed as a blocker by name.
     /// Returns null when the port's pipeline components are unknown.
     /// </summary>
-    private static TransmitPipelineChain? BuildTransmitPipelineChain(SendPortAnalysis send, string nodeId, string inputMessage, Action<string> warn)
+    private static TransmitPipelineChain? BuildTransmitPipelineChain(SendPortAnalysis send, string nodeId, string inputMessage, Action<string> warn, FlatFileChoices? flatFile = null)
     {
         var components = send.Operational.PipelineComponents;
         if (components.Count == 0) return null;
@@ -86,11 +110,47 @@ public sealed partial class BizTalkImportService
                 if (encrypt) blockers.Add("MIME/S-MIME encoder encryption");
                 if (attachment && signature is "0" or "" && !encrypt) mime = true;
             }
+            else if (className.Contains("FFAsm", StringComparison.OrdinalIgnoreCase))
+            {
+                var header = component.Properties.GetValueOrDefault("HeaderSpecName", "");
+                var trailer = component.Properties.GetValueOrDefault("TrailerSpecName", "");
+                var document = component.Properties.GetValueOrDefault("DocumentSpecName", "");
+                var charset = component.Properties.GetValueOrDefault("TargetCharset", "");
+                var codePage = component.Properties.GetValueOrDefault("TargetCodePage", "0");
+                var problem = header.Length > 0 || trailer.Length > 0 ? $"names a header or trailer schema ('{(header.Length > 0 ? header : trailer)}'), which the native flat-file renderer does not write"
+                    : charset.Length > 0 && !charset.Replace("-", "").Equals("utf8", StringComparison.OrdinalIgnoreCase) ? $"writes in the '{charset}' character set; the native renderer writes UTF-8 text"
+                    : codePage is not ("0" or "65001" or "") ? $"writes in code page {codePage}; the native renderer writes UTF-8 text"
+                    : IsPipelineTrue(component.Properties.GetValueOrDefault("PreserveBom")) ? "preserves a byte-order mark, which the native renderer does not write"
+                    : flatFile is null ? "has no flat-file schema to render with: no converted map in this import writes a flat-file schema the native renderer supports"
+                    : null;
+                NativeExpression? selection = null;
+                if (problem is null && document.Length > 0)
+                {
+                    var type = flatFile!.MessageTypeOfSchema(document);
+                    if (type is not null && flatFile.MessageTypes.Contains(type)) selection = new() { Kind = NativeExpressionKind.Literal, Literal = NativeScalar.From(type) };
+                    else problem = $"names the document schema '{document.Split(',')[0].Trim()}', which is not a flat-file schema the native renderer supports or is not in the flow's choice table";
+                }
+                else if (problem is null)
+                    selection = new() { Kind = NativeExpressionKind.MessageValue, Fact = new() { Kind = NativeMessageFactKind.XmlMessageType, MessageName = current } };
+                if (problem is not null)
+                    blockers.Add($"flat-file assembler '{simpleName}' ({problem})");
+                else
+                {
+                    var output = Next();
+                    nodes.Add(new()
+                    {
+                        Id = $"{nodeId}-pipe-{nodes.Count + 1}", Name = $"Flat-file assembler ({send.Name})", Kind = NativeFlowNodeKind.Render,
+                        Module = Mulse.Modules.Mapping.RenderDispatchDefinition.ModuleId, InputMessages = [current], MessageName = output, SelectionExpression = selection
+                    });
+                    current = output;
+                    warn(document.Length > 0
+                        ? $"The flat-file assembler on '{send.Name}' is imported as a render node that writes the message with the flat-file schema '{document.Split(',')[0].Trim()}' from the flow's shared choice table. BizTalk's exact output was not verified; see the flat-file renderer's settings for the assumptions (wrapping, too-long values, hour clock, absent optional fields) and compare the output with a real BizTalk file."
+                        : $"The flat-file assembler on '{send.Name}' has no fixed schema, so it is imported as a render node that picks the flat-file schema from the message's type (namespace#root) in the flow's shared choice table, as BizTalk does. A message whose type has no choice stops the flow. BizTalk's exact output was not verified; see the flat-file renderer's settings for the assumptions (wrapping, too-long values, hour clock, absent optional fields) and compare the output with a real BizTalk file.");
+                }
+            }
             else
             {
-                blockers.Add(className.Contains("FFAsm", StringComparison.OrdinalIgnoreCase)
-                    ? $"flat-file assembler '{simpleName}' (renders the message as flat-file text from a flat-file schema; no native flat-file schema renderer is wired for this send)"
-                    : $"component '{className}'");
+                blockers.Add($"component '{className}'");
             }
         }
 

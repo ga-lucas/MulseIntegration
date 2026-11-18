@@ -227,7 +227,7 @@
                 || value.Operands.Count != NativeExpressionEditor.ArityOf(value.Kind)
                 || value.Literal is { } literal && (literal.Type is not ("String" or "Int32" or "Boolean" or "DateTime" or "Null") || literal.Value is null))
                 throw new JsonException("Expected a bounded typed expression tree with active operands only.");
-            if (value.Fact is { } fact && (fact.Kind is not ("Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlText" or "XmlCount" or "XmlExists" or "XmlString" or "XmlInt32" or "XmlBoolean")
+            if (value.Fact is { } fact && (fact.Kind is not ("Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlText" or "XmlCount" or "XmlExists" or "XmlString" or "XmlInt32" or "XmlBoolean" or "XmlMessageType")
                 || fact.MessageName is null || fact.MetadataKey is null || fact.Steps is null || fact.Steps.Count > 32
                 || fact.Steps.Any(step => step is null || step.Name is null || step.Namespace is null || step.FilterAttribute is null || step.FilterValue is null)))
                 throw new JsonException("Expected a bounded message fact with known kind and non-null XML path steps.");
@@ -250,6 +250,7 @@
     {
         if (fact.MessageName.Length > 128 || fact.MessageName != fact.MessageName.Trim()) return false;
         if (fact.Kind is "Metadata" or "MetadataInt32" or "MetadataBoolean") return !string.IsNullOrWhiteSpace(fact.MetadataKey) && fact.MetadataKey.Length <= 2048 && fact.Steps.Count == 0;
+        if (fact.Kind == "XmlMessageType") return fact.MetadataKey.Length == 0 && fact.Steps.Count == 0;
         if (fact.MetadataKey.Length != 0 || fact.Steps.Count == 0
             || (fact.Kind is "XmlString" or "XmlInt32" or "XmlBoolean") && fact.Steps.Any(step => step.Attribute || step.Descendant || step.FilterAttribute.Length != 0)) return false;
         for (var index = 0; index < fact.Steps.Count; index++)
