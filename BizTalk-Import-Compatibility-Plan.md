@@ -74,6 +74,12 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Unverified:** BizTalk's behavior when promoting an empty value. Steps with no configured value stay in the draft as no-ops (the module writes nothing for an empty value) and are listed in a warning.
 - **Verification:** 8 new tests (`BizTalkReceivePipelineTests`); 2,454 service tests passed.
 
+### Increment: Orchestration blocker report (`ImportOrchestrationReportTests`)
+
+- **What:** an opt-in test (no-op unless `ORCH_ROOT` is set) that imports every solution or project under a path with `GenerateNativeFlow = true` and writes a TSV of CLEAN/BLOCKED flows plus a `.summary.txt` grouping blocked shapes by reason. Optional semicolon-separated inputs: `ORCH_EXTRA` (extra source paths such as schema projects), `ORCH_BINDINGS`, `ORCH_RULES`, and `ORCH_DERIVE=1`.
+- **Billing result, analyzed alone:** 342 blocked shapes. **With the Core schema projects supplied:** 132 blocked. The 113 `DecisionBranch` and 79 schema-ownership blocks were artifacts of missing inputs, so always supply the schema projects.
+- **What is left in Billing (132):** 46 outbound ports with no binding export, 35 dynamic transforms that need the policy exports for map identity, 11 members with no distinguished-field declaration, 9 non-scalar variables (DateTime/Type), 6 distinguished-field datatype conversions, and a few StatementRef/Listen/delay/correlation shapes. The first two need user-supplied binding and policy exports, not importer changes.
+
 ### Increment: ClientIntegration-specific module solution (`ClientIntegration\ClientIntegration.slnx`)
 
 - **Scope rule:** only ClientIntegration-specific code goes in the new plugin solution; general-purpose helpers belong in the Compatibility Pack, `Mulse.Hl7` or the importer.
