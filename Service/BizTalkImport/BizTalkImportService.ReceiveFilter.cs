@@ -12,12 +12,15 @@ public sealed partial class BizTalkImportService
     private static readonly Regex Int32Literal = new("^-?[0-9]{1,10}$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
 
     /// <summary>
-    /// Translates a Receive's DNF filter into native receive conditions. Only exact shapes are accepted: a conjunction (every grouping AND, or one predicate),
-    /// or a pure disjunction of Equals predicates on one property (every grouping OR). Mixed groupings, other operators and any property without exact declared
-    /// identity throw, so the Receive stays a visible Blocked node.
+    /// Translates a Receive's DNF filter into native receive conditions. BizTalk filters are disjunctive normal form: AND binds within a group and OR separates groups.
+    /// A predicate's Grouping joins it to the next predicate (OR ends the group); the last predicate's Grouping has no next predicate and is ignored (BizTalk writes AND there).
+    /// Only exact shapes are accepted: one AND group (a conjunction), or several groups that are each a single Equals predicate on the same property (alternatives, one native In condition).
+    /// Groups with several predicates beside other groups, other operators and any property without exact declared identity throw, so the Receive stays a visible Blocked node.
+    /// <paramref name="readAsGroups"/> is true when the groupings were mixed, so the result depends on that reading.
     /// </summary>
-    private static List<DecisionConditionDefinition> TranslateReceiveFilter(IReadOnlyList<OdxNode> predicates, string message, NativeSourceContextCatalog catalog)
+    private static List<DecisionConditionDefinition> TranslateReceiveFilter(IReadOnlyList<OdxNode> predicates, string message, NativeSourceContextCatalog catalog, out bool readAsGroups)
     {
+        readAsGroups = false;
         if (predicates.Count > 32) throw new NotSupportedException("Receive filter has more than 32 predicates.");
         var parsed = predicates.Select(predicate => (
             Left: predicate.Properties.GetValueOrDefault("LHS", "").Trim(),
@@ -27,14 +30,19 @@ public sealed partial class BizTalkImportService
         if (parsed.Any(item => item.Left.Length == 0 || item.Operator is not ("Equals" or "Exists") || item.Grouping is not ("AND" or "OR")
                 || item.Operator == "Equals" && item.Right.Length == 0 || item.Operator == "Exists" && item.Right.Length != 0))
             throw new NotSupportedException("Receive filter predicates support only Equals (with a literal) and Exists over a named property, grouped AND/OR; other operators and operands are not translated.");
-        var groupings = parsed.Select(item => item.Grouping).Distinct(StringComparer.Ordinal).ToArray();
-        if (parsed.Length > 1 && groupings.Length != 1)
-            throw new NotSupportedException("Receive filter mixes AND and OR groupings; the DNF grouping order is not proven, so no precedence is guessed.");
+        readAsGroups = parsed.Select(item => item.Grouping).Distinct(StringComparer.Ordinal).Count() > 1;
+        var groupSizes = new List<int>();
+        var size = 0;
+        for (var index = 0; index < parsed.Length; index++)
+        {
+            size++;
+            if (index == parsed.Length - 1 || parsed[index].Grouping == "OR") { groupSizes.Add(size); size = 0; }
+        }
 
         var facts = parsed.Select(item => catalog.Resolve(message, item.Left)).ToArray();
-        if (parsed.Length > 1 && groupings[0] == "OR")
+        if (groupSizes.Count > 1)
         {
-            if (parsed.Any(item => item.Operator != "Equals") || parsed.Select(item => item.Left).Distinct(StringComparer.Ordinal).Count() != 1)
+            if (groupSizes.Any(groupSize => groupSize != 1) || parsed.Any(item => item.Operator != "Equals") || parsed.Select(item => item.Left).Distinct(StringComparer.Ordinal).Count() != 1)
                 throw new NotSupportedException("An OR receive filter is translated only as alternatives of Equals on one property; independent disjunctive groups are not representable natively.");
             var values = parsed.Select((item, index) => LiteralValue(item.Right, facts[index].Kind)).ToArray();
             if (values.Any(value => value.Length == 0 || value.Contains(',') || value != value.Trim()))

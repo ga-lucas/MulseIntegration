@@ -82,8 +82,29 @@ public sealed class NativeReceiveFilterImportTests : IDisposable
         Assert.False(DecisionRuntime.MatchesAll(Payload((Prefix + "Text", "C")), [condition], "r"));
     }
 
+    [Fact]
+    public async Task LastPredicateGroupingIsIgnoredSoOrAlternativesWithATrailingAndStillMeanAlternatives()
+    {
+        var (candidate, definition) = await Import("MessageBox", Pred("Text", "\"A\"", "OR"), Pred("Text", "\"B\"", "OR"), Pred("Text", "\"C\"", "AND"));
+        var condition = Assert.Single(Receive(definition).Conditions);
+        Assert.Equal(DecisionComparisonOperator.In, condition.Operator); Assert.Equal("A,B,C", condition.Value);
+        Assert.True(DecisionRuntime.MatchesAll(Payload((Prefix + "Text", "C")), [condition], "r"));
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("disjunctive normal form", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AndGroupWhoseLastGroupingIsOrIsStillOneConjunction()
+    {
+        var (candidate, definition) = await Import("MessageBox", Pred("Flag", "true"), Pred("Text", "\"A\"", "OR"));
+        var receive = Receive(definition);
+        Assert.Equal([Prefix + "Flag", Prefix + "Text"], receive.Conditions.Select(condition => condition.Path));
+        Assert.True(DecisionRuntime.MatchesAll(Payload((Prefix + "Flag", "true"), (Prefix + "Text", "A")), receive.Conditions, "r"));
+        Assert.False(DecisionRuntime.MatchesAll(Payload((Prefix + "Flag", "false"), (Prefix + "Text", "A")), receive.Conditions, "r"));
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("disjunctive normal form", StringComparison.Ordinal));
+    }
+
     [Theory]
-    [InlineData("mixed")]
+    [InlineData("andGroupBesideOr")]
     [InlineData("orDifferentProperties")]
     [InlineData("orWithComma")]
     [InlineData("orWithPadding")]
@@ -100,7 +121,7 @@ public sealed class NativeReceiveFilterImportTests : IDisposable
     {
         var predicates = scenario switch
         {
-            "mixed" => new[] { Pred("Flag", "true"), Pred("Text", "\"A\"", "OR") },
+            "andGroupBesideOr" => new[] { Pred("Text", "\"A\""), Pred("Text", "\"B\"", "OR"), Pred("Text", "\"C\"") },
             "orDifferentProperties" => new[] { Pred("Flag", "true", "OR"), Pred("Text", "\"A\"", "OR") },
             "orWithComma" => new[] { Pred("Text", "\"A,B\"", "OR"), Pred("Text", "\"C\"", "OR") },
             "orWithPadding" => new[] { Pred("Text", "\" A\"", "OR"), Pred("Text", "\"C\"", "OR") },

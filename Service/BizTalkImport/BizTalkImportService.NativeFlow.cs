@@ -584,8 +584,11 @@ public sealed partial class BizTalkImportService
                         var filterPredicates = node.Children.Where(child => child.ShapeType == "DNFPredicate").ToArray();
                         if (filterPredicates.Length > 0)
                         {
-                            try { translated.Conditions = TranslateReceiveFilter(filterPredicates, message, contextCatalog); }
+                            bool readAsGroups;
+                            try { translated.Conditions = TranslateReceiveFilter(filterPredicates, message, contextCatalog, out readAsGroups); }
                             catch (NotSupportedException exception) { return Block(node, "Receive filter is not translated: " + exception.Message); }
+                            if (readAsGroups)
+                                Warn("A Receive filter with mixed AND/OR groupings was read as BizTalk disjunctive normal form: each predicate's Grouping joins it to the next predicate, OR separates groups, AND binds within a group, and the last predicate's Grouping is ignored. Confirm the result against the Receive shape's filter in the BizTalk designer.");
                             Warn("Receive filters become native receive conditions on promoted-metadata keys. Native comparisons are case-insensitive (BizTalk filters are case-sensitive), and Exists requires a non-blank value (BizTalk tests presence). The host must supply the channel and these metadata keys, and unmatched messages are rejected rather than routed elsewhere; review each filter.");
                         }
                         translated.Kind = NativeFlowNodeKind.Receive; translated.MessageName = message; translated.Channel = channel;
