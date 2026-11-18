@@ -115,7 +115,7 @@ public sealed partial class BizTalkImportService
                 && string.IsNullOrWhiteSpace(node.Properties.GetValueOrDefault("InitialValue"))
                 && node.Properties.GetValueOrDefault("UseDefaultConstructor", "False") == "False"
                 && node.Properties.GetValueOrDefault("ParamDirection", "In") == "In").Select(node => node.Name).ToHashSet(StringComparer.Ordinal);
-            var transformMessages = messageDeclarations.Where(node => declarationCounts[node.Name] == 1 && NativeExpression.ValidName(node.Name))
+            var transformMessages = messageDeclarations.Concat(variableDeclarations.Where(node => documents.Contains(node.Name))).Where(node => declarationCounts[node.Name] == 1 && NativeExpression.ValidName(node.Name))
                 .Select(node => node.Name).ToHashSet(StringComparer.Ordinal);
             var transformCatalog = NativeSourceMessageCatalog.Read(messageDeclarations.Where(node => transformMessages.Contains(node.Name)), schemas);
             var multipartTypes = FlattenNativeSource(source.Roots).Where(shape => shape.ShapeType == "MultipartMessageType" && IsHl7Multipart(shape))

@@ -116,6 +116,14 @@ public sealed class NativeXmlCompositionTests : IDisposable
     }
 
     [Fact]
+    public async Task ScratchDocumentVariableStaysRecognizedInStatementsThatAlsoMentionATransform()
+    {
+        // The word "transform" switches the importer to its stricter transform-statement parser; the scratch XmlDocument variable must still be a known document there.
+        var (_, definition) = await Import(first: "document = new System.Xml.XmlDocument(); document.LoadXml(\"<Root/>\"); before = document; // transform");
+        Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked && node.Name == "start");
+    }
+
+    [Fact]
     public async Task IntegerVariableToStringImportsAsExplicitTextConversionInsideLoadXml()
     {
         var (_, definition) = await Import(first: "document = new System.Xml.XmlDocument(); element = document.CreateElement(\"\", rules.RootName, rules.RootNamespace); document.AppendChild(element); count = 2; header.LoadXml(\"<h:Header xmlns:h='urn:header'><Count>\" + count.ToString() + \"</Count></h:Header>\"); document.DocumentElement.AppendChild(document.ImportNode(header.FirstChild, true)); before = document;");

@@ -17,6 +17,7 @@ namespace Service.Tests;
 /// The report names real orchestrations and is written outside the repository by the caller, so do not commit it.
 /// A grouped summary of block reasons is written next to it as .summary.txt.
 /// Optional, semicolon-separated: ORCH_EXTRA (additional source paths such as schema projects), ORCH_BINDINGS, ORCH_RULES (policy exports); ORCH_DERIVE=1 derives native map choices.
+/// ORCH_HELPERS (configuration-helper .cs files) and ORCH_HOSTCONFIG (one host .config with the appSettings values) must be supplied together so helper calls resolve to their deployed values.
 /// </summary>
 public sealed class ImportOrchestrationReportTests
 {
@@ -40,7 +41,8 @@ public sealed class ImportOrchestrationReportTests
                 var response = await new BizTalkImportService().AnalyzeAsync(new AnalyzeBizTalkSolutionRequest
                 {
                     SourcePath = project, GenerateNativeFlow = true, AdditionalSourcePaths = List("ORCH_EXTRA"), AdditionalBindingPaths = List("ORCH_BINDINGS"),
-                    AdditionalRulePaths = List("ORCH_RULES"), DeriveNativeMapChoices = Environment.GetEnvironmentVariable("ORCH_DERIVE") == "1"
+                    AdditionalRulePaths = List("ORCH_RULES"), DeriveNativeMapChoices = Environment.GetEnvironmentVariable("ORCH_DERIVE") == "1",
+                    NativeConfigurationHelperPaths = List("ORCH_HELPERS"), NativeHostConfigurationPath = List("ORCH_HOSTCONFIG").FirstOrDefault()
                 }, default);
                 foreach (var candidate in response.FlowCandidates)
                 {
