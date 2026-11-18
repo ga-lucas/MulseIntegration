@@ -235,9 +235,13 @@
             <label class="field-label">Maximum iterations <input type="number" min="1" max="10000" @bind="node.MaxIterations" @bind:after="Notify" /></label>
             <p class="field-hint">ForEach processes original payloads in order and combines all outputs. While tests the updated output before each iteration and fails at its limit.</p>
         }
-        @if (!PropertiesOnly && (node.Kind is "Sequence" or "If" or "ForEach" or "While" or "Try" or "Blocked" || node.Children.Count > 0))
+        @if (node.Kind == "Listen")
         {
-            <fieldset><legend>@(node.Kind == "If" ? "Then" : node.Kind == "Try" ? "Try body" : "Body")</legend>
+            <p class="field-hint">Waits for the first of several branches. Each branch below is a Sequence whose first step is either a Receive (the branch runs when a matching message arrives) or, for at most one branch, a Wait (the timeout: the branch runs if no message has arrived when it elapses). The timeout is measured once when the Listen starts and is saved with the instance, so it survives restarts. A Receive in a branch must have no timeout of its own. A message arriving after the timeout is rejected. Durable flows only.</p>
+        }
+        @if (!PropertiesOnly && (node.Kind is "Sequence" or "If" or "ForEach" or "While" or "Try" or "Listen" or "Blocked" || node.Children.Count > 0))
+        {
+            <fieldset><legend>@(node.Kind == "If" ? "Then" : node.Kind == "Try" ? "Try body" : node.Kind == "Listen" ? "Branches (first step of each: Receive, or the timeout Wait)" : "Body")</legend>
                 <NativeFlowNodesEditor Nodes="node.Children" Modules="Modules" References="References" Changed="Changed" Depth="@(Depth + 1)" MessageNames="MessageNames" Variables="Variables" HtmlIdPrefix="@HtmlIdPrefix" />
             </fieldset>
         }
@@ -271,7 +275,7 @@
     [Parameter] public string HtmlIdPrefix { get; set; } = "";
     [Parameter] public bool PropertiesOnly { get; set; }
     [Parameter] public string? FocusedNodeId { get; set; }
-    private static readonly string[] Kinds = ["Sequence", "If", "ForEach", "While", "Augment", "Render", "Wait", "Receive", "SaveMessage", "UseMessage", "Reply", "Deliver", "DeclareVariable", "SetVariable", "CreateXmlMessage", "SetMessageValue", "CreateXmlRoot", "AppendXmlMessage", "ApplyXmlRules", "Terminate", "Try", "InvokeTransform", "Blocked"];
+    private static readonly string[] Kinds = ["Sequence", "If", "ForEach", "While", "Augment", "Render", "Wait", "Receive", "SaveMessage", "UseMessage", "Reply", "Deliver", "DeclareVariable", "SetVariable", "CreateXmlMessage", "SetMessageValue", "CreateXmlRoot", "AppendXmlMessage", "ApplyXmlRules", "Terminate", "Try", "InvokeTransform", "Listen", "Blocked"];
     private static string ModuleKind(string kind) => kind == "Render" ? "Render" : kind == "Deliver" ? "Deliver" : kind == "InvokeTransform" ? "Transform" : "OrchestrationAugment";
     private static readonly string[] Sources = ["Metadata", "Payload", "PayloadName", "ContentType", "Literal"];
     private static readonly string[] Comparisons = ["Exists", "Equals", "NotEquals", "Contains", "StartsWith", "EndsWith", "In", "IsTrue", "IsFalse"];

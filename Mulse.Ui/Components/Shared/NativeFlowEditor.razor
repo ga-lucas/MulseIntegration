@@ -187,7 +187,7 @@
                 {
                     if (node is null || node.Id is null || !ids.Add(node.Id) || ids.Count > 2000 || node.Name is null || node.Module is null
                         || node.Settings is null || node.Conditions is null || node.Children is null || node.Otherwise is null || node.BlockReason is null
-                        || node.Kind is not ("Sequence" or "If" or "ForEach" or "While" or "Augment" or "Render" or "Blocked" or "Wait" or "Receive" or "SaveMessage" or "UseMessage" or "Reply" or "Deliver" or "DeclareVariable" or "SetVariable" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate" or "Try" or "InvokeTransform")
+                        || node.Kind is not ("Sequence" or "If" or "ForEach" or "While" or "Augment" or "Render" or "Blocked" or "Wait" or "Receive" or "SaveMessage" or "UseMessage" or "Reply" or "Deliver" or "DeclareVariable" or "SetVariable" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate" or "Try" or "InvokeTransform" or "Listen")
                         || node.MessageName is null || node.Channel is null || node.CorrelationKeys is null || node.CorrelationKeys.Any(key => key is null)
                         || node.InputMessages is { } inputs && (inputs.Count > 32 || inputs.Any(name => name is null))
                         || node.Settings.Any(pair => pair.Value is null) || node.Conditions.Any(condition => condition is null || condition.Source is null || condition.Path is null || condition.Operator is null))
@@ -255,6 +255,13 @@
         }
         return true;
     }
+    private static bool ValidListen(NativeFlowNodeViewModel node)
+    {
+        var heads = node.Children.Select(branch => branch.Kind == "Sequence" && branch.Children.Count > 0 ? branch.Children[0] : null).ToArray();
+        return heads.Length is >= 2 and <= 16 && heads.All(head => head is { Kind: "Receive" or "Wait" })
+            && heads.Count(head => head!.Kind == "Wait") <= 1 && heads.Any(head => head!.Kind == "Receive")
+            && heads.All(head => head!.Kind != "Receive" || head.DurationSeconds == 0);
+    }
     private static bool ValidVariableName(string? name) => !string.IsNullOrWhiteSpace(name) && name.Length <= 128
         && (char.IsAsciiLetter(name[0]) || name[0] == '_') && name.All(character => char.IsAsciiLetterOrDigit(character) || character == '_');
     private void ValidateDraft()
@@ -310,7 +317,8 @@
                 || node.Kind == "Wait" && node.DurationExpression is null && node.DurationSeconds <= 0 || node.DurationSeconds is < 0 or > 31622400
                 || node.DurationExpression is not null && (node.Kind != "Wait" || node.DurationSeconds != 0 || !CompleteExpression(node.DurationExpression))
                 || node.Kind == "Receive" && (string.IsNullOrWhiteSpace(node.Channel) || node.CorrelationKeys.Any(string.IsNullOrWhiteSpace))
-                || !_model.Durable && (node.Kind is "Wait" or "Receive" or "Deliver" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate")
+                || node.Kind == "Listen" && !ValidListen(node)
+                || !_model.Durable && (node.Kind is "Wait" or "Receive" or "Listen" or "Deliver" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate")
                 || _model.Durable && (string.IsNullOrWhiteSpace(_model.CorrelationMetadataKey) || string.IsNullOrWhiteSpace(_model.MessageIdMetadataKey))
                 || node.Conditions.Any(condition => (condition.Source is "Metadata" or "Payload" or "Literal") && string.IsNullOrWhiteSpace(condition.Path)))
             ? "Some nodes are incomplete or incompatible. Choose loaded modules, valid conditions and loop limits; remove inactive branches/children before execution." : null;

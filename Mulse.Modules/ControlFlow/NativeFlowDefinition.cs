@@ -5,7 +5,7 @@ using Mulse.Modules.Decisions;
 namespace Mulse.Modules.ControlFlow;
 
 [JsonConverter(typeof(JsonStringEnumConverter<NativeFlowNodeKind>))]
-public enum NativeFlowNodeKind { Sequence, If, ForEach, While, Augment, Render, Blocked, Wait, Receive, SaveMessage, UseMessage, Reply, Deliver, DeclareVariable, SetVariable, CreateXmlMessage, SetMessageValue, CreateXmlRoot, AppendXmlMessage, ApplyXmlRules, Terminate, Try, InvokeTransform }
+public enum NativeFlowNodeKind { Sequence, If, ForEach, While, Augment, Render, Blocked, Wait, Receive, SaveMessage, UseMessage, Reply, Deliver, DeclareVariable, SetVariable, CreateXmlMessage, SetMessageValue, CreateXmlRoot, AppendXmlMessage, ApplyXmlRules, Terminate, Try, InvokeTransform, Listen }
 
 public sealed class NativeFlowNode
 {
@@ -168,10 +168,10 @@ public sealed class NativeFlowDefinition
                     || node.ExceptionDetailsVariable is not null && !NativeExpression.ValidName(node.ExceptionDetailsVariable)
                     || node.ExceptionDetailsVariable is not null && node.ExceptionDetailsVariable == node.ExceptionMessageVariable)
                     throw new ArgumentException($"Native node '{node.Id}' requires durable=true and distinct valid exception variable names only on Try nodes.");
-                if (node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Blocked or NativeFlowNodeKind.Try)
+                if (node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Blocked or NativeFlowNodeKind.Try or NativeFlowNodeKind.Listen)
                     && node.Children.Count > 0)
                     throw new ArgumentException($"Native leaf node '{node.Id}' cannot hide child activities.");
-                var durableNode = node.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.SaveMessage
+                var durableNode = node.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen or NativeFlowNodeKind.SaveMessage
                     or NativeFlowNodeKind.UseMessage or NativeFlowNodeKind.Reply or NativeFlowNodeKind.Deliver or NativeFlowNodeKind.CreateXmlMessage or NativeFlowNodeKind.SetMessageValue
                     or NativeFlowNodeKind.CreateXmlRoot or NativeFlowNodeKind.AppendXmlMessage or NativeFlowNodeKind.ApplyXmlRules or NativeFlowNodeKind.Terminate or NativeFlowNodeKind.InvokeTransform;
                 if ((node.Kind == NativeFlowNodeKind.Terminate) != (node.TerminateMessage is not null)
@@ -202,6 +202,15 @@ public sealed class NativeFlowDefinition
                 }
                 else if (node.Channel.Length != 0 || node.CorrelationKeys.Count != 0)
                     throw new ArgumentException($"Native node '{node.Id}' cannot have inactive receive settings.");
+                if (node.Kind == NativeFlowNodeKind.Listen)
+                {
+                    // Each child is one branch (a Sequence) whose first activity is its trigger: a Receive, or at most one Wait that acts as the timeout.
+                    var heads = node.Children.Select(branch => branch?.Kind == NativeFlowNodeKind.Sequence && branch.Children is { Count: > 0 } ? branch.Children[0] : null).ToArray();
+                    if (node.Children.Count is < 2 or > 16 || heads.Any(head => head is null || head.Kind is not (NativeFlowNodeKind.Receive or NativeFlowNodeKind.Wait))
+                        || heads.Count(head => head!.Kind == NativeFlowNodeKind.Wait) > 1 || heads.All(head => head!.Kind == NativeFlowNodeKind.Wait)
+                        || heads.Any(head => head!.Kind == NativeFlowNodeKind.Receive && head.DurationSeconds != 0))
+                        throw new ArgumentException($"Native listen '{node.Id}' requires 2-16 branch sequences that each start with a Receive (without its own timeout) or, for at most one branch, a Wait that acts as the timeout; at least one branch must be a Receive.");
+                }
                 Validate(node.Children, depth + 1); Validate(node.Otherwise, depth + 1);
             }
         }
