@@ -9,7 +9,7 @@ BizTalk project -> analyzed artifacts -> canonical Mulse model
 				-> Flow Designer + Mapping Designer -> native Mulse workflow
 ```
 
-Latest verification: 2,454 service tests
+Latest verification: 2,442 service tests (the 29 empty leftover files were removed; no tests lost)
 
 Report-bearing imports remain disabled and fail closed until verified translation support exists. Configuration review and report statuses are not approvals. Older imports without migration metadata require reanalysis/re-import to receive the gate.
 
@@ -79,6 +79,13 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **What:** an opt-in test (no-op unless `ORCH_ROOT` is set) that imports every solution or project under a path with `GenerateNativeFlow = true` and writes a TSV of CLEAN/BLOCKED flows plus a `.summary.txt` grouping blocked shapes by reason. Optional semicolon-separated inputs: `ORCH_EXTRA` (extra source paths such as schema projects), `ORCH_BINDINGS`, `ORCH_RULES`, and `ORCH_DERIVE=1`.
 - **Billing result, analyzed alone:** 342 blocked shapes. **With the Core schema projects supplied:** 132 blocked. The 113 `DecisionBranch` and 79 schema-ownership blocks were artifacts of missing inputs, so always supply the schema projects.
 - **What is left in Billing (132):** 46 outbound ports with no binding export, 35 dynamic transforms that need the policy exports for map identity, 11 members with no distinguished-field declaration, 9 non-scalar variables (DateTime/Type), 6 distinguished-field datatype conversions, and a few StatementRef/Listen/delay/correlation shapes. The first two need user-supplied binding and policy exports, not importer changes.
+
+### Increment: Billing moved into the ClientIntegration solution, target-location node, importer diagnostics
+
+- **Moved:** `ExternalBillingPlugin` was folded into `ClientIntegration\ClientIntegration` (module id `legacy-billing-field-augment` unchanged, so saved flows keep working). Added `ClientIntegration-billing-target-location-augment` (per-transport parsing of `TargetLocation`; every pattern and key is a UI setting; 20 tests).
+- **Importer:** `intVariable.ToString()` imports as an explicit text conversion; DateTime/TimeSpan/Type variable blocks now name the Mulse replacement; the "no distinguished field" message names the member; unique scratch `XmlDocument` variables stay known in statements that also contain a dynamic transform (the block now names the real cause instead of `msgXml`); `xs:integer` distinguished fields accept Int32 writes and stay blocked for reads (BizTalk exposes them as Decimal).
+- **Report tool:** new `ORCH_HELPERS` and `ORCH_HOSTCONFIG` (must be supplied together). The real host `.config` is not in the samples.
+- **Billing result:** 132 blocked -> 123. Remaining: 46 ports need binding exports, 37 dynamic transforms need policy exports, DateTime batch loops (`System.DateTime.Compare`, `dtTimeOfBatch`), StatementRef/ListenBranch/Listen/correlation shapes.
 
 ### Increment: ClientIntegration-specific module solution (`ClientIntegration\ClientIntegration.slnx`)
 

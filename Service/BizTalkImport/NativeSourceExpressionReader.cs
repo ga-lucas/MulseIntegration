@@ -317,7 +317,7 @@ internal sealed class NativeSourceExpressionReader
                 nodes.Add(new() { Id = id + "-set-" + nodes.Count, Kind = NativeFlowNodeKind.SetVariable, Variable = name, Expression = expression });
                 continue;
             }
-            var target = _messageCatalog?.Resolve(name) ?? throw new NotSupportedException("Source assignment has no declared scalar or exact schema-field target.");
+            var target = _messageCatalog?.Resolve(name, forWrite: true) ?? throw new NotSupportedException("Source assignment has no declared scalar or exact schema-field target.");
             Expect("="); var value = Read(); Expect(";"); NativeExpression.Validate(value);
             nodes.Add(new() { Id = id + "-write-" + nodes.Count, Kind = NativeFlowNodeKind.SetMessageValue, Target = target, Expression = value });
         }
