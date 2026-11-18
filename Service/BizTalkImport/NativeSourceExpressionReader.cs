@@ -208,7 +208,18 @@ internal sealed class NativeSourceExpressionReader
             var partDot = name.LastIndexOf('.');
             if (partDot > 0 && _multiparts.Contains(name[..partDot]))
             {
-                if (_token == "(") throw new NotSupportedException("Part-level context '" + name + "(...)' is not translated; native messages carry message-level metadata only.");
+                if (_token == "(")
+                {
+                    // Only the body part's MIME file name is mapped (to the message-level key the SMTP deliver reads); other part-level context has no native equivalent.
+                    if (name[(partDot + 1)..] != "BodySegments" || pendingEmptyDocument is not null)
+                        throw new NotSupportedException("Part-level context '" + name + "(...)' is not translated; native messages carry message-level metadata only.");
+                    var partContext = ReadContext(name[..partDot], out var partSymbol);
+                    if (partSymbol != "MIME.FileName")
+                        throw new NotSupportedException("Part-level context '" + name + "(" + partSymbol + ")' is not translated; only MIME.FileName on the body part is mapped, to message-level metadata.");
+                    Expect("="); var partValue = Read(); Expect(";"); NativeExpression.Validate(partValue);
+                    nodes.Add(new() { Id = id + "-partcontext-" + nodes.Count, Name = name + " " + partSymbol, Kind = NativeFlowNodeKind.SetMessageValue, Target = TypePlatformWrite(partContext, partSymbol, partValue), Expression = partValue });
+                    continue;
+                }
                 if (pendingEmptyDocument is not null) throw new NotSupportedException("A multipart construction cannot interrupt an incomplete XML document construction.");
                 nodes.AddRange(ReadMultipartConstruction(name[..partDot], name, id + "-multipart-" + nodes.Count)); continue;
             }
@@ -321,6 +332,9 @@ internal sealed class NativeSourceExpressionReader
                     if (_kind != "name" || _token != "System.Xml.XmlDocument") throw new NotSupportedException("Only the exact parameterless XmlDocument constructor is recognized.");
                     Next(); Expect("("); Expect(")"); Expect(";"); pendingEmptyDocument = name; continue;
                 }
+                if (_kind == "name" && _token.LastIndexOf('.') is var partDotInSource and > 0 && _multiparts.Contains(_token[..partDotInSource]))
+                    throw new NotSupportedException("Copying part '" + _token[(partDotInSource + 1)..] + "' of multipart message '" + _token[..partDotInSource] + "' into message '" + name
+                        + "' is not translated: native messages have no defined part split, and the native shape of a received HL7 multipart (the BTAHL7 disassembler output) is not defined. Split the message explicitly with native operations.");
                 if (_kind != "name" || !_messages.Contains(_token) || _token == pendingEmptyDocument)
                     throw new NotSupportedException("Message copy requires a declared initialized source; transforms/context/empty DOM behavior require explicit native operations.");
                 var source = _token; Next(); Expect(";");

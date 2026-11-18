@@ -107,9 +107,14 @@ public sealed class NativeMapImpliedLoopTests
         => Assert.Contains("Line", Message(Map(Wire(1, "Order/Line/Id", 10) + Out(2, 10, "Result/Single/Value"), Concat(10, 1))), StringComparison.Ordinal);
 
     [Fact]
-    public void FieldsFromUnrelatedRepeatingSources_UnderOneTargetRecord_AreRefused()
-        => Assert.Contains("unrelated repeating source records", Message(Map(
-            Direct(1, "Order/Line/Id", "Result/Row/Id") + Direct(2, "Order/Other/Id", "Result/Row/Total"), "")), StringComparison.Ordinal);
+    public void FieldsFromUnrelatedRepeatingSources_UnderOneTargetRecord_WriteTheRecordOnceWithFirstOccurrences()
+    {
+        var conversion = Convert(Map(Direct(1, "Order/Line/Id", "Result/Row/Id") + Direct(2, "Order/Other/Id", "Result/Row/Total"), ""));
+        Assert.Empty(Definition(conversion).Repeats);
+        Assert.Contains(conversion.Warnings, warning => warning.Contains("unrelated repeating source records", StringComparison.Ordinal));
+        var row = Assert.Single(Run(conversion).Elements(Ns + "Row"));
+        Assert.Equal("a", row.Element(Ns + "Id")!.Value);
+    }
 
     [Fact]
     public void AnchorOutsideTheEnclosingRecordLink_IsRefused()

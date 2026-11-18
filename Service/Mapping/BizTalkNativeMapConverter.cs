@@ -236,6 +236,7 @@ public static class BizTalkNativeMapConverter
         // Without a record link, compiled BizTalk output loops over the nearest repeating source record around the nearest repeating target record that the linked fields write to
         // (observed for direct links and functoid inputs alike, and at nested levels). The loop is made explicit here so it can be reviewed and edited as a normal repeat.
         var impliedLoops = new List<(XmlSchemaField From, XmlSchemaField To)>();
+        var unloopedRecords = new List<string>();
         {
             XmlSchemaField? DeepestRepeating(XmlSchemaField source)
                 => source is { Scalar: false, SelfRepeating: true }
@@ -259,8 +260,12 @@ public static class BizTalkNativeMapConverter
                     .Select(pair => pair.Anchor!).Distinct().ToList();
                 if (anchors.Count == 0) continue;
                 var deepest = anchors.OrderByDescending(anchor => anchor.Path.Length).First();
+                // Fields that read unrelated repeating source records give no single record to loop over; observed compiled output then writes the target record once, with plain first-occurrence paths.
                 if (anchors.Any(anchor => anchor != deepest && !deepest.Path.StartsWith(anchor.Path + "/", StringComparison.Ordinal)))
-                    throw new ArgumentException($"Fields written below repeating target '{targetRecord.Path}' (which has no record link) read from unrelated repeating source records ({string.Join(", ", anchors.Select(anchor => anchor.Path))}); which loop BizTalk would build is not proven. No partial native map was produced.");
+                {
+                    unloopedRecords.Add($"{targetRecord.Path} <- {string.Join(", ", anchors.Select(anchor => anchor.Path))}");
+                    continue;
+                }
                 if (EnclosingRepeat(targetRecord) is { } outer && !deepest.Path.StartsWith(outer.From.Path + "/", StringComparison.Ordinal))
                     throw new ArgumentException($"Fields written below repeating target '{targetRecord.Path}' read repeating source '{deepest.Path}', which is not inside the record link around that target ('{outer.From.Path}'); which loop BizTalk would build is not proven. No partial native map was produced.");
                 RequireRepeatCoverage(deepest, targetRecord);
@@ -454,6 +459,8 @@ public static class BizTalkNativeMapConverter
             warnings.Add($"{repeatingGroups.Length} produced target element(s) belong to a repeating group of elements in the schema (for example {string.Join("; ", repeatingGroups.Take(3))}). Each member is mapped as its own repeating record, so all occurrences of one member are written together before the next member. Whether BizTalk interleaves them as repeating sets was not verified against compiled output.");
         if (impliedLoops.Count > 0)
             warnings.Add($"{impliedLoops.Count} record link(s) were inferred because fields below a repeating source record are linked into a repeating target record without a record link (for example {string.Join("; ", impliedLoops.Take(3).Select(loop => $"{loop.From.Path} -> {loop.To.Path}"))}). Compiled BizTalk output of unrelated partner maps loops this way; it was not compared with this map's own compiled output. Review them under Repeating records.");
+        if (unloopedRecords.Count > 0)
+            warnings.Add($"{unloopedRecords.Count} repeating target record(s) have no record link and are fed from unrelated repeating source records, so the target record is written once and each field takes the first occurrence ({string.Join("; ", unloopedRecords.Take(3))}). Observed in the compiled output of one map; check it against the map's own compiled output.");
         if (firstOccurrence.Count > 0)
             warnings.Add($"{firstOccurrence.Count} direct link(s) read a field below a repeating source record with no record link, so only the first occurrence is mapped (for example {string.Join("; ", firstOccurrence.Take(3))}). Compiled BizTalk output observed for such links uses the first occurrence without a loop; it was not compared with this map's own compiled output.");
         if (alwaysCreated.Count > 0)
