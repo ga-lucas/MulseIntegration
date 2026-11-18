@@ -143,7 +143,7 @@ public sealed class NativeDateTimeTests
     }
 
     [Fact]
-    public async Task EditorShowsDateTimeLiteralWithZoneToggleAndExpressionWaitWithoutDraftErrors()
+    public async Task EditorShowsDateTimeLiteralAndExpressionWaitWithoutDraftErrors()
     {
         var flow = new NativeFlowDefinition
         {
@@ -162,6 +162,43 @@ public sealed class NativeDateTimeTests
         Assert.Contains("datetime-local", html); Assert.Contains("Stored and executed as UTC", html); Assert.Contains("2026-03-01T10:30:00.0000000Z", html);
         Assert.Contains("Computed from an expression", html); Assert.Contains("SecondsBetween", html);
         Assert.DoesNotContain("Original JSON is preserved", html); Assert.DoesNotContain("Some nodes are incomplete", html);
+    }
+
+    [Fact]
+    public async Task OneGlobalDisplaySettingDecidesWhetherEveryDateTimeFieldShowsUtcOrServerLocal()
+    {
+        await using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
+        await using var renderer = new HtmlRenderer(services, services.GetRequiredService<ILoggerFactory>());
+        async Task<string> Render(Mulse.Ui.Models.UiTimeDisplay? display)
+        {
+            var value = new Mulse.Ui.Models.NativeExpressionViewModel { Literal = new() { Type = "DateTime", Value = "2026-03-01T10:30:00.0000000Z" } };
+            RenderFragment child = builder =>
+            {
+                builder.OpenComponent<Mulse.Ui.Components.Shared.NativeExpressionEditor>(0);
+                builder.AddComponentParameter(1, "Value", value);
+                builder.CloseComponent();
+            };
+            return await renderer.Dispatcher.InvokeAsync(async () => (await renderer.RenderComponentAsync<CascadingValue<Mulse.Ui.Models.UiTimeDisplay?>>(
+                ParameterView.FromDictionary(new Dictionary<string, object?> { ["Value"] = display, ["ChildContent"] = child }))).ToHtmlString());
+        }
+        var utc = await Render(new Mulse.Ui.Models.UiTimeDisplay { ServerLocal = false });
+        Assert.Contains("(UTC)", utc); Assert.Contains("value=\"2026-03-01T10:30:00\"", utc);
+        Assert.DoesNotContain("entered as", utc);
+        var local = await Render(new Mulse.Ui.Models.UiTimeDisplay());
+        Assert.Contains(Mulse.Ui.Models.UiDateTime.ServerZoneLabel, System.Net.WebUtility.HtmlDecode(local));
+        Assert.Contains("value=\"" + Mulse.Ui.Models.UiDateTime.ToInput("2026-03-01T10:30:00.0000000Z", true) + "\"", local);
+        Assert.Contains(Mulse.Ui.Models.UiDateTime.ServerZoneLabel, System.Net.WebUtility.HtmlDecode(await Render(null)));
+    }
+
+    [Fact]
+    public void TheSavedDisplayChoiceIsKeyedByWorkspaceAndDefaultsToServerLocal()
+    {
+        Assert.True(new Mulse.Ui.Models.UiTimeDisplay().ServerLocal);
+        Assert.NotEqual(new Mulse.Ui.Models.UiTimeDisplay("alpha").StorageKey, new Mulse.Ui.Models.UiTimeDisplay("beta").StorageKey);
+        Assert.Equal(new Mulse.Ui.Models.UiTimeDisplay().StorageKey, new Mulse.Ui.Models.UiTimeDisplay(" ").StorageKey);
+        Assert.False(Mulse.Ui.Models.UiTimeDisplay.FromStored(Mulse.Ui.Models.UiTimeDisplay.ToStored(false)));
+        Assert.True(Mulse.Ui.Models.UiTimeDisplay.FromStored(Mulse.Ui.Models.UiTimeDisplay.ToStored(true)));
+        Assert.True(Mulse.Ui.Models.UiTimeDisplay.FromStored(null)); Assert.True(Mulse.Ui.Models.UiTimeDisplay.FromStored("garbage"));
     }
 
     [Fact]

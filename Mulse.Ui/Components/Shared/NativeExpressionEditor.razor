@@ -16,14 +16,8 @@
         }
         else if (Value.Literal is { Type: "DateTime" } moment)
         {
-            <label class="field-label">Date and time entered as
-                <select class="selector" value="@(_serverLocal ? "local" : "utc")" @onchange="ChangeZone">
-                    <option value="local">@UiDateTime.ServerZoneLabel</option>
-                    <option value="utc">UTC</option>
-                </select>
-            </label>
-            <label class="field-label">Date and time <input class="mapping-input" type="datetime-local" step="1" value="@UiDateTime.ToInput(moment.Value, _serverLocal)" @onchange="ChangeMoment" /></label>
-            <p class="field-hint">Stored and executed as UTC: <code>@moment.Value</code>. @(_momentError ?? "The toggle only changes how this value is shown and entered; a server-local time inside a daylight-saving gap is rejected, and an ambiguous one is read as standard time.")</p>
+            <label class="field-label">Date and time (@(ServerLocal ? UiDateTime.ServerZoneLabel : "UTC")) <input class="mapping-input" type="datetime-local" step="1" value="@UiDateTime.ToInput(moment.Value, ServerLocal)" @onchange="ChangeMoment" /></label>
+            <p class="field-hint">Stored and executed as UTC: <code>@moment.Value</code>. @(_momentError ?? "Shown in the zone chosen with the Times switch in the side menu. A server-local time inside a daylight-saving gap is rejected, and an ambiguous one is read as standard time.")</p>
         }
         else if (Value.Literal is { Type: not "Null" } literal)
         {
@@ -123,13 +117,13 @@
         Value.Literal.Type = type; Value.Literal.Value = type == "Int32" ? "0" : type == "Boolean" ? "false" : type == "DateTime" ? UiDateTime.DefaultUtcText : ""; _momentError = null;
         await Notify();
     }
-    private bool _serverLocal = true;
+    [CascadingParameter] public UiTimeDisplay? Display { get; set; }
+    private bool ServerLocal => Display?.ServerLocal ?? true;
     private string? _momentError;
-    private void ChangeZone(ChangeEventArgs args) => _serverLocal = args.Value?.ToString() != "utc";
     private async Task ChangeMoment(ChangeEventArgs args)
     {
         if (Value.Literal is null) return;
-        if (!UiDateTime.TryFromInput(args.Value?.ToString(), _serverLocal, out var utcText))
+        if (!UiDateTime.TryFromInput(args.Value?.ToString(), ServerLocal, out var utcText))
         { _momentError = "That date and time is not valid in the chosen zone; the stored UTC value is unchanged."; return; }
         _momentError = null; Value.Literal.Value = utcText;
         await Notify();
