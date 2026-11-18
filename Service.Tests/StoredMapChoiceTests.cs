@@ -87,6 +87,23 @@ public sealed class StoredMapChoiceTests
     }
 
     [Fact]
+    public void SharedFlowTableKeepsStoredReferencesDeferredAndStillRequiresThemToExist()
+    {
+        const string token = "{{config:biztalk-map.a-0123456789}}";
+        var choices = JsonSerializer.Serialize(new[] { new Mulse.Modules.Mapping.RenderDispatchCase { Value = "a", Module = "xslt-render", Settings = new() { ["xsltText"] = token } } }, Web);
+        var flowJson = JsonSerializer.Serialize(new { version = 1, durable = true, renderChoicesJson = choices, nodes = Array.Empty<object>() }, Web);
+        var flow = new PipelineDefinition { Id = "shared", Augments = [new() { Module = "native-control-flow-augment", Settings = new() { ["flowJson"] = flowJson } }] };
+        var state = new RuntimeMulseState { ConfigValues = { ["biztalk-map.a-0123456789"] = "<stylesheet/>" } };
+
+        var resolved = new ConfigValueResolver(new FakeRuntimeConfigurationStore(state)).Resolve(flow);
+
+        var resolvedChoices = JsonSerializer.Deserialize<JsonElement>(resolved.Augments[0].Settings["flowJson"]).GetProperty("renderChoicesJson").GetString()!;
+        Assert.Equal(token, Assert.Single(Mulse.Modules.Mapping.RenderDispatchDefinition.Read(resolvedChoices)).Settings["xsltText"]);
+        state.ConfigValues.Clear();
+        Assert.Throws<InvalidOperationException>(() => new ConfigValueResolver(new FakeRuntimeConfigurationStore(state)).Resolve(flow));
+    }
+
+    [Fact]
     public void Candidate_KeepsOnlyTheStoredValuesItsFlowReferences()
     {
         var flow = "{\"nodes\":[{\"settings\":{\"casesJson\":\"[{\\\"value\\\":\\\"a\\\",\\\"settings\\\":{\\\"mappingJson\\\":\\\"{{config:biztalk-map.a-0123456789}}\\\"}}]\"}}]}";

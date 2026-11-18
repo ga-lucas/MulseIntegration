@@ -189,6 +189,25 @@ public sealed class FlowModuleDependencyTests
     }
 
     [Fact]
+    public void NativeSelectionNodesWithoutOwnChoicesReportTheSharedTableRenderers()
+    {
+        var shared = "[{\"value\":\"a\",\"module\":\"shared-a\"},{\"value\":\"b\",\"module\":\"shared-b\",\"settings\":{\"mappingJson\":\"{{config:biztalk-map.b-0123456789}}\"}}]";
+        var native = new Mulse.Modules.ControlFlow.NativeFlowDefinition
+        {
+            Durable = true, RenderChoicesJson = shared,
+            Nodes = [
+                new() { Kind = Mulse.Modules.ControlFlow.NativeFlowNodeKind.CreateXmlMessage, MessageName = "source", Expression = new() { Literal = Mulse.Modules.ControlFlow.NativeScalar.From("<s/>") } },
+                new() { Kind = Mulse.Modules.ControlFlow.NativeFlowNodeKind.Render, Module = "render-dispatch", InputMessages = ["source"], MessageName = "out",
+                    SelectionExpression = new() { Literal = Mulse.Modules.ControlFlow.NativeScalar.From("a") } }]
+        };
+        var flow = new PipelineDefinition { Id = "native", Augments = [new() { Module = Mulse.Modules.ControlFlow.NativeFlowDefinition.ModuleId,
+            Settings = new() { ["flowJson"] = System.Text.Json.JsonSerializer.Serialize(native, System.Text.Json.JsonSerializerOptions.Web) } }] };
+        var references = FlowModuleDependencies.References(flow, new Dictionary<string, string>()).ToArray();
+        Assert.Contains(("shared-a", ModuleKind.Render), references);
+        Assert.Contains(("shared-b", ModuleKind.Render), references);
+    }
+
+    [Fact]
     public async Task RunPreflight_RejectsMissingLaterStageBeforeFetchingAnything()
     {
         var fetched = false;

@@ -104,6 +104,21 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Explicit choices** and the existing inline behavior are unchanged when no sink is supplied.
 - **Tests:** `StoredMapChoiceTests` (resolver deferral, lazy invoker, naming, candidate filtering) plus two deriver tests. Suite: 2,510 passed.
 - **Billing result (`orch37`):** BatchDoubleBody and BatchWithTrailer now import (14 blocked nodes each, down from whole-flow failure). BillingService still fails: it has 58 dynamic transforms and every one embeds the same 49-case table (about 20 KB each), which exceeds the 1,000,000-character flow limit. Next: one shared per-flow choice table instead of a copy per transform (a native flow schema, executor and editor change).
+
+### Increment: one shared renderer-choice table per flow
+
+- **Problem:** 58 dynamic transforms x one ~20 KB case table exceeded the 1,000,000-character native flow limit, so LegacyBillingProcess could not be imported at all.
+- **Choice:** a native flow now has an optional flow-level `renderChoicesJson` (the same JSON array as a dispatch node's `casesJson`). A dynamic-transform node that carries no `casesJson` of its own selects from that table. The importer emits every dynamic transform without settings and writes the table once. The table is validated when the flow is read (at most 128 cases and 262,144 characters, as for any dispatch). The UI shows it as "Shared renderer choices" under "Execution and message settings"; each node shows a hint instead of its own editor.
+- **Implications (please review):**
+  - Editing the table changes every transform in the flow at once.
+  - The table is not scoped per policy field. It holds every map name found for the solution, so a transform can select any map in it, including a map BizTalk would only choose for a different policy field. A name that is not listed still fails closed. Narrowing a transform to fewer choices means giving that node its own `casesJson`.
+  - Per-node tables still work. A node's own `casesJson` overrides the shared table (all-or-nothing per node), so older flows and hand-built nodes behave as before.
+  - This extends the native flow JSON schema. Flows imported earlier keep working. A runtime older than this change cannot read a flow that uses the shared table.
+  - The maps still live in config values. Each case holds only a `{{config:biztalk-map.*}}` reference, loaded when it is selected, so editing a map affects every flow that references the same value. The shared table keeps the stored-reference checks (the value must exist to enable the flow, and edits are blocked while a durable checkpoint depends on it).
+  - Explicit (non-derived) map choices are shared the same way.
+- **Tests:** executor (shared table, node override, unlisted identity fails closed, validation), dependency scan, importer (nodes have no settings, table written once), editor render, model round trip, config deferral. Suite: 2,518 passed.
+- **Billing result (`orch38`):** LegacyBillingProcess now imports with its 58 dynamic transforms resolved (28 blocked nodes, all genuine: outbound bindings, part-level context, a sub-second delay, context properties, Retrieve Map, RulesParameterRef). Batch-level counts: 64 blocked rows, 2 clean, 33 none. The row count rose from 36 because the one whole-flow size failure became 28 specific blocked nodes.
+
 ### Increment: native Listen and correlation following
 
 - **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.
