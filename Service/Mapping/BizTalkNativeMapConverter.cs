@@ -210,6 +210,9 @@ public static class BizTalkNativeMapConverter
         foreach (var (from, to) in links)
         {
             if (!from.Scalar && from.Path == sourceRoot.Path && to.Path == targetRoot.Path) continue;
+            // A required, non-repeating record (for example the single part of an aggregate wrapper) linked to the target root creates that root exactly once, like a root-to-root link.
+            if (!from.Scalar && to.Path == targetRoot.Path && from.Path != sourceRoot.Path && from.Required && !from.Repeating && !from.SelfRepeating
+                && !from.Path.Contains("/(", StringComparison.Ordinal)) continue;
             if (from.Path == sourceRoot.Path || to.Path == targetRoot.Path)
                 throw new ArgumentException($"Link '{from.Path}' -> '{to.Path}' connects a root to a non-root. No partial native map was produced.");
             if (from.SelfRepeating && !to.SelfRepeating)

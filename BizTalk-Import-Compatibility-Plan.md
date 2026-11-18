@@ -351,6 +351,8 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Billing result:** `orch52` 18 blocked → `orch53` 3 blocked. The 15 flat-file sends now translate. 58 of the 61 flat-file schemas the Billing catalog declares compile; the other three (a shared definitions schema and two with a missing child delimiter) stay Blocked.
 - **Evidence still needed:** a real BizTalk output, to confirm the assumptions above (see the AI plan's compare-with-real-output tool).
 - **Tests:** `FlatFileSchemaRenderTests` (29), deriver and pipeline-chain importer tests, `XmlMessageType` fact, executor and editor tests.
+- **Map converter:** a required, non-repeating source record (for example the single part of an aggregate wrapper) linked to the target root is accepted like a root-to-root link; optional or repeating records are still rejected. This cleared one map's first reason ("connects a root to a non-root"); it now stops on a different one (fields under a repeating target with no record link read from unrelated repeating sources), which is ambiguous in BizTalk and stays Blocked.
+- **Remaining Billing blockers (3):** that UHS map; a message copy with no declared initialised source; a part-level context read (`msgHL7SmtpOut.BodySegments(...)`). The last two are modelling limits.
 
 
 
