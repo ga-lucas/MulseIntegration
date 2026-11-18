@@ -30,7 +30,7 @@ public static class BizTalkMigrationEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status500InternalServerError);
 
-        app.MapPost("/api/biztalk-import/flows", async Task<Created<FlowResponse>> (CreateImportedBizTalkFlowRequest request, IBizTalkImportService bizTalkImportService, IFlowDefinitionService flowDefinitionService, CancellationToken cancellationToken) =>
+        app.MapPost("/api/biztalk-import/flows", async Task<Created<FlowResponse>> (CreateImportedBizTalkFlowRequest request, IBizTalkImportService bizTalkImportService, IFlowDefinitionService flowDefinitionService, HttpContext httpContext, CancellationToken cancellationToken) =>
             {
                 var analysis = await bizTalkImportService.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest
                 {
@@ -48,6 +48,15 @@ public static class BizTalkMigrationEndpoints
 
                 var candidate = analysis.FlowCandidates.FirstOrDefault(flow => string.Equals(flow.SuggestedFlowId, request.SuggestedFlowId, StringComparison.OrdinalIgnoreCase))
                     ?? throw new KeyNotFoundException($"No generated BizTalk draft flow with id '{request.SuggestedFlowId}' was found for source '{request.SourcePath}'.");
+
+                // Existing values win so edits made after an earlier import survive a re-import.
+                if (candidate.StoredConfigValues.Count > 0)
+                {
+                    var runtimeConfigurationStore = httpContext.RequestServices.GetRequiredService<IRuntimeConfigurationStore>();
+                    foreach (var (name, content) in candidate.StoredConfigValues)
+                        if (runtimeConfigurationStore.TryGetConfigValue(name) is null)
+                            await runtimeConfigurationStore.SetConfigValueAsync(name, content, cancellationToken).ConfigureAwait(false);
+                }
 
                 var created = await flowDefinitionService.CreateAsync(FlowMappings.MapPipeline(candidate.DraftFlow), cancellationToken).ConfigureAwait(false);
                 return TypedResults.Created($"/api/flows/{created.Id}", FlowMappings.MapFlow(created));

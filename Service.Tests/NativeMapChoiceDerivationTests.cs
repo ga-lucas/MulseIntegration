@@ -201,6 +201,39 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
     }
 
     [Fact]
+    public void StoredMode_KeepsReferencesInTheCasesAndTheMapsInTheSink_SoManyMapsStaySmall()
+    {
+        var project = WriteProject();
+        var values = Enumerable.Range(0, 128).Select(index => $"Acme.Partner.Maps.OrderToResult, Acme.Partner, Version=1.0.{index}.0").ToArray();
+        var stored = new Dictionary<string, string>();
+
+        var result = Derive(project, Literals(values), stored: stored);
+        var inline = Derive(project, Literals(values));
+
+        Assert.Equal(128, stored.Count);
+        var cases = RenderDispatchDefinition.Read(result.CasesJson);
+        Assert.Equal(128, cases.Count);
+        Assert.All(cases, entry => Assert.Equal("{{config:" + BizTalkNativeMapChoiceDeriver.StoredName(entry.Value) + "}}", entry.Settings["mappingJson"]));
+        Assert.True(result.CasesJson.Length < inline.CasesJson.Length, "references must be smaller than the embedded maps");
+        Assert.DoesNotContain("Number", result.CasesJson, StringComparison.Ordinal);
+        Assert.Contains("Number", inline.CasesJson, StringComparison.Ordinal);
+        var first = cases[0];
+        Assert.Equal("42", XDocument.Parse(new XmlMappingEngine(stored[BizTalkNativeMapChoiceDeriver.StoredName(first.Value)]).Transform("<Order xmlns='urn:source' code='A'><Id>42</Id></Order>")).Root!.Element("Number")!.Value);
+        Assert.All(result.Report.Where(item => item.Status == "Converted"), item => Assert.Contains("Stored as config value 'biztalk-map.OrderToResult-", item.Detail, StringComparison.Ordinal));
+        Assert.DoesNotContain(inline.Report, item => item.Detail.Contains("config value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void StoredMode_DoesNotStoreUnconvertedValues()
+    {
+        var stored = new Dictionary<string, string>();
+
+        Derive(WriteProject(), Literals("Acme.Partner.Maps.Broken, Acme.Partner", "Acme.Partner.Maps.Missing, Acme.Partner"), stored: stored);
+
+        Assert.Empty(stored);
+    }
+
+    [Fact]
     public void MapNameLiterals_OnlyIncludeNonEmptyMapNameStringsOfSelectedVersions()
     {
         var path = Path.Combine(_directory, "rules.xml");
@@ -374,10 +407,10 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
         }
     }
 
-    private DerivedMapChoices Derive(string project, IReadOnlyList<PolicyMapNameLiteral> literals, string? explicitJson = null, string[]? projects = null)
+    private DerivedMapChoices Derive(string project, IReadOnlyList<PolicyMapNameLiteral> literals, string? explicitJson = null, string[]? projects = null, IDictionary<string, string>? stored = null)
     {
         var paths = projects ?? [project];
-        return BizTalkNativeMapChoiceDeriver.Derive(paths, literals, BizTalkSchemaSourceCatalog.Read(paths), explicitJson, default);
+        return BizTalkNativeMapChoiceDeriver.Derive(paths, literals, BizTalkSchemaSourceCatalog.Read(paths), explicitJson, default, stored);
     }
 
     private static PolicyMapNameLiteral[] Literals(params string[] values) => values.Select(value => new PolicyMapNameLiteral("Billing", "1.0", "MapName", value)).ToArray();

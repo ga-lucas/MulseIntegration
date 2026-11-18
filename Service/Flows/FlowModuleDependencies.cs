@@ -124,7 +124,7 @@ internal static class FlowModuleDependencies
         if (!string.Equals(step.Module, RenderDispatchDefinition.ModuleId, StringComparison.OrdinalIgnoreCase)
             && !string.Equals(step.Module, RenderDispatchDefinition.AugmentModuleId, StringComparison.OrdinalIgnoreCase) && !isOdx) yield break;
         var json = ConfigValueResolver.SubstituteJson(step.Settings.GetValueOrDefault("casesJson", isOdx ? "[]" : ""), configValues, reference =>
-            throw new ArgumentException($"Flow '{flowId}' requires configuration '{reference}' to determine its render dispatch dependencies."), dependenciesOnly: true);
+            throw new ArgumentException($"Flow '{flowId}' requires configuration '{reference}' to determine its render dispatch dependencies."), dependenciesOnly: true, deferStored: true);
         foreach (var choice in RenderDispatchDefinition.Read(json, allowEmpty: isOdx)) yield return choice;
     }
 

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
@@ -23,8 +25,17 @@ internal static class BizTalkNativeMapChoiceDeriver
 
     private sealed record MapClass(string ClassName, string Assembly, string MapPath);
 
+    /// <summary>Config value name that holds the converted map for one policy map-name value.</summary>
+    internal static string StoredName(string value)
+    {
+        var typeName = value.Split(',', 2)[0].Trim();
+        var label = new string(typeName[(typeName.LastIndexOf('.') + 1)..].Where(char.IsLetterOrDigit).Take(48).ToArray());
+        return "biztalk-map." + (label.Length == 0 ? "map" : label) + "-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..10].ToLowerInvariant();
+    }
+
+    /// <param name="storedValues">When supplied, each converted map is written here under <see cref="StoredName"/> and the case keeps only a <c>{{config:...}}</c> reference, so many large maps fit one dispatch.</param>
     public static DerivedMapChoices Derive(IEnumerable<string> projectPaths, IReadOnlyList<PolicyMapNameLiteral> literals,
-        BizTalkSchemaSourceCatalog schemas, string? explicitCasesJson, CancellationToken cancellationToken)
+        BizTalkSchemaSourceCatalog schemas, string? explicitCasesJson, CancellationToken cancellationToken, IDictionary<string, string>? storedValues = null)
     {
         var cases = explicitCasesJson is null ? [] : RenderDispatchDefinition.Read(explicitCasesJson, allowEmpty: true).ToList();
         var explicitValues = cases.Select(static entry => entry.Value).ToHashSet(StringComparer.Ordinal);
@@ -61,6 +72,14 @@ internal static class BizTalkNativeMapChoiceDeriver
             var map = matches[0];
             RenderDispatchCase entry;
             string status, detail;
+            var storedName = StoredName(group.Key);
+            string? pendingStore = null;
+            string Stored(string content)
+            {
+                if (storedValues is null) return content;
+                pendingStore = content;
+                return "{{config:" + storedName + "}}";
+            }
             IReadOnlyList<string> warnings;
             BizTalkCustomXsltMap? custom;
             try { custom = BizTalkCustomXslt.Read(XmlMappingSchemas.ReadXmlFile(map.MapPath), map.MapPath); }
@@ -73,7 +92,7 @@ internal static class BizTalkNativeMapChoiceDeriver
             {
                 entry = new RenderDispatchCase
                 {
-                    Value = group.Key, Module = "xslt-render", Settings = new() { ["xsltText"] = custom.StylesheetText, ["outputExtension"] = ".xml" }
+                    Value = group.Key, Module = "xslt-render", Settings = new() { ["xsltText"] = Stored(custom.StylesheetText), ["outputExtension"] = ".xml" }
                 };
                 warnings = ["This map uses a hand-written (custom) stylesheet; like BizTalk, the map's grid and links are ignored and the stylesheet is used as is."];
                 status = custom.HasScripts ? "ConvertedWithStubs" : "Converted";
@@ -103,7 +122,7 @@ internal static class BizTalkNativeMapChoiceDeriver
                 }
                 entry = new RenderDispatchCase
                 {
-                    Value = group.Key, Module = "xml-mapping-render", Settings = new() { ["mappingJson"] = conversion.MappingJson }
+                    Value = group.Key, Module = "xml-mapping-render", Settings = new() { ["mappingJson"] = Stored(conversion.MappingJson) }
                 };
                 warnings = conversion.Warnings;
                 status = conversion.PendingFunctions.Count == 0 ? "Converted" : "ConvertedWithStubs";
@@ -117,6 +136,11 @@ internal static class BizTalkNativeMapChoiceDeriver
                 continue;
             }
             cases.Add(entry);
+            if (pendingStore is not null)
+            {
+                storedValues![storedName] = pendingStore;
+                detail += $" Stored as config value '{storedName}' (edit it on the Config Values page).";
+            }
             report.Add(Result(status, map.MapPath, detail, warnings));
         }
         return new(report, JsonSerializer.Serialize(cases, Json));

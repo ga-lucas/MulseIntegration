@@ -32,4 +32,11 @@ public sealed record BizTalkFlowCandidateResponse(
     /// production-critical. This is advisory only - the candidate is still generated in full.
     /// </summary>
     public bool IsLikelyTestArtifact { get; init; }
+
+    /// <summary>
+    /// Config values (name to content) that this candidate's native flow references through <c>{{config:...}}</c> tokens, for example converted maps too large to
+    /// embed in the flow. Never serialized to clients; creating the flow writes the values that are not already set.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyDictionary<string, string> StoredConfigValues { get; init; } = new Dictionary<string, string>();
 }

@@ -95,6 +95,15 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **UI:** expression editor has the new kinds, a DateTime literal that follows the global display switch, and a Wait "Fixed seconds / Computed from an expression" mode.
 - **Billing result:** 123 blocked -> 109 (all DateTime variable, date/time statement and `Subtract` delay blocks are gone). Listen/ListenBranch still block the batch loop itself.
 
+### Increment: policy map choices stored as config values
+
+- **Evidence:** the "Billing Processing Policy" export (40 rules) names 83 map classes, which live in the sibling `Example.Legacy.Interfaces.Partners.*` projects. With those projects analyzed, 49 of 83 convert (11 clean, 38 with script stubs), 26 fail conversion (FID 106, empty linked records, a Value Mapping feeding another functoid, no source root) and 8 classes were not found.
+- **Problem:** each dispatch case embedded its whole map, so 83 maps could not fit one render-dispatch table (262,144 characters) or one native flow (1,000,000 characters).
+- **Stored maps:** when derivation is on, each converted map or stylesheet is saved as a config value named `biztalk-map.<TypeName>-<10 hex of the full policy value>`. The dispatch case keeps only a `{{config:...}}` reference. The values are listed on the Config Values page, so each map is editable in the UI. Creating the flow writes the values that do not exist yet and never overwrites an existing one, so edits survive a re-import. The reference check at enable time still fails closed on a missing value.
+- **Runtime:** only the selected case is loaded, when it renders (`RenderModuleInvoker`). A missing value fails closed. Only a whole-value `{{config:...}}` in `mappingJson` or `xsltText` is deferred; everything else is resolved as before.
+- **Explicit choices** and the existing inline behavior are unchanged when no sink is supplied.
+- **Tests:** `StoredMapChoiceTests` (resolver deferral, lazy invoker, naming, candidate filtering) plus two deriver tests. Suite: 2,510 passed.
+- **Billing result (`orch37`):** BatchDoubleBody and BatchWithTrailer now import (14 blocked nodes each, down from whole-flow failure). BillingService still fails: it has 58 dynamic transforms and every one embeds the same 49-case table (about 20 KB each), which exceeds the 1,000,000-character flow limit. Next: one shared per-flow choice table instead of a copy per transform (a native flow schema, executor and editor change).
 ### Increment: native Listen and correlation following
 
 - **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.

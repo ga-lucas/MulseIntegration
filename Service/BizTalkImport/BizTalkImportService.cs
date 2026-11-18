@@ -264,13 +264,16 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
         var nativeSchemas = request.GenerateNativeFlow ? BizTalkSchemaSourceCatalog.Read(hydratedProjects.Select(project => project.ProjectPath)) : null;
         var mapChoicesJson = request.NativeMapChoicesJson;
         DerivedMapChoices? derivedChoices = null;
+        var storedMapValues = new Dictionary<string, string>(StringComparer.Ordinal);
         if (request.DeriveNativeMapChoices)
         {
             var literals = request.AdditionalRulePaths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase)
                 .SelectMany(path => BizTalkRulePolicyAnalyzer.ReadMapNameLiterals(path, request.NativePolicyVersions, cancellationToken)).ToArray();
-            derivedChoices = BizTalkNativeMapChoiceDeriver.Derive(hydratedProjects.Select(project => project.ProjectPath), literals, nativeSchemas!, request.NativeMapChoicesJson, cancellationToken);
+            derivedChoices = BizTalkNativeMapChoiceDeriver.Derive(hydratedProjects.Select(project => project.ProjectPath), literals, nativeSchemas!, request.NativeMapChoicesJson, cancellationToken, storedMapValues);
             mapChoicesJson = derivedChoices.CasesJson;
             warnings.Add($"{derivedChoices.Report.Count(static item => item.Status is "Converted" or "ConvertedWithStubs")} of {derivedChoices.Report.Count} policy map-name values were converted to native map choices (some may wait on script stubs); the rest are listed with reasons and stay fail-closed. Derived choices are not verified equivalents of the BizTalk maps.");
+            if (storedMapValues.Count > 0)
+                warnings.Add($"Converted maps are stored as {storedMapValues.Count} config value(s) named 'biztalk-map.*'; the generated flows reference them, so the effective choices JSON holds references rather than map content.");
         }
         var reservedFlowIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var flowCandidates = candidateProjects
@@ -278,6 +281,7 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
             .SelectMany(project => CreateFlowCandidates(project, customAssemblies, bindingAnalyses, mapInventory, reservedFlowIds))
             .Select(candidate => AttachRuleEvidence(candidate, rulePolicies))
             .Select(candidate => request.GenerateNativeFlow ? AttachNativeFlow(candidate, bindingAnalyses, rulePolicies, nativeSchemas!, request.NativePolicyVersions, nativeConfiguration, mapChoicesJson) : candidate)
+            .Select(candidate => AttachStoredConfigValues(candidate, storedMapValues))
             .ToArray();
 
         return Task.FromResult(new BizTalkSolutionAnalysisResponse(
