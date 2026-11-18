@@ -388,7 +388,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                             {
                                 if (selection.Evaluate(state.Variables, Fact, instance, clock).Read() is not string identity)
                                     throw new InvalidOperationException("Native renderer selection requires a String identity.");
-                                var choice = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(node.Settings["casesJson"])
+                                var choice = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(definition.ChoicesFor(node))
                                     .SingleOrDefault(choice => choice.Value == identity)
                                     ?? throw new InvalidOperationException("Native renderer selected an unconfigured identity; no CLR type is loaded.");
                                 rendererModule = choice.Module; rendererSettings = choice.Settings;

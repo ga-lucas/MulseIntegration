@@ -261,7 +261,7 @@ internal sealed class NativeSourceExpressionReader
                 NativeExpression.Validate(selector);
                 nodes.Add(new() { Id = id + "-map-" + nodes.Count, Kind = NativeFlowNodeKind.Render,
                     Module = Mulse.Modules.Mapping.RenderDispatchDefinition.ModuleId, InputMessages = inputs, MessageName = output,
-                    SelectionExpression = selector, Settings = new() { ["casesJson"] = _mapChoices } });
+                    SelectionExpression = selector });
                 continue;
             }
             if (_elements.Contains(name))

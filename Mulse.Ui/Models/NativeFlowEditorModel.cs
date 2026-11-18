@@ -10,6 +10,8 @@ public sealed class NativeFlowEditorModel
     public string CorrelationMetadataKey { get; set; } = "group";
     public string MessageIdMetadataKey { get; set; } = "messageId";
     public string OutputMessage { get; set; } = "";
+    /// <summary>Shared renderer choices (a dispatch casesJson array) used by selection nodes that have no choices of their own.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? RenderChoicesJson { get; set; }
 }
 
 public sealed class NativeFlowNodeViewModel

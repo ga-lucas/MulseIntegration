@@ -17,6 +17,14 @@
             <p class="field-hint">Each arrival needs a stable unique ID and a case-sensitive instance value. Receive channels use the incoming channel metadata. Source acknowledgements remain deferred until downstream success.</p>
         }
         <label class="field-label">Output named message (blank uses working batch) <input class="mapping-input" @bind="_model.OutputMessage" @bind:after="Persist" /></label>
+        @if (_model.RenderChoicesJson is not null)
+        {
+            <fieldset>
+                <legend>Shared renderer choices</legend>
+                <p class="field-hint">Every dynamic-transform step without choices of its own selects its renderer from this one table, so a change here applies to all of them. The table covers every policy map name found at import, not only the ones a given step can receive; a name that is not listed fails closed. A choice that holds a <code>{{config:...}}</code> reference loads its map or stylesheet from that config value when it is selected; that value is shared by every flow that uses it.</p>
+                <RenderDispatchEditor Settings="_sharedChoices" Modules="Modules" References="References" NativeSelectionMode="true" Changed="SharedChoicesChanged" />
+            </fieldset>
+        }
         </details>
         @if (BlockedNodes.Count > 0)
         {
@@ -201,7 +209,7 @@
                     Check(node.Children, depth + 1); Check(node.Otherwise, depth + 1);
                 }
             }
-            Check(model.Nodes, 0); _model = model; ValidateDraft();
+            Check(model.Nodes, 0); _model = model; _sharedChoices = new() { ["casesJson"] = model.RenderChoicesJson ?? "[]" }; ValidateDraft();
             if (SelectedLocation is null) _selectedNodeId = _model.Nodes.FirstOrDefault()?.Id;
             _removeNodeId = null;
         }
@@ -298,7 +306,8 @@
                     || string.IsNullOrWhiteSpace(node.MessageName) || node.MessageName.Length > 128 || node.MessageName != node.MessageName.Trim())
                 || node.Kind is "Render" or "Augment" && (node.InputMessages is null) != (node.MessageName.Length == 0)
                 || node.SelectionExpression is { } selection && (!CompleteExpression(selection) || node.Kind != "Render" || node.InputMessages is null
-                    || node.Module != "render-dispatch" || node.Settings.Count != 1 || !node.Settings.ContainsKey("casesJson"))
+                    || node.Module != "render-dispatch" || node.Settings.Count > 1 || node.Settings.Count == 1 && !node.Settings.ContainsKey("casesJson")
+                    || node.Settings.Count == 0 && string.IsNullOrWhiteSpace(_model.RenderChoicesJson))
                 || (node.Kind == "SetMessageValue") != (node.Target is not null)
                 || node.Target is { } target && (!CompleteFact(target) || target.MessageName.Length == 0 || target.Kind is not ("Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlString" or "XmlInt32" or "XmlBoolean"))
                 || (node.Kind is "ForEach" or "While") && (node.MaxIterations is < 1 or > 10000)
@@ -323,6 +332,8 @@
                 || node.Conditions.Any(condition => (condition.Source is "Metadata" or "Payload" or "Literal") && string.IsNullOrWhiteSpace(condition.Path)))
             ? "Some nodes are incomplete or incompatible. Choose loaded modules, valid conditions and loop limits; remove inactive branches/children before execution." : null;
     }
+    private Dictionary<string, string> _sharedChoices = new() { ["casesJson"] = "[]" };
+    private async Task SharedChoicesChanged() { _model.RenderChoicesJson = _sharedChoices["casesJson"]; await Persist(); }
     private async Task Persist()
     {
         Value = _loaded = JsonSerializer.Serialize(_model, Options); ValidateDraft();

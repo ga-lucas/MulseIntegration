@@ -59,6 +59,15 @@ public sealed class NativeFlowDefinition
     public string CorrelationMetadataKey { get; set; } = "group";
     public string MessageIdMetadataKey { get; set; } = "messageId";
     public string OutputMessage { get; set; } = "";
+    /// <summary>
+    /// Optional render-dispatch choices (the same JSON array as a dispatch node's <c>casesJson</c>) shared by every selection-expression Render node that has no
+    /// <c>casesJson</c> of its own. A flow with many dynamic transforms keeps one table here instead of a copy per node, so editing a choice changes every node that uses it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? RenderChoicesJson { get; set; }
+
+    /// <summary>The choices a selection-expression Render node dispatches over: its own <c>casesJson</c> when present, otherwise the flow's shared table.</summary>
+    public string ChoicesFor(NativeFlowNode node) => node.Settings.TryGetValue("casesJson", out var own) ? own
+        : RenderChoicesJson ?? throw new ArgumentException($"Native node '{node.Id}' has no casesJson and the flow has no shared renderChoicesJson.");
 
     public static NativeFlowDefinition Read(string json, bool allowBlocked = false)
     {
@@ -71,6 +80,7 @@ public sealed class NativeFlowDefinition
             || string.IsNullOrWhiteSpace(flow.MessageIdMetadataKey) || flow.MessageIdMetadataKey.Length > 128
             || flow.OutputMessage is null || flow.OutputMessage.Length > 128 || flow.OutputMessage != flow.OutputMessage.Trim())
             throw new ArgumentException("Native durable configuration requires bounded metadata keys and output message name.");
+        if (flow.RenderChoicesJson is not null) _ = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(flow.RenderChoicesJson);
         var ids = new HashSet<string>(StringComparer.Ordinal);
         void Validate(List<NativeFlowNode> nodes, int depth)
         {
@@ -108,10 +118,10 @@ public sealed class NativeFlowDefinition
                 if (node.SelectionExpression is { } selection)
                 {
                     if (node.Kind != NativeFlowNodeKind.Render || node.InputMessages is null || node.Module != "render-dispatch"
-                        || node.Settings.Count != 1 || !node.Settings.ContainsKey("casesJson"))
-                        throw new ArgumentException($"Native node '{node.Id}' requires named Render with render-dispatch and only casesJson for a selection expression.");
+                        || node.Settings.Count > 1 || node.Settings.Count == 1 && !node.Settings.ContainsKey("casesJson"))
+                        throw new ArgumentException($"Native node '{node.Id}' requires named Render with render-dispatch and only casesJson (or no settings, to use the flow's shared renderChoicesJson) for a selection expression.");
                     NativeExpression.Validate(selection);
-                    _ = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(node.Settings["casesJson"]);
+                    _ = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(flow.ChoicesFor(node));
                 }
                 if ((node.Kind == NativeFlowNodeKind.ApplyXmlRules) != (node.PolicyJson is not null))
                     throw new ArgumentException($"Native node '{node.Id}' requires a policy only for ApplyXmlRules.");

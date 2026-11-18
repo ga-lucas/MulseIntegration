@@ -187,8 +187,8 @@ public sealed partial class ConfigValueResolver(IRuntimeConfigurationStore runti
                     if (!dependenciesOnly && (configValues is null || !configValues.ContainsKey(reference))) onMissing(reference);
                     return JsonValue.Create(text);
                 }
-                return JsonValue.Create(key is "stagesJson" or "casesJson" or "sendsJson" or "policyJson" or "mappingJson" or "decisionJson" or "promotionsJson"
-                    ? SubstituteJson(text, configValues, onMissing, depth + 1, dependenciesOnly, deferStored: key == "casesJson")
+                return JsonValue.Create(key is "stagesJson" or "casesJson" or "renderChoicesJson" or "sendsJson" or "policyJson" or "mappingJson" or "decisionJson" or "promotionsJson"
+                    ? SubstituteJson(text, configValues, onMissing, depth + 1, dependenciesOnly, deferStored: key is "casesJson" or "renderChoicesJson")
                     : dependenciesOnly && key != "module" ? text : Substitute(text, configValues, onMissing));
             }
             if (node is JsonObject record)

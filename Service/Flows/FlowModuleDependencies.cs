@@ -38,7 +38,8 @@ internal static class FlowModuleDependencies
                         yield return (node.Module, ModuleKind.Deliver);
                         continue;
                     }
-                    var nested = new ModuleStepDefinition { Module = node.Module, Settings = node.Settings };
+                    var nested = new ModuleStepDefinition { Module = node.Module, Settings = node.SelectionExpression is not null && !node.Settings.ContainsKey("casesJson")
+                        ? new() { ["casesJson"] = native.ChoicesFor(node) } : node.Settings };
                     var child = node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Augment
                         ? new PipelineDefinition { Id = flow.Id, Enabled = flow.Enabled, Augments = [nested] }
                         : node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Render

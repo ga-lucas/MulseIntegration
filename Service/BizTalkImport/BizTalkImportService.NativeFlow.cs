@@ -647,6 +647,11 @@ public sealed partial class BizTalkImportService
             }
             var definition = new NativeFlowDefinition { Durable = true, Nodes = source.Roots.Select(Convert).ToList() };
             definition.Nodes.InsertRange(0, hiddenDeclarations);
+            if (mapChoices is not null && definition.AllNodes().Any(node => node.SelectionExpression is not null))
+            {
+                definition.RenderChoicesJson = mapChoices;
+                warnings.Add("Every dynamic transform in this flow selects from ONE shared choice table (the flow's renderChoicesJson), not its own copy. The table covers every policy map name found for the solution, so a transform can select a map that BizTalk would only ever choose for a different policy field; an unlisted name fails closed. Editing a choice changes every transform in the flow. A map referenced as a config value is shared by every flow that uses it.");
+            }
             if (configuration is not null)
                 warnings.Add("Explicit host configuration and pure getter source files are native test snapshots, not proof of deployed assembly identity or inherited machine configuration. Referenced getter results are pinned as editable scalar literals; absent keys retain the proven empty-string return. No configuration file or helper assembly is read at execution time.");
             if (definition.AllNodes().Any(node => node.Expression?.RequiresInstance == true || node.NamespaceExpression?.RequiresInstance == true))

@@ -118,7 +118,14 @@
                         <fieldset><legend>Renderer identity expression</legend><NativeExpressionEditor Value="selection" Variables="Variables" MessageNames="MessageNames" Changed="Changed" /></fieldset>
                     }
                 }
-                <RenderDispatchEditor Settings="node.Settings" Modules="Modules" References="References" NativeSelectionMode="@(node.SelectionExpression is not null)" Changed="Notify" />
+                @if (node.SelectionExpression is not null && node.Settings.Count == 0)
+                {
+                    <p class="field-hint">This step uses the flow's shared renderer choices. Edit them under "Execution and message settings".</p>
+                }
+                else
+                {
+                    <RenderDispatchEditor Settings="node.Settings" Modules="Modules" References="References" NativeSelectionMode="@(node.SelectionExpression is not null)" Changed="Notify" />
+                }
             }
             else
             {
@@ -348,7 +355,7 @@
     private async Task ChangeSelectionMode(NativeFlowNodeViewModel node, bool enabled)
     {
         node.SelectionExpression = enabled ? new() : null;
-        if (enabled) { node.Settings.Remove("metadataKey"); node.Settings.Remove("batchMode"); }
+        if (enabled) { node.Settings.Remove("metadataKey"); node.Settings.Remove("batchMode"); node.Settings.TryAdd("casesJson", "[]"); }
         else { node.Settings["metadataKey"] = ""; node.Settings["batchMode"] = "PerPayload"; }
         await Notify();
     }
