@@ -41,7 +41,7 @@
         }
         @if (node.Kind == "Wait")
         {
-            <label class="field-label">Wait duration <select class="selector" value="@(node.DurationExpression is null ? "Fixed" : "Expression")" @onchange="args => ChangeWaitMode(node, args.Value?.ToString())"><option value="Fixed">Fixed seconds</option><option value="Expression">Computed from an expression</option></select></label>
+            <label class="field-label">Wait duration <select class="selector" value="@(node.DurationExpression is null ? "Fixed" : "Expression")" @onchange="args => ChangeWaitMode(node, args.Value?.ToString())"><option value="Fixed">Fixed duration</option><option value="Expression">Computed from an expression</option></select></label>
         }
         @if (node.Kind == "Wait" && node.DurationExpression is not null)
         {
@@ -53,6 +53,13 @@
             <label class="field-label">@(node.Kind == "Wait" ? "Wait seconds" : "Receive timeout seconds (0 means no timeout)")
                 <input type="number" min="0" max="31622400" @bind="node.DurationSeconds" @bind:after="Notify" />
             </label>
+            @if (node.Kind == "Wait")
+            {
+                <label class="field-label">Wait milliseconds (0-999, added to the seconds)
+                    <input type="number" min="0" max="999" @bind="node.DurationMilliseconds" @bind:after="Notify" />
+                </label>
+                <p class="field-hint">A wait shorter than one second (0 seconds plus milliseconds) pauses the running flow in place, so it works as a throttle. A wait of one second or more parks the instance and resumes on the flow's next run, so it is a minimum, not an exact delay.</p>
+            }
         }
         @if (node.Kind == "Receive")
         {
@@ -303,7 +310,7 @@
     {
         if (kind is null || kind == node.Kind || !Kinds.Contains(kind)) return;
         node.Kind = kind; node.Module = ""; node.Settings.Clear(); node.Conditions.Clear();
-        node.MessageName = ""; node.Channel = ""; node.DurationSeconds = 0; node.DurationExpression = null; node.CorrelationKeys.Clear();
+        node.MessageName = ""; node.Channel = ""; node.DurationSeconds = 0; node.DurationMilliseconds = 0; node.DurationExpression = null; node.CorrelationKeys.Clear();
         node.Variable = kind is "DeclareVariable" or "SetVariable" or "InvokeTransform" ? "" : null;
         node.TransformInputs = kind == "InvokeTransform" ? [new()] : null;
         node.SettingExpressions = null;
@@ -322,7 +329,7 @@
     private async Task ChangeWaitMode(NativeFlowNodeViewModel node, string? mode)
     {
         if (mode is not ("Fixed" or "Expression") || (mode == "Expression") == (node.DurationExpression is not null)) return;
-        node.DurationSeconds = mode == "Fixed" ? 1 : 0;
+        node.DurationSeconds = mode == "Fixed" ? 1 : 0; node.DurationMilliseconds = 0;
         node.DurationExpression = mode == "Expression" ? new() { Literal = new() { Type = "Int32", Value = "1" } } : null;
         await Notify();
     }

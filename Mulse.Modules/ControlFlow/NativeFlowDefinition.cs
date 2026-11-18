@@ -21,6 +21,8 @@ public sealed class NativeFlowNode
     public string BlockReason { get; set; } = "";
     public string MessageName { get; set; } = "";
     public int DurationSeconds { get; set; }
+    /// <summary>Wait only: sub-second part (0-999) of a fixed duration, added to <see cref="DurationSeconds"/>. A fixed wait under one second pauses the running instance in place (a throttle); a wait of a second or more parks the instance until the flow's next run.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int DurationMilliseconds { get; set; }
     /// <summary>Wait only: optional Int32 expression giving the delay in whole seconds, evaluated once when the wait starts (a negative result waits zero seconds). Mutually exclusive with a fixed <see cref="DurationSeconds"/>.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpression? DurationExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? TerminateMessage { get; set; }
@@ -197,9 +199,11 @@ public sealed class NativeFlowDefinition
                 if (node.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive
                     ? node.DurationSeconds is < 0 or > 31622400 : node.DurationSeconds != 0)
                     throw new ArgumentException($"Native node '{node.Id}' has an invalid or inactive duration.");
+                if (node.Kind == NativeFlowNodeKind.Wait ? node.DurationMilliseconds is < 0 or > 999 || node.DurationMilliseconds != 0 && node.DurationSeconds >= 31622400 : node.DurationMilliseconds != 0)
+                    throw new ArgumentException($"Native node '{node.Id}' has an invalid or inactive millisecond duration (a Wait allows 0-999 ms within the 366-day limit).");
                 if (node.DurationExpression is not null)
                 {
-                    if (node.Kind != NativeFlowNodeKind.Wait || node.DurationSeconds != 0)
+                    if (node.Kind != NativeFlowNodeKind.Wait || node.DurationSeconds != 0 || node.DurationMilliseconds != 0)
                         throw new ArgumentException($"Native node '{node.Id}' allows a duration expression only on a Wait without a fixed duration.");
                     NativeExpression.Validate(node.DurationExpression);
                 }

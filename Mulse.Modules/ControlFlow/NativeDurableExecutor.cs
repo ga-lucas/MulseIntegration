@@ -148,12 +148,12 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
             state.Stack.Add(new() { NodeId = node.Id });
         }
         NativeScalar Fact(NativeMessageFact fact) => fact.Read(fact.MessageName.Length == 0 ? batch : Message(fact.MessageName));
-        int WaitSeconds(NativeFlowNode node)
+        TimeSpan WaitDuration(NativeFlowNode node)
         {
-            if (node.DurationExpression is null) return node.DurationSeconds;
+            if (node.DurationExpression is null) return TimeSpan.FromSeconds(node.DurationSeconds) + TimeSpan.FromMilliseconds(node.DurationMilliseconds);
             if (node.DurationExpression.Evaluate(state.Variables, Fact, instance, clock).Read() is not int seconds)
                 throw new InvalidOperationException($"Native wait '{node.Id}' duration expression must produce an Int32 number of seconds.");
-            return seconds > 31622400 ? throw new InvalidOperationException($"Native wait '{node.Id}' duration exceeds 366 days.") : Math.Max(0, seconds);
+            return TimeSpan.FromSeconds(seconds > 31622400 ? throw new InvalidOperationException($"Native wait '{node.Id}' duration exceeds 366 days.") : Math.Max(0, seconds));
         }
         bool Matches(NativeFlowNode node)
         {
@@ -299,7 +299,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                             if (!state.InitialMetadata.ContainsKey(correlation)) throw new InvalidOperationException("Native receive correlation was not initialized: " + correlation);
                         cursor.Phase = 1;
                         // The timeout is measured once, from when the listen starts, and survives restarts in the checkpoint.
-                        cursor.DeadlineUtc = timeoutBranch < 0 ? null : clock.GetUtcNow().AddSeconds(WaitSeconds(node.Children[timeoutBranch].Children[0]));
+                        cursor.DeadlineUtc = timeoutBranch < 0 ? null : clock.GetUtcNow() + WaitDuration(node.Children[timeoutBranch].Children[0]);
                     }
                     var chosen = available ? MatchingBranch(node, cursor) : -1;
                     if (available && chosen < 0) throw new NativeUnmatchedMessageException("Initial native message does not match any listen branch; it was not accepted or acknowledged.");
@@ -318,11 +318,17 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                 else if (node.Kind == NativeFlowNodeKind.Wait)
                 {
                     Accept();
-                    if (cursor.Phase == 0) { cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow().AddSeconds(WaitSeconds(node)); }
+                    if (cursor.Phase == 0) { cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow() + WaitDuration(node); }
                     if (clock.GetUtcNow() < cursor.DeadlineUtc)
                     {
-                        await Save(cancellationToken).ConfigureAwait(false);
-                        context.Suspend("Native wait: " + node.Id); return batch;
+                        // A fixed sub-second wait is a throttle: pausing in-process is exact and cheaper than parking the instance until the next resume.
+                        if (node.DurationExpression is null && node.DurationSeconds == 0 && node.DurationMilliseconds > 0)
+                            await Task.Delay(cursor.DeadlineUtc!.Value - clock.GetUtcNow(), clock, cancellationToken).ConfigureAwait(false);
+                        else
+                        {
+                            await Save(cancellationToken).ConfigureAwait(false);
+                            context.Suspend("Native wait: " + node.Id); return batch;
+                        }
                     }
                     Pop();
                 }

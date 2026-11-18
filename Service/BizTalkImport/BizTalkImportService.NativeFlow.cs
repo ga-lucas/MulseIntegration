@@ -467,8 +467,8 @@ public sealed partial class BizTalkImportService
                         {
                             var rawTimeout = node.Properties.GetValueOrDefault("Timeout", "").Trim();
                             var timeout = rawTimeout.EndsWith(';') ? rawTimeout[..^1].TrimEnd() : rawTimeout;
-                            var seconds = ReadConstantTimeoutSeconds(timeout);
-                            if (seconds is null && children.Count == 0)
+                            var totalMilliseconds = ReadConstantTimeoutMilliseconds(timeout);
+                            if (totalMilliseconds is null && children.Count == 0)
                             {
                                 try
                                 {
@@ -480,12 +480,15 @@ public sealed partial class BizTalkImportService
                                 }
                                 catch (NotSupportedException) { /* Not the dynamic form; the constant-TimeSpan blocker below states the limit. */ }
                             }
-                            if (children.Count != 0 || seconds is null or <= 0 or > 31622400)
+                            if (children.Count != 0 || totalMilliseconds is null or <= 0 or > 31622400000L)
                             {
                                 var evidence = rawTimeout.Length > 1024 ? rawTimeout[..1024] + " [truncated]" : rawTimeout;
-                                return Block(node, "Source delay timeout is not a supported positive whole-second TimeSpan within the native wait limit, or contains nested behavior; configure it explicitly (source expression: " + evidence + ").", children);
+                                return Block(node, "Source delay timeout is not a supported positive whole-millisecond TimeSpan within the native wait limit, or contains nested behavior; configure it explicitly (source expression: " + evidence + ").", children);
                             }
-                            translated.Kind = NativeFlowNodeKind.Wait; translated.DurationSeconds = seconds.Value;
+                            translated.Kind = NativeFlowNodeKind.Wait;
+                            translated.DurationSeconds = (int)(totalMilliseconds.Value / 1000); translated.DurationMilliseconds = (int)(totalMilliseconds.Value % 1000);
+                            if (translated.DurationSeconds == 0)
+                                Warn("A Delay shorter than one second is imported as an in-place sub-second pause (a throttle). A Delay of one second or more parks the instance until the flow's next run, so it is a minimum, not an exact delay.");
                             return translated;
                         }
                     case "MessagePartRef" when parents.GetValueOrDefault(node.Id)?.ShapeType == "Transform":
@@ -809,7 +812,7 @@ public sealed partial class BizTalkImportService
     private static string PipelineBlockDetail(SendPortAnalysis send)
         => send.Operational.HasSendPipelineConfiguration ? " The port carries its own pipeline component configuration, so even a stock pipeline is not assumed to be unmodified." : "";
 
-    private static int? ReadConstantTimeoutSeconds(string expression)
+    private static long? ReadConstantTimeoutMilliseconds(string expression)
     {
         if (expression.Length > 4096) return null;
         const System.Text.RegularExpressions.RegexOptions options = System.Text.RegularExpressions.RegexOptions.CultureInvariant;
@@ -818,36 +821,27 @@ public sealed partial class BizTalkImportService
         if (ticks.Success)
         {
             if (!long.TryParse(ticks.Groups["ticks"].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
-                || value % TimeSpan.TicksPerSecond != 0) return null;
-            return (int)Math.Min(int.MaxValue, value / TimeSpan.TicksPerSecond);
+                || value % TimeSpan.TicksPerMillisecond != 0) return null;
+            return value / TimeSpan.TicksPerMillisecond;
         }
         var ctor = System.Text.RegularExpressions.Regex.Match(expression, @"^new\s+(?:System\.)?TimeSpan\s*\(\s*(?<args>[0-9]{1,9}(?:\s*,\s*[0-9]{1,9}){2,4})\s*\)$", options, timeout);
-        long seconds;
+        long milliseconds;
         if (ctor.Success)
         {
             var args = ctor.Groups["args"].Value.Split(',').Select(value => long.Parse(value.Trim(), System.Globalization.CultureInfo.InvariantCulture)).ToArray();
             var offset = args.Length == 3 ? 0 : 1;
-            var milliseconds = args.Length == 5 ? args[4] : 0;
-            if (milliseconds % 1000 != 0) return null;
-            seconds = (offset == 1 ? args[0] * 86400 : 0) + args[offset] * 3600 + args[offset + 1] * 60 + args[offset + 2] + milliseconds / 1000;
+            var partial = args.Length == 5 ? args[4] : 0;
+            milliseconds = ((offset == 1 ? args[0] * 86400 : 0) + args[offset] * 3600 + args[offset + 1] * 60 + args[offset + 2]) * 1000 + partial;
         }
         else
         {
             var factory = System.Text.RegularExpressions.Regex.Match(expression, @"^(?:System\.)?TimeSpan\.From(Seconds|Minutes|Hours|Days|Milliseconds)\s*\(\s*([0-9]{1,9})\s*\)$", options, timeout);
             if (!factory.Success) return null;
             var number = long.Parse(factory.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
-            if (factory.Groups[1].Value == "Milliseconds")
-            {
-                if (number % 1000 != 0) return null;
-                seconds = number / 1000;
-            }
-            else
-            {
-                var multiplier = factory.Groups[1].Value switch { "Minutes" => 60L, "Hours" => 3600L, "Days" => 86400L, _ => 1L };
-                seconds = number * multiplier;
-            }
+            var multiplier = factory.Groups[1].Value switch { "Milliseconds" => 1L, "Minutes" => 60000L, "Hours" => 3600000L, "Days" => 86400000L, _ => 1000L };
+            milliseconds = number * multiplier;
         }
-        return (int)Math.Min(int.MaxValue, seconds);
+        return milliseconds;
     }
 
     private static IEnumerable<OdxNode> FlattenNativeSource(IEnumerable<OdxNode> nodes)

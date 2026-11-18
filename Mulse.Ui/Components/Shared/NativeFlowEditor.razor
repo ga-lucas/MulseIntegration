@@ -323,8 +323,9 @@
                 || node.SettingExpressions is { } dynamicSettings && (node.Kind != "Deliver" || dynamicSettings.Count > 32 || dynamicSettings.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Key != pair.Key.Trim() || pair.Key.Length > 128 || !CompleteExpression(pair.Value)))
                 || (node.Kind is "SaveMessage" or "UseMessage" or "Reply" or "Receive" or "Deliver" or "CreateXmlMessage" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules") && string.IsNullOrWhiteSpace(node.MessageName)
                 || (node.Kind == "Terminate") != (node.TerminateMessage is not null) || node.TerminateMessage is { } termination && (string.IsNullOrWhiteSpace(termination) || termination.Length > 2000)
-                || node.Kind == "Wait" && node.DurationExpression is null && node.DurationSeconds <= 0 || node.DurationSeconds is < 0 or > 31622400
-                || node.DurationExpression is not null && (node.Kind != "Wait" || node.DurationSeconds != 0 || !CompleteExpression(node.DurationExpression))
+                || node.Kind == "Wait" && node.DurationExpression is null && node.DurationSeconds <= 0 && node.DurationMilliseconds <= 0 || node.DurationSeconds is < 0 or > 31622400
+                || node.DurationMilliseconds is < 0 or > 999 || node.DurationMilliseconds != 0 && (node.Kind != "Wait" || node.DurationSeconds >= 31622400)
+                || node.DurationExpression is not null && (node.Kind != "Wait" || node.DurationSeconds != 0 || node.DurationMilliseconds != 0 || !CompleteExpression(node.DurationExpression))
                 || node.Kind == "Receive" && (string.IsNullOrWhiteSpace(node.Channel) || node.CorrelationKeys.Any(string.IsNullOrWhiteSpace))
                 || node.Kind == "Listen" && !ValidListen(node)
                 || !_model.Durable && (node.Kind is "Wait" or "Receive" or "Listen" or "Deliver" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate")

@@ -54,7 +54,7 @@ Status key:
 | Send to an unbound, ambiguous, direct-bound or other-transport port (WCF, SQL, MSMQ, ...) | Blocked | Needs a binding export or an explicit native adapter. |
 | Send port with retry | Blocked | The child Deliver is kept; retry needs reviewed effect reconciliation. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
 | Send port with a custom transmit pipeline | Supported for a proven subset | Components translate to an ordered chain of named Augment/Render nodes in front of the Deliver: `HL7TypeCaster`, `.SetProperty`, promotion tables, the HL7 assembler and a MIME/S-MIME encoder (as an SMTP attachment). Any other component (for example the flat-file assembler) keeps the send Blocked and names the component. |
-| Delay (whole seconds, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait. Sub-second and nested forms are Blocked. |
+| Delay (constant `TimeSpan` to the millisecond, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait; a fixed sub-second wait pauses in place. Non-millisecond, zero and nested forms are Blocked. |
 | Terminate (literal message) | Supported | Dynamic messages are Blocked. |
 | Expression / variable / message assignment | Supported | Statement subset, see "Source expressions" below. |
 | Transform shape | Blocked | Maps run through supported assignments or the dynamic-transform pattern instead. |
@@ -311,6 +311,15 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Still Blocked:** a group of several predicates beside other groups (for example `(A AND B) OR C`) and OR groups on different properties. The native Receive has one AND-list of conditions, so independent disjunctive groups are not representable; the block message says so.
 - **Billing result:** `orch48` 24 blocked → `orch49` 23 blocked (the UHS receive filter).
 - **Tests:** a trailing AND after OR alternatives still means alternatives; an AND group whose last Grouping is OR stays one conjunction; `A AND B OR C` stays Blocked. Suite: 2,550 passed.
+### Increment: sub-second waits
+
+- **Model:** a Wait gains an optional `DurationMilliseconds` (0-999), added to `DurationSeconds`. It is only valid on a fixed Wait (not on Receive, other nodes, or beside a duration expression), and the total stays within 366 days. Older flow JSON is unchanged: the field is not written when zero.
+- **Runtime:** a fixed wait shorter than one second pauses the running instance in place (a throttle between sends in a loop). A wait of one second or more still parks the instance with an exact persisted deadline and resumes on the flow's next run, so it is a minimum, not an exact delay. Computed (expression) waits stay whole seconds.
+- **UI:** the Wait node has a milliseconds field with a note explaining the difference; an empty fixed wait (0 s, 0 ms) is still flagged incomplete.
+- **Importer:** constant `TimeSpan` delays now import with millisecond precision (constructor, `FromMilliseconds`, whole-millisecond tick values). Delays that are not a whole number of milliseconds, are zero, or exceed 366 days stay Blocked. A sub-second delay adds a warning.
+- **Billing result:** `orch49` 23 blocked → `orch50` 22 blocked (the 200 ms throttle delay).
+- **Tests:** `NativeSubSecondWaitTests` (validation bounds, back-compat JSON, in-place pause, one-second-plus still parks, editor field) and the import cases in `BizTalkTransportMappingTests`. Suite: 2,556 passed.
+
 ### Increment: native Listen and correlation following
 
 - **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.
