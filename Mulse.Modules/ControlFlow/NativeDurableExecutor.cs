@@ -141,9 +141,16 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
             state.Stack.Add(new() { NodeId = node.Id });
         }
         NativeScalar Fact(NativeMessageFact fact) => fact.Read(fact.MessageName.Length == 0 ? batch : Message(fact.MessageName));
+        int WaitSeconds(NativeFlowNode node)
+        {
+            if (node.DurationExpression is null) return node.DurationSeconds;
+            if (node.DurationExpression.Evaluate(state.Variables, Fact, instance, clock).Read() is not int seconds)
+                throw new InvalidOperationException($"Native wait '{node.Id}' duration expression must produce an Int32 number of seconds.");
+            return seconds > 31622400 ? throw new InvalidOperationException($"Native wait '{node.Id}' duration exceeds 366 days.") : Math.Max(0, seconds);
+        }
         bool Matches(NativeFlowNode node)
         {
-            if (node.Expression is not null) return NativeExpression.Boolean(node.Expression.Evaluate(state.Variables, Fact, instance).Read());
+            if (node.Expression is not null) return NativeExpression.Boolean(node.Expression.Evaluate(state.Variables, Fact, instance, clock).Read());
             if (batch.Count != 1) throw new InvalidOperationException($"Native condition '{node.Id}' requires exactly one payload.");
             return DecisionRuntime.MatchesAll(batch.Payloads[0], node.Conditions, node.Id);
         }
@@ -277,7 +284,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                 else if (node.Kind == NativeFlowNodeKind.Wait)
                 {
                     Accept();
-                    if (cursor.Phase == 0) { cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow().AddSeconds(node.DurationSeconds); }
+                    if (cursor.Phase == 0) { cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow().AddSeconds(WaitSeconds(node)); }
                     if (clock.GetUtcNow() < cursor.DeadlineUtc)
                     {
                         await Save(cancellationToken).ConfigureAwait(false);
@@ -291,25 +298,25 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                     switch (node.Kind)
                     {
                         case NativeFlowNodeKind.DeclareVariable:
-                        case NativeFlowNodeKind.SetVariable: NativeVariables.Apply(node, state.Variables, state.VariableTypes, Fact, instance); Pop(); break;
+                        case NativeFlowNodeKind.SetVariable: NativeVariables.Apply(node, state.Variables, state.VariableTypes, Fact, instance, clock); Pop(); break;
                         case NativeFlowNodeKind.InvokeTransform:
                             // A transform is a pure value function, not an external effect: after a crash before the next checkpoint it simply runs again.
                             if (!state.VariableTypes.TryGetValue(node.Variable!, out var resultType) || resultType != NativeScalarType.String)
                                 throw new InvalidOperationException("Native transform result requires a declared String variable: " + node.Variable);
-                            var arguments = node.TransformInputs!.Select(input => ToJson(input.Evaluate(state.Variables, Fact, instance))).ToArray();
+                            var arguments = node.TransformInputs!.Select(input => ToJson(input.Evaluate(state.Variables, Fact, instance, clock))).ToArray();
                             var transformed = await transforms!.InvokeTransformAsync(node.Module, context, arguments, node.Settings, cancellationToken).ConfigureAwait(false);
                             if (transformed is not JsonValue transformedValue || !transformedValue.TryGetValue<string>(out var transformedText) || transformedText.Length > 65_536)
                                 throw new InvalidOperationException($"Native transform '{node.Module}' must return one String of at most 65,536 characters.");
                             state.Variables[node.Variable!] = NativeScalar.From(transformedText); Pop(); break;
                         case NativeFlowNodeKind.CreateXmlMessage:
-                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateXml(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance))); Pop(); break;
+                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateXml(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance, clock))); Pop(); break;
                         case NativeFlowNodeKind.CreateXmlRoot:
-                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateRoot(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance), node.NamespaceExpression!.Evaluate(state.Variables, Fact, instance))); Pop(); break;
+                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateRoot(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance, clock), node.NamespaceExpression!.Evaluate(state.Variables, Fact, instance, clock))); Pop(); break;
                         case NativeFlowNodeKind.AppendXmlMessage:
                             state.Messages[node.MessageName] = Capture(NativeMessageOperations.AppendXml(Message(node.MessageName), Message(node.SourceMessage!))); Pop(); break;
                         case NativeFlowNodeKind.SetMessageValue:
                             var target = node.Target!;
-                            state.Messages[target.MessageName] = Capture(NativeMessageOperations.SetValue(target, node.Expression!.Evaluate(state.Variables, Fact, instance), Message(target.MessageName))); Pop(); break;
+                            state.Messages[target.MessageName] = Capture(NativeMessageOperations.SetValue(target, node.Expression!.Evaluate(state.Variables, Fact, instance, clock), Message(target.MessageName))); Pop(); break;
                         case NativeFlowNodeKind.ApplyXmlRules:
                             state.Messages[node.MessageName] = Capture(NativeMessageOperations.ApplyRules(Message(node.MessageName), node.PolicyJson!, cancellationToken)); Pop(); break;
                         case NativeFlowNodeKind.SaveMessage: state.Messages[node.MessageName] = Capture(batch); Pop(); break;
@@ -335,7 +342,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                             {
                                 var effective = new Dictionary<string, string>(node.Settings, StringComparer.OrdinalIgnoreCase);
                                 foreach (var (settingKey, settingExpression) in settingExpressions)
-                                    effective[settingKey] = settingExpression.Evaluate(state.Variables, Fact, instance).Read() switch
+                                    effective[settingKey] = settingExpression.Evaluate(state.Variables, Fact, instance, clock).Read() switch
                                     {
                                         string text => text, int number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
                                         bool flag => flag ? "true" : "false",
@@ -345,7 +352,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                             }
                             if (node.SelectionExpression is { } selection)
                             {
-                                if (selection.Evaluate(state.Variables, Fact, instance).Read() is not string identity)
+                                if (selection.Evaluate(state.Variables, Fact, instance, clock).Read() is not string identity)
                                     throw new InvalidOperationException("Native renderer selection requires a String identity.");
                                 var choice = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(node.Settings["casesJson"])
                                     .SingleOrDefault(choice => choice.Value == identity)

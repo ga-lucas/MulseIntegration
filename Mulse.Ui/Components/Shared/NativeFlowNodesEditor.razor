@@ -39,7 +39,16 @@
                 <input class="mapping-input" maxlength="128" value="@node.ExceptionDetailsVariable" @onchange="args => SetExceptionVariable(node, true, args.Value?.ToString())" />
             </label>
         }
-        @if (node.Kind is "Wait" or "Receive")
+        @if (node.Kind == "Wait")
+        {
+            <label class="field-label">Wait duration <select class="selector" value="@(node.DurationExpression is null ? "Fixed" : "Expression")" @onchange="args => ChangeWaitMode(node, args.Value?.ToString())"><option value="Fixed">Fixed seconds</option><option value="Expression">Computed from an expression</option></select></label>
+        }
+        @if (node.Kind == "Wait" && node.DurationExpression is not null)
+        {
+            <p class="field-hint">The Int32 result is the delay in whole seconds, evaluated once when the wait starts; a negative result waits zero seconds and more than 366 days fails. To wait until a UTC time, use Seconds between (target, Now).</p>
+            <NativeExpressionEditor Value="node.DurationExpression" Variables="Variables" MessageNames="MessageNames" Changed="Changed" />
+        }
+        else if (node.Kind is "Wait" or "Receive")
         {
             <label class="field-label">@(node.Kind == "Wait" ? "Wait seconds" : "Receive timeout seconds (0 means no timeout)")
                 <input type="number" min="0" max="31622400" @bind="node.DurationSeconds" @bind:after="Notify" />
@@ -155,7 +164,8 @@
             <p class="field-hint">Variables belong to this execution/instance and survive durable waits. Declare each once before use; assignments preserve the declared type. Scope-local declarations and implicit input facts are not inferred.</p>
             @if (node.Kind == "DeclareVariable")
             {
-                <label class="field-label">Declared type <select class="selector" @bind="node.VariableType" @bind:after="Notify"><option>String</option><option>Int32</option><option>Boolean</option></select></label>
+                <label class="field-label">Declared type <select class="selector" @bind="node.VariableType" @bind:after="Notify"><option>String</option><option>Int32</option><option>Boolean</option><option>DateTime</option></select></label>
+                @if (node.VariableType == "DateTime") { <p class="field-hint">DateTime variables are always UTC. Use a Now, Parse or From-parts expression; display zones in this editor never change the stored value.</p> }
             }
         }
         @if (node.Kind is "If" or "While")
@@ -282,7 +292,7 @@
     {
         if (kind is null || kind == node.Kind || !Kinds.Contains(kind)) return;
         node.Kind = kind; node.Module = ""; node.Settings.Clear(); node.Conditions.Clear();
-        node.MessageName = ""; node.Channel = ""; node.DurationSeconds = 0; node.CorrelationKeys.Clear();
+        node.MessageName = ""; node.Channel = ""; node.DurationSeconds = 0; node.DurationExpression = null; node.CorrelationKeys.Clear();
         node.Variable = kind is "DeclareVariable" or "SetVariable" or "InvokeTransform" ? "" : null;
         node.TransformInputs = kind == "InvokeTransform" ? [new()] : null;
         node.SettingExpressions = null;
@@ -296,6 +306,13 @@
         node.ExceptionMessageVariable = null; node.ExceptionDetailsVariable = null;
         node.InputMessages = null; node.SelectionExpression = null;
         if (kind is "If" or "While") node.Conditions.Add(new());
+        await Notify();
+    }
+    private async Task ChangeWaitMode(NativeFlowNodeViewModel node, string? mode)
+    {
+        if (mode is not ("Fixed" or "Expression") || (mode == "Expression") == (node.DurationExpression is not null)) return;
+        node.DurationSeconds = mode == "Fixed" ? 1 : 0;
+        node.DurationExpression = mode == "Expression" ? new() { Literal = new() { Type = "Int32", Value = "1" } } : null;
         await Notify();
     }
     private async Task ChangePredicate(NativeFlowNodeViewModel node, string? mode)

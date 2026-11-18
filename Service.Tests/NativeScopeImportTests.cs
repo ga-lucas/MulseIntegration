@@ -53,9 +53,9 @@ public sealed class NativeScopeImportTests : IDisposable
     }
 
     [Fact]
-    public async Task DateTimeAndTypeVariablesStayBlockedButNameTheMulseReplacement()
+    public async Task TimeSpanAndTypeVariablesStayBlockedButNameTheMulseReplacement()
     {
-        var (_, definition) = await Import(N("VariableDeclaration", "windowEnd", P("Type", "System.DateTime")), N("VariableDeclaration", "mapType", P("Type", "System.Type")),
+        var (_, definition) = await Import(N("VariableDeclaration", "window", P("Type", "System.TimeSpan")), N("VariableDeclaration", "mapType", P("Type", "System.Type")),
             N("VariableDeclaration", "label", P("Type", "System.Decimal")));
         var reasons = definition.AllNodes().Where(node => node.Kind == NativeFlowNodeKind.Blocked).Select(node => node.BlockReason).ToArray();
         Assert.Contains(reasons, reason => reason.Contains("durable-batch-augment", StringComparison.Ordinal));
@@ -65,15 +65,61 @@ public sealed class NativeScopeImportTests : IDisposable
     }
 
     [Fact]
-    public async Task StatementsUsingDateTimeStayBlockedWithADateTimeReasonNotASchemaFieldReason()
+    public async Task StatementsUsingTimeSpanStayBlockedWithADateTimeReasonNotASchemaFieldReason()
     {
-        var (_, definition) = await Import(N("VariableDeclaration", "windowEnd", P("Type", "System.DateTime")),
-            Assign("Fresh", "windowEnd = System.DateTime.Now;"), Assign("Hour", "result = windowEnd.Hour;"),
-            N("While", "Window", P("Expression", "System.DateTime.Compare(windowEnd, System.DateTime.Now) > 0")));
+        var (_, definition) = await Import(N("VariableDeclaration", "windowEnd", P("Type", "System.TimeSpan")),
+            Assign("Fresh", "windowEnd = System.TimeSpan.Zero;"), Assign("Hour", "result = windowEnd.Hours;"),
+            N("While", "Window", P("Expression", "windowEnd.TotalSeconds > 0")));
         var reasons = definition.AllNodes().Where(node => node.Kind == NativeFlowNodeKind.Blocked && node.Name is "Fresh" or "Hour" or "Window").Select(node => node.BlockReason).ToArray();
         Assert.Equal(3, reasons.Length);
         Assert.All(reasons, reason => { Assert.Contains("date and time", reason, StringComparison.Ordinal); Assert.Contains("durable-batch-augment", reason, StringComparison.Ordinal); });
         Assert.DoesNotContain(reasons, reason => reason.Contains("distinguished", StringComparison.Ordinal));
+    }
+
+    private static bool Fail(string message) => throw new Xunit.Sdk.XunitException(message);
+
+    [Fact]
+    public async Task BatchWindowStyleDateTimeStatementsImportNativelyAsUtcWithWarnings()
+    {
+        var (candidate, definition) = await Import(N("Scope", "Window",
+            N("VariableDeclaration", "dtEnd", P("Type", "System.DateTime")), N("VariableDeclaration", "dtStart", P("Type", "System.DateTime")),
+            N("VariableDeclaration", "count", P("Type", "System.Int32")),
+            Assign("Parse", "dtEnd = System.DateTime.Parse(result);"),
+            Assign("Build", "dtEnd = new System.DateTime(dtEnd.Year, dtEnd.Month, dtEnd.Day, dtEnd.Hour, dtEnd.Minute, 0);"),
+            Assign("Shift", "dtEnd = dtEnd.AddDays(count); dtStart = System.DateTime.Now; dtStart = dtEnd;"),
+            Assign("Check", "if (!System.Int32.TryParse(result, out count)) { count = 1; } if (System.DateTime.Compare(dtEnd, dtStart) >= 0 && dtEnd > dtStart) { failed = true; }"),
+            N("Delay", "Pause", P("Timeout", "dtEnd.Subtract(System.DateTime.Now)"))));
+        var all = definition.AllNodes().ToArray();
+        Assert.DoesNotContain(all, node => node.Kind == NativeFlowNodeKind.Blocked && Fail(node.Name + ": " + node.BlockReason));
+        Assert.Equal(2, all.Count(node => node.Kind == NativeFlowNodeKind.DeclareVariable && node.VariableType == NativeScalarType.DateTime));
+        var minimum = all.First(node => node.Kind == NativeFlowNodeKind.DeclareVariable && node.Variable == "dtEnd").Expression!.Literal!;
+        Assert.Equal(NativeScalarType.DateTime, minimum.Type); Assert.Equal(DateTime.MinValue, minimum.Read());
+        var parse = Assert.Single(all, node => node.Expression?.Kind == NativeExpressionKind.ParseInt32OrZero);
+        Assert.Equal("count", parse.Variable);
+        var check = Assert.Single(all, node => node.Kind == NativeFlowNodeKind.If && node.Expression!.Kind == NativeExpressionKind.Not);
+        Assert.Equal(NativeExpressionKind.IsInt32, check.Expression!.Operands[0].Kind);
+        Assert.Equal(NativeExpressionKind.DateTimeFromParts, all.Single(node => node.Name == "Build").Children.Single().Expression!.Kind);
+        var wait = Assert.Single(all, node => node.Kind == NativeFlowNodeKind.Wait);
+        Assert.Equal(0, wait.DurationSeconds); Assert.Equal(NativeExpressionKind.SecondsBetween, wait.DurationExpression!.Kind);
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("imported as UTC", StringComparison.Ordinal));
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("truncated toward zero", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("dtEnd = dtEnd + 1;")]
+    [InlineData("dtEnd = dtEnd - dtStart;")]
+    [InlineData("result = dtEnd.ToString();")]
+    [InlineData("dtEnd = System.DateTime.Parse(result, null);")]
+    [InlineData("dtEnd = new System.DateTime(2000, 1, 1);")]
+    [InlineData("dtEnd = dtEnd.AddDays(result);")]
+    [InlineData("if (System.Int32.TryParse(result, out count) && count > 0) { failed = true; }")]
+    [InlineData("failed = dtEnd == 5;")]
+    public async Task UnprovenDateTimeAndTryParseFormsStayBlocked(string statement)
+    {
+        var (_, definition) = await Import(N("Scope", "Window", N("VariableDeclaration", "dtEnd", P("Type", "System.DateTime")), N("VariableDeclaration", "dtStart", P("Type", "System.DateTime")),
+            N("VariableDeclaration", "count", P("Type", "System.Int32")), Assign("Use", statement)));
+        Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked && node.Name != "Use");
+        Assert.Contains(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked && node.Name == "Use");
     }
 
     [Fact]

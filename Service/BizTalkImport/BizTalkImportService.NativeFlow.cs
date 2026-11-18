@@ -23,9 +23,10 @@ public sealed partial class BizTalkImportService
     private static readonly System.Text.RegularExpressions.Regex NsoftwareTransportPattern = new(@"^nsoftware\.S?FTP( \d{4})?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private static bool ContainsTransformCall(IEnumerable<NativeFlowNode> nodes)
         => nodes.Any(node => node.Kind == NativeFlowNodeKind.InvokeTransform || ContainsTransformCall(node.Children) || ContainsTransformCall(node.Otherwise));
+    private const string DateTimeWarning = "Date and time values are imported as UTC with the invariant culture: DateTime.Now and DateTime.UtcNow both read the UTC clock (the BizTalk host's local time zone and culture are unknown and not applied), DateTime.Parse treats text without an offset as UTC, and the Year/Month/Day/Hour/Minute/Second parts are UTC parts. The default for an uninitialized DateTime is DateTime.MinValue as UTC. Review every date-time value and literal in the editor (the editor shows server-local time with a UTC toggle).";
     private static string UnsupportedVariableHint(string? type) => type switch
     {
-        "System.DateTime" or "System.TimeSpan" => " Date and time arithmetic is not translated. If this computes a batch window (collect until a daily BatchTime or an N:D/H/M interval), replace the whole loop with the 'durable-batch-augment' module in message/policy mode; for a fixed delay use a native Wait.",
+        "System.DateTime" or "System.TimeSpan" => " Native DateTime variables cover Now, DateTime.Parse, the six-argument constructor, Year/Month/Day/Hour/Minute/Second, AddDays/AddHours/AddMinutes, Compare, comparison operators and a Delay on later.Subtract(earlier); TimeSpan variables and any other date/time member are not translated. If this computes a batch window (collect until a daily BatchTime or an N:D/H/M interval), the 'durable-batch-augment' module in message/policy mode replaces the whole loop; for a fixed delay use a native Wait.",
         "System.Type" => " A System.Type variable only holds a map type chosen at run time; use 'Derive native map choices' or a map-dispatch step instead of translating it.",
         _ => ""
     };
@@ -88,10 +89,10 @@ public sealed partial class BizTalkImportService
                 return elementDeclarations.Where(declaration => ancestors.Contains(parents[declaration.Id].Id)).Select(declaration => declaration.Name).ToHashSet(StringComparer.Ordinal);
             }
             var scopeScalarDeclarations = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "VariableDeclaration" && parents.GetValueOrDefault(node.Id)?.ShapeType == "Scope").ToArray();
-            var scalarTypes = variableDeclarations.Concat(scopeScalarDeclarations).Where(node => declarationCounts[node.Name] == 1 && node.Properties.GetValueOrDefault("Type") is "System.String" or "System.Int32" or "System.Boolean")
+            var scalarTypes = variableDeclarations.Concat(scopeScalarDeclarations).Where(node => declarationCounts[node.Name] == 1 && node.Properties.GetValueOrDefault("Type") is "System.String" or "System.Int32" or "System.Boolean" or "System.DateTime")
                 .GroupBy(node => node.Name, StringComparer.Ordinal).Where(group => group.Count() == 1)
                 .ToDictionary(group => group.Key, group => group.Single().Properties["Type"] switch
-                { "System.Int32" => NativeScalarType.Int32, "System.Boolean" => NativeScalarType.Boolean, _ => NativeScalarType.String }, StringComparer.Ordinal);
+                { "System.Int32" => NativeScalarType.Int32, "System.Boolean" => NativeScalarType.Boolean, "System.DateTime" => NativeScalarType.DateTime, _ => NativeScalarType.String }, StringComparer.Ordinal);
             var dynamicPorts = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "PortDeclaration" && NativeExpression.ValidName(node.Name)
                     && node.Children.Any(child => child.ShapeType == "PhysicalBindingAttribute" && child.Properties.GetValueOrDefault("IsDynamic") == "True"))
                 .GroupBy(node => node.Name, StringComparer.Ordinal).Where(group => group.Count() == 1).Select(group => group.Key)
@@ -382,6 +383,18 @@ public sealed partial class BizTalkImportService
                             var rawTimeout = node.Properties.GetValueOrDefault("Timeout", "").Trim();
                             var timeout = rawTimeout.EndsWith(';') ? rawTimeout[..^1].TrimEnd() : rawTimeout;
                             var seconds = ReadConstantTimeoutSeconds(timeout);
+                            if (seconds is null && children.Count == 0)
+                            {
+                                try
+                                {
+                                    var computed = new NativeSourceExpressionReader(timeout, scalarTypes, messages, messageCatalog, contextCatalog: contextCatalog, configuration: configuration).ReadSubtractDurationSeconds();
+                                    translated.Kind = NativeFlowNodeKind.Wait; translated.DurationExpression = computed;
+                                    Warn(DateTimeWarning);
+                                    Warn("A Delay computed from dateTime.Subtract(dateTime) is imported as a Wait whose duration is evaluated once, in whole seconds truncated toward zero; a negative duration waits 0 seconds. Sub-second parts of the source TimeSpan are dropped.");
+                                    return translated;
+                                }
+                                catch (NotSupportedException) { /* Not the dynamic form; the constant-TimeSpan blocker below states the limit. */ }
+                            }
                             if (children.Count != 0 || seconds is null or <= 0 or > 31622400)
                             {
                                 var evidence = rawTimeout.Length > 1024 ? rawTimeout[..1024] + " [truncated]" : rawTimeout;
@@ -419,9 +432,11 @@ public sealed partial class BizTalkImportService
                                 || node.Properties.GetValueOrDefault("ParamDirection", "In") != "In")
                                 throw new NotSupportedException("Only unique service-level or scope-level scalar variables with explicit or language-default initializers are supported; other constructors are not inferred." + UnsupportedVariableHint(node.Properties.GetValueOrDefault("Type")));
                             translated.Kind = NativeFlowNodeKind.DeclareVariable; translated.Variable = node.Name; translated.VariableType = type;
+                            if (type == NativeScalarType.DateTime) Warn(DateTimeWarning);
                             var initializer = node.Properties.GetValueOrDefault("InitialValue");
                             translated.Expression = string.IsNullOrWhiteSpace(initializer)
-                                ? new() { Literal = type switch { NativeScalarType.Int32 => NativeScalar.From(0), NativeScalarType.Boolean => NativeScalar.From(false), _ => NativeScalar.From(null) } }
+                                ? new() { Literal = type switch { NativeScalarType.Int32 => NativeScalar.From(0), NativeScalarType.Boolean => NativeScalar.From(false),
+                                    NativeScalarType.DateTime => NativeScalar.From(DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc)), _ => NativeScalar.From(null) } }
                                 : new NativeSourceExpressionReader(initializer, scalarTypes, messages, messageCatalog, contextCatalog: contextCatalog, configuration: configuration).ReadCondition();
                             return translated;
                         }

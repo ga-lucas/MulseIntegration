@@ -194,6 +194,7 @@
                         throw new JsonException("Expected at most 1000 unique nodes with known kinds and non-null fields.");
                     if (node.Expression is not null) CheckExpression(node.Expression);
                     if (node.NamespaceExpression is not null) CheckExpression(node.NamespaceExpression);
+                    if (node.DurationExpression is not null) CheckExpression(node.DurationExpression);
                     if (node.SelectionExpression is not null) CheckExpression(node.SelectionExpression);
                     if (node.TransformInputs is not null) foreach (var input in node.TransformInputs) CheckExpression(input);
                     if (node.Target is not null) CheckExpression(new() { Kind = "MessageValue", Literal = null, Fact = node.Target });
@@ -216,7 +217,7 @@
                 || (value.Kind == "Literal") != (value.Literal is not null) || (value.Kind == "Variable") != (value.Variable is not null)
                 || (value.Kind == "MessageValue") != (value.Fact is not null)
                 || value.Operands.Count != NativeExpressionEditor.ArityOf(value.Kind)
-                || value.Literal is { } literal && (literal.Type is not ("String" or "Int32" or "Boolean" or "Null") || literal.Value is null))
+                || value.Literal is { } literal && (literal.Type is not ("String" or "Int32" or "Boolean" or "DateTime" or "Null") || literal.Value is null))
                 throw new JsonException("Expected a bounded typed expression tree with active operands only.");
             if (value.Fact is { } fact && (fact.Kind is not ("Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlText" or "XmlCount" or "XmlExists" or "XmlString" or "XmlInt32" or "XmlBoolean")
                 || fact.MessageName is null || fact.MetadataKey is null || fact.Steps is null || fact.Steps.Count > 32
@@ -232,7 +233,8 @@
         if (value.Kind == "Variable" && (string.IsNullOrWhiteSpace(value.Variable) || value.Variable.Length > 128
             || !(char.IsAsciiLetter(value.Variable[0]) || value.Variable[0] == '_') || value.Variable.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '_'))) return false;
         if (value.Literal is { } literal && (literal.Value.Length > 4096 || literal.Type == "Boolean" && literal.Value is not ("true" or "false")
-            || literal.Type == "Null" && literal.Value != "" || literal.Type == "Int32" && !int.TryParse(literal.Value, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _))) return false;
+            || literal.Type == "Null" && literal.Value != "" || literal.Type == "DateTime" && !UiDateTime.TryRead(literal.Value, out _)
+            || literal.Type == "Int32" && !int.TryParse(literal.Value, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _))) return false;
         if (value.Fact is { } fact && !CompleteFact(fact)) return false;
         return value.Operands.All(CompleteExpression);
     }
@@ -272,7 +274,7 @@
             nodes.Any(node => string.IsNullOrWhiteSpace(node.Id) || node.Id.Length > 128 || node.Settings.Count > 128
                 || (node.Kind is "If" or "While") && node.Expression is null && (node.Conditions.Count is < 1 or > 32)
                 || (node.Kind is "DeclareVariable" or "SetVariable") && (string.IsNullOrWhiteSpace(node.Variable) || node.Expression is null)
-                || node.Kind == "DeclareVariable" && node.VariableType is not ("String" or "Int32" or "Boolean")
+                || node.Kind == "DeclareVariable" && node.VariableType is not ("String" or "Int32" or "Boolean" or "DateTime")
                 || node.Expression is not null && (!CompleteExpression(node.Expression) || node.Conditions.Count != 0
                     || node.Kind is not ("DeclareVariable" or "SetVariable" or "If" or "While" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot"))
                 || (node.Kind is "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot") && node.Expression is null
@@ -305,7 +307,8 @@
                 || node.SettingExpressions is { } dynamicSettings && (node.Kind != "Deliver" || dynamicSettings.Count > 32 || dynamicSettings.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Key != pair.Key.Trim() || pair.Key.Length > 128 || !CompleteExpression(pair.Value)))
                 || (node.Kind is "SaveMessage" or "UseMessage" or "Reply" or "Receive" or "Deliver" or "CreateXmlMessage" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules") && string.IsNullOrWhiteSpace(node.MessageName)
                 || (node.Kind == "Terminate") != (node.TerminateMessage is not null) || node.TerminateMessage is { } termination && (string.IsNullOrWhiteSpace(termination) || termination.Length > 2000)
-                || node.Kind == "Wait" && node.DurationSeconds <= 0 || node.DurationSeconds is < 0 or > 31622400
+                || node.Kind == "Wait" && node.DurationExpression is null && node.DurationSeconds <= 0 || node.DurationSeconds is < 0 or > 31622400
+                || node.DurationExpression is not null && (node.Kind != "Wait" || node.DurationSeconds != 0 || !CompleteExpression(node.DurationExpression))
                 || node.Kind == "Receive" && (string.IsNullOrWhiteSpace(node.Channel) || node.CorrelationKeys.Any(string.IsNullOrWhiteSpace))
                 || !_model.Durable && (node.Kind is "Wait" or "Receive" or "Deliver" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate")
                 || _model.Durable && (string.IsNullOrWhiteSpace(_model.CorrelationMetadataKey) || string.IsNullOrWhiteSpace(_model.MessageIdMetadataKey))

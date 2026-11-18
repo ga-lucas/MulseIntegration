@@ -24,7 +24,7 @@ public sealed class NativeControlFlowAugmentModule(IAugmentModuleInvoker augment
             : throw new InvalidOperationException("Named message facts require durable execution; no working-message substitution was made.");
         bool Matches(NativeFlowNode node, IntegrationBatch input)
         {
-            if (node.Expression is not null) return NativeExpression.Boolean(node.Expression.Evaluate(variables, fact => Fact(fact, input)).Read());
+            if (node.Expression is not null) return NativeExpression.Boolean(node.Expression.Evaluate(variables, fact => Fact(fact, input), null, clock).Read());
             if (input.Count != 1) throw new InvalidOperationException($"Native condition '{node.Id}' requires exactly one payload. Use For each payload for a batch.");
             return DecisionRuntime.MatchesAll(input.Payloads[0], node.Conditions, node.Id);
         }
@@ -38,7 +38,7 @@ public sealed class NativeControlFlowAugmentModule(IAugmentModuleInvoker augment
                 {
                     case NativeFlowNodeKind.DeclareVariable:
                     case NativeFlowNodeKind.SetVariable:
-                        NativeVariables.Apply(node, variables, variableTypes, fact => Fact(fact, input));
+                        NativeVariables.Apply(node, variables, variableTypes, fact => Fact(fact, input), null, clock);
                         break;
                     case NativeFlowNodeKind.Sequence:
                         input = await Run(node.Children, input).ConfigureAwait(false);

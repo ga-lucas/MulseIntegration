@@ -14,6 +14,17 @@
         {
             <label class="field-label">Boolean value <select class="selector" @bind="Value.Literal.Value" @bind:after="Notify"><option value="false">false</option><option value="true">true</option></select></label>
         }
+        else if (Value.Literal is { Type: "DateTime" } moment)
+        {
+            <label class="field-label">Date and time entered as
+                <select class="selector" value="@(_serverLocal ? "local" : "utc")" @onchange="ChangeZone">
+                    <option value="local">@UiDateTime.ServerZoneLabel</option>
+                    <option value="utc">UTC</option>
+                </select>
+            </label>
+            <label class="field-label">Date and time <input class="mapping-input" type="datetime-local" step="1" value="@UiDateTime.ToInput(moment.Value, _serverLocal)" @onchange="ChangeMoment" /></label>
+            <p class="field-hint">Stored and executed as UTC: <code>@moment.Value</code>. @(_momentError ?? "The toggle only changes how this value is shown and entered; a server-local time inside a daylight-saving gap is rejected, and an ambiguous one is read as standard time.")</p>
+        }
         else if (Value.Literal is { Type: not "Null" } literal)
         {
             <label class="field-label">Literal value <input class="mapping-input" type="@(literal.Type == "Int32" ? "number" : "text")" @bind="literal.Value" @bind:after="Notify" /></label>
@@ -53,18 +64,24 @@
     [Parameter] public EventCallback Changed { get; set; }
     [Parameter] public int Depth { get; set; }
     internal static readonly string[] AllKinds = ["Literal", "Variable", "Not", "And", "Or", "Equal", "NotEqual", "Less", "LessOrEqual", "Greater", "GreaterOrEqual", "Add", "Subtract", "Multiply", "Divide", "Remainder", "Negate", "MessageValue", "InstanceId",
-        "Length", "IndexOf", "LastIndexOf", "Substring", "SubstringLength", "RegexIsMatch", "ToInt32", "ToText"];
-    private IEnumerable<string> Kinds => Depth >= 32 ? AllKinds.Where(kind => kind is "Literal" or "Variable" or "MessageValue" or "InstanceId") : AllKinds;
-    private static readonly string[] Types = ["String", "Int32", "Boolean", "Null"];
+        "Length", "IndexOf", "LastIndexOf", "Substring", "SubstringLength", "RegexIsMatch", "ToInt32", "ToText",
+        "Now", "ParseDateTime", "DateTimeFromParts", "Year", "Month", "Day", "Hour", "Minute", "Second", "AddDays", "AddHours", "AddMinutes", "AddSeconds", "CompareDateTime", "SecondsBetween", "IsInt32", "ParseInt32OrZero"];
+    private IEnumerable<string> Kinds => Depth >= 32 ? AllKinds.Where(kind => kind is "Literal" or "Variable" or "MessageValue" or "InstanceId" or "Now") : AllKinds;
+    private static readonly string[] Types = ["String", "Int32", "Boolean", "DateTime", "Null"];
     internal static int ArityOf(string kind) => kind switch
     {
-        "Literal" or "Variable" or "MessageValue" or "InstanceId" => 0,
-        "Not" or "Negate" or "Length" or "ToInt32" or "ToText" => 1,
+        "Literal" or "Variable" or "MessageValue" or "InstanceId" or "Now" => 0,
+        "Not" or "Negate" or "Length" or "ToInt32" or "ToText" or "ParseDateTime" or "IsInt32" or "ParseInt32OrZero" or "Year" or "Month" or "Day" or "Hour" or "Minute" or "Second" => 1,
         "SubstringLength" => 3,
+        "DateTimeFromParts" => 6,
         _ => 2
     };
     private static string? OperandLabel(string kind, int index) => kind switch
     {
+        "DateTimeFromParts" => new[] { "Year", "Month", "Day", "Hour", "Minute", "Second" }[index],
+        "AddDays" or "AddHours" or "AddMinutes" or "AddSeconds" => index == 0 ? "DateTime" : "Amount (Int32, may be negative)",
+        "CompareDateTime" => index == 0 ? "First DateTime" : "Second DateTime",
+        "SecondsBetween" => index == 0 ? "Later DateTime" : "Earlier DateTime",
         "IndexOf" or "LastIndexOf" => index == 0 ? "Text to search" : "Text to find (ordinal)",
         "Substring" => index == 0 ? "Text" : "Start index (to end of text)",
         "SubstringLength" => index switch { 0 => "Text", 1 => "Start index", _ => "Length" },
@@ -78,7 +95,16 @@
         "Substring" or "SubstringLength" => "Fails the flow when the range is outside the text; nothing is clamped.",
         "RegexIsMatch" => "Unanchored .NET regular expression test with no options and a 2-second limit.",
         "ToInt32" => "Parses a String as a base-10 integer (invariant culture); a null becomes 0 and an invalid value fails the flow.",
-        "ToText" => "Converts an Int32, Boolean or String to text (Boolean becomes True or False).",
+        "ToText" => "Converts an Int32, Boolean, DateTime or String to text (Boolean becomes True or False; a DateTime becomes ISO 8601 UTC text ending in Z).",
+        "Now" => "The current UTC date and time, read each time the step runs. After a restart a re-run step reads the clock again.",
+        "ParseDateTime" => "Parses text with the invariant culture. Text without an offset is UTC and an offset is converted to UTC. A time-only text such as 06:15 takes today's UTC date from the flow clock. Invalid text fails the flow.",
+        "DateTimeFromParts" => "Builds a UTC date and time from whole numbers; an impossible date such as February 30 fails the flow.",
+        "Year" or "Month" or "Day" or "Hour" or "Minute" or "Second" => "The UTC part of a DateTime, as an Int32.",
+        "AddDays" or "AddHours" or "AddMinutes" or "AddSeconds" => "Adds whole units to a DateTime. Fails the flow if the result leaves the supported date range.",
+        "CompareDateTime" => "-1 when the first is earlier, 0 when equal, 1 when later.",
+        "IsInt32" => "True when the text is a valid base-10 integer (invariant culture, optional sign and surrounding spaces). A null or invalid text is false. Mirrors the success result of Int32.TryParse.",
+        "ParseInt32OrZero" => "Parses text as a base-10 integer (invariant culture); a null or invalid text becomes 0 instead of failing. Mirrors the value Int32.TryParse leaves in its out variable.",
+        "SecondsBetween" => "Whole seconds from the earlier to the later DateTime (truncated toward zero; negative when reversed). Use it as a Wait duration.",
         _ => null
     };
     private Task Notify() => Changed.InvokeAsync();
@@ -94,7 +120,18 @@
     private async Task ChangeType(ChangeEventArgs args)
     {
         if (Value.Literal is null || args.Value is not string type || !Types.Contains(type)) return;
-        Value.Literal.Type = type; Value.Literal.Value = type == "Int32" ? "0" : type == "Boolean" ? "false" : "";
+        Value.Literal.Type = type; Value.Literal.Value = type == "Int32" ? "0" : type == "Boolean" ? "false" : type == "DateTime" ? UiDateTime.DefaultUtcText : ""; _momentError = null;
+        await Notify();
+    }
+    private bool _serverLocal = true;
+    private string? _momentError;
+    private void ChangeZone(ChangeEventArgs args) => _serverLocal = args.Value?.ToString() != "utc";
+    private async Task ChangeMoment(ChangeEventArgs args)
+    {
+        if (Value.Literal is null) return;
+        if (!UiDateTime.TryFromInput(args.Value?.ToString(), _serverLocal, out var utcText))
+        { _momentError = "That date and time is not valid in the chosen zone; the stored UTC value is unchanged."; return; }
+        _momentError = null; Value.Literal.Value = utcText;
         await Notify();
     }
 }

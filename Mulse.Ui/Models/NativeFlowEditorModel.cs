@@ -26,6 +26,7 @@ public sealed class NativeFlowNodeViewModel
     public string BlockReason { get; set; } = "";
     public string MessageName { get; set; } = "";
     public int DurationSeconds { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpressionViewModel? DurationExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? TerminateMessage { get; set; }
     public string Channel { get; set; } = "";
     public List<string> CorrelationKeys { get; set; } = [];

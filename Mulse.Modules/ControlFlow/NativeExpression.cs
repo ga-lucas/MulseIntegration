@@ -5,11 +5,12 @@ using System.Text.RegularExpressions;
 namespace Mulse.Modules.ControlFlow;
 
 [JsonConverter(typeof(JsonStringEnumConverter<NativeScalarType>))]
-public enum NativeScalarType { String, Int32, Boolean, Null }
+public enum NativeScalarType { String, Int32, Boolean, Null, DateTime }
 
 [JsonConverter(typeof(JsonStringEnumConverter<NativeExpressionKind>))]
 public enum NativeExpressionKind { Literal, Variable, Not, And, Or, Equal, NotEqual, Less, LessOrEqual, Greater, GreaterOrEqual, Add, Subtract, Multiply, Divide, Remainder, Negate, MessageValue, InstanceId,
-    Length, IndexOf, LastIndexOf, Substring, SubstringLength, RegexIsMatch, ToInt32, ToText }
+    Length, IndexOf, LastIndexOf, Substring, SubstringLength, RegexIsMatch, ToInt32, ToText,
+    Now, ParseDateTime, DateTimeFromParts, Year, Month, Day, Hour, Minute, Second, AddDays, AddHours, AddMinutes, AddSeconds, CompareDateTime, SecondsBetween, IsInt32, ParseInt32OrZero }
 
 public sealed record NativeScalar(NativeScalarType Type, string Value)
 {
@@ -19,12 +20,14 @@ public sealed record NativeScalar(NativeScalarType Type, string Value)
         NativeScalarType.Int32 when int.TryParse(Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var number) => number,
         NativeScalarType.Boolean when Value is "true" or "false" => Value == "true",
         NativeScalarType.Null when Value == "" => null,
-        _ => throw new ArgumentException("Native scalar requires an exact String, Int32, Boolean or null value.")
+        NativeScalarType.DateTime when Value is { Length: <= 40 } && DateTime.TryParseExact(Value, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var moment) && moment.Kind == DateTimeKind.Utc => moment,
+        _ => throw new ArgumentException("Native scalar requires an exact String, Int32, Boolean, UTC DateTime (ISO 8601 round-trip text ending in Z) or null value.")
     };
     public static NativeScalar From(object? value) => value switch
     {
         string text => new(NativeScalarType.String, text), int number => new(NativeScalarType.Int32, number.ToString(CultureInfo.InvariantCulture)),
         bool boolean => new(NativeScalarType.Boolean, boolean ? "true" : "false"), null => new(NativeScalarType.Null, ""),
+        DateTime { Kind: DateTimeKind.Utc } moment => new(NativeScalarType.DateTime, moment.ToString("O", CultureInfo.InvariantCulture)),
         _ => throw new InvalidOperationException("Native expression produced an unsupported scalar.")
     };
 }
@@ -46,9 +49,11 @@ public sealed class NativeExpression
         {
             if (node is null || depth > 32 || !seen.Add(node) || seen.Count > 256 || !Enum.IsDefined(node.Kind) || node.Operands is null)
                 throw new ArgumentException("Native expressions require an acyclic tree of at most 256 values and 32 levels.");
-            var arity = node.Kind is NativeExpressionKind.Literal or NativeExpressionKind.Variable or NativeExpressionKind.MessageValue or NativeExpressionKind.InstanceId ? 0
-                : node.Kind is NativeExpressionKind.Not or NativeExpressionKind.Negate or NativeExpressionKind.Length or NativeExpressionKind.ToInt32 or NativeExpressionKind.ToText ? 1
-                : node.Kind == NativeExpressionKind.SubstringLength ? 3 : 2;
+            var arity = node.Kind is NativeExpressionKind.Literal or NativeExpressionKind.Variable or NativeExpressionKind.MessageValue or NativeExpressionKind.InstanceId or NativeExpressionKind.Now ? 0
+                : node.Kind is NativeExpressionKind.Not or NativeExpressionKind.Negate or NativeExpressionKind.Length or NativeExpressionKind.ToInt32 or NativeExpressionKind.ToText
+                    or NativeExpressionKind.ParseDateTime or NativeExpressionKind.IsInt32 or NativeExpressionKind.ParseInt32OrZero or NativeExpressionKind.Year or NativeExpressionKind.Month or NativeExpressionKind.Day or NativeExpressionKind.Hour
+                    or NativeExpressionKind.Minute or NativeExpressionKind.Second ? 1
+                : node.Kind == NativeExpressionKind.SubstringLength ? 3 : node.Kind == NativeExpressionKind.DateTimeFromParts ? 6 : 2;
             if (node.Operands.Count != arity || (node.Kind == NativeExpressionKind.Literal) != (node.Literal is not null)
                 || (node.Kind == NativeExpressionKind.Variable) != (node.Variable is not null)
                 || (node.Kind == NativeExpressionKind.MessageValue) != (node.Fact is not null))
@@ -70,13 +75,17 @@ public sealed class NativeExpression
 
     public NativeScalar Evaluate(IReadOnlyDictionary<string, NativeScalar> variables) => Evaluate(variables, null);
 
+    /// <summary>Evaluates with an explicit clock for <see cref="NativeExpressionKind.Now"/> and time-only parsing; the default clock is the system UTC clock.</summary>
+    public NativeScalar EvaluateWithClock(IReadOnlyDictionary<string, NativeScalar> variables, TimeProvider clock) => Evaluate(variables, null, null, clock);
+
     public NativeScalar Evaluate(IReadOnlyDictionary<string, NativeScalar> variables, Func<NativeMessageFact, NativeScalar>? facts)
         => Evaluate(variables, facts, null);
 
-    internal NativeScalar Evaluate(IReadOnlyDictionary<string, NativeScalar> variables, Func<NativeMessageFact, NativeScalar>? facts, string? instanceId)
+    internal NativeScalar Evaluate(IReadOnlyDictionary<string, NativeScalar> variables, Func<NativeMessageFact, NativeScalar>? facts, string? instanceId, TimeProvider? clock = null)
     {
         object? Run(NativeExpression node)
         {
+            if (node.Kind == NativeExpressionKind.Now) return (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime;
             if (node.Kind == NativeExpressionKind.InstanceId) return Guid.TryParseExact(instanceId, "N", out var identity)
                 ? identity.ToString("D") : throw new InvalidOperationException("InstanceId requires a persisted native durable instance identity.");
             if (node.Kind == NativeExpressionKind.MessageValue) return (facts ?? throw new InvalidOperationException("Native message facts require an explicit message resolver."))(node.Fact!).Read();
@@ -91,8 +100,40 @@ public sealed class NativeExpression
             if (node.Kind == NativeExpressionKind.Length) return Text(left).Length;
             if (node.Kind == NativeExpressionKind.ToInt32) return ToInt32(left);
             if (node.Kind == NativeExpressionKind.ToText) return left is null ? null : Format(left);
+            if (node.Kind is NativeExpressionKind.IsInt32 or NativeExpressionKind.ParseInt32OrZero)
+            {
+                // Mirrors Int32.TryParse(text, out value): a null or invalid text is not a number and the value becomes 0. Invariant culture, NumberStyles.Integer.
+                var parsed = left is not null && int.TryParse(Text(left), NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : (int?)null;
+                return node.Kind == NativeExpressionKind.IsInt32 ? parsed.HasValue : parsed ?? 0;
+            }
+            if (node.Kind == NativeExpressionKind.ParseDateTime) return ParseDateTime(Text(left), (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime);
+            if (node.Kind is NativeExpressionKind.Year or NativeExpressionKind.Month or NativeExpressionKind.Day or NativeExpressionKind.Hour or NativeExpressionKind.Minute or NativeExpressionKind.Second)
+            {
+                var moment = Moment(left);
+                return node.Kind switch { NativeExpressionKind.Year => moment.Year, NativeExpressionKind.Month => moment.Month, NativeExpressionKind.Day => moment.Day,
+                    NativeExpressionKind.Hour => moment.Hour, NativeExpressionKind.Minute => moment.Minute, _ => moment.Second };
+            }
             var right = Run(node.Operands[1]);
             if (node.Kind == NativeExpressionKind.SubstringLength) return Substring(Text(left), Integer(right), Integer(Run(node.Operands[2])));
+            if (node.Kind == NativeExpressionKind.DateTimeFromParts)
+                return FromParts(Integer(left), Integer(right), Integer(Run(node.Operands[2])), Integer(Run(node.Operands[3])), Integer(Run(node.Operands[4])), Integer(Run(node.Operands[5])));
+            if (node.Kind is NativeExpressionKind.AddDays or NativeExpressionKind.AddHours or NativeExpressionKind.AddMinutes or NativeExpressionKind.AddSeconds)
+            {
+                var amount = Integer(right);
+                try
+                {
+                    return node.Kind switch { NativeExpressionKind.AddDays => Moment(left).AddDays(amount), NativeExpressionKind.AddHours => Moment(left).AddHours(amount),
+                        NativeExpressionKind.AddMinutes => Moment(left).AddMinutes(amount), _ => Moment(left).AddSeconds(amount) };
+                }
+                catch (ArgumentOutOfRangeException exception) { throw new InvalidOperationException("Native date arithmetic left the supported DateTime range.", exception); }
+            }
+            if (node.Kind == NativeExpressionKind.CompareDateTime) return Moment(left).CompareTo(Moment(right));
+            if (node.Kind == NativeExpressionKind.SecondsBetween) return checked((int)(Moment(left) - Moment(right)).TotalSeconds);
+            if (left is DateTime && right is DateTime && node.Kind is NativeExpressionKind.Less or NativeExpressionKind.LessOrEqual or NativeExpressionKind.Greater or NativeExpressionKind.GreaterOrEqual)
+            {
+                var order = ((DateTime)left).CompareTo((DateTime)right);
+                return node.Kind switch { NativeExpressionKind.Less => order < 0, NativeExpressionKind.LessOrEqual => order <= 0, NativeExpressionKind.Greater => order > 0, _ => order >= 0 };
+            }
             return node.Kind switch
             {
                 NativeExpressionKind.IndexOf => Text(left).IndexOf(Text(right), StringComparison.Ordinal),
@@ -113,6 +154,20 @@ public sealed class NativeExpression
     }
     public static bool Boolean(object? value) => value is bool result ? result : throw new InvalidOperationException("Native predicate requires Boolean operands; no coercion is performed.");
     private static int Integer(object? value) => value is int result ? result : throw new InvalidOperationException("Native arithmetic requires Int32 operands.");
+    private static DateTime Moment(object? value) => value is DateTime result ? result : throw new InvalidOperationException("Native date/time operations require UTC DateTime operands.");
+    private static DateTime FromParts(int year, int month, int day, int hour, int minute, int second)
+    {
+        try { return new DateTime(year, month, day, hour, minute, second, DateTimeKind.Utc); }
+        catch (ArgumentOutOfRangeException exception) { throw new InvalidOperationException("Native DateTime parts are not a valid UTC date and time.", exception); }
+    }
+    // Culture is always invariant and a value without an offset is UTC. A time-only text takes today's UTC date from the flow clock, never the machine's local date.
+    private static DateTime ParseDateTime(string text, DateTime utcNow)
+    {
+        if (TimeOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+            return new DateTime(DateOnly.FromDateTime(utcNow), time, DateTimeKind.Utc);
+        return DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var moment)
+            ? moment : throw new InvalidOperationException("Native ParseDateTime operand is not a valid date/time (invariant culture; UTC assumed when no offset is given).");
+    }
     private static string Text(object? value) => value as string ?? throw new InvalidOperationException("Native string operations require non-null String operands; no coercion is performed.");
     private static string Substring(string text, int start, int? length)
     {
@@ -148,6 +203,7 @@ public sealed class NativeExpression
     private static string Format(object? value) => value switch
     {
         null => "", string text => text, bool boolean => boolean ? "True" : "False", int number => number.ToString(CultureInfo.InvariantCulture),
+        DateTime moment => moment.ToString("O", CultureInfo.InvariantCulture),
         _ => throw new InvalidOperationException("Native string conversion requires scalar operands.")
     };
 }

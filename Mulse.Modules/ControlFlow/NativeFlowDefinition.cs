@@ -21,6 +21,8 @@ public sealed class NativeFlowNode
     public string BlockReason { get; set; } = "";
     public string MessageName { get; set; } = "";
     public int DurationSeconds { get; set; }
+    /// <summary>Wait only: optional Int32 expression giving the delay in whole seconds, evaluated once when the wait starts (a negative result waits zero seconds). Mutually exclusive with a fixed <see cref="DurationSeconds"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpression? DurationExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? TerminateMessage { get; set; }
     public string Channel { get; set; } = "";
     public List<string> CorrelationKeys { get; set; } = [];
@@ -120,7 +122,7 @@ public sealed class NativeFlowDefinition
                     if (!variableNode && !messageWrite && node.Kind is not (NativeFlowNodeKind.If or NativeFlowNodeKind.While) || node.Conditions.Count != 0)
                         throw new ArgumentException($"Native node '{node.Id}' has an inactive expression or mixed predicate modes.");
                 }
-                if (!flow.Durable && (node.Expression?.RequiresInstance == true || node.NamespaceExpression?.RequiresInstance == true))
+                if (!flow.Durable && (node.Expression?.RequiresInstance == true || node.NamespaceExpression?.RequiresInstance == true || node.DurationExpression?.RequiresInstance == true))
                     throw new ArgumentException($"Native node '{node.Id}' uses InstanceId, which requires durable=true.");
                 if (messageWrite && node.Expression is null || (node.Kind == NativeFlowNodeKind.SetMessageValue) != (node.Target is not null))
                     throw new ArgumentException($"Native node '{node.Id}' requires a value expression and an active target only for SetMessageValue.");
@@ -185,6 +187,12 @@ public sealed class NativeFlowDefinition
                 if (node.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive
                     ? node.DurationSeconds is < 0 or > 31622400 : node.DurationSeconds != 0)
                     throw new ArgumentException($"Native node '{node.Id}' has an invalid or inactive duration.");
+                if (node.DurationExpression is not null)
+                {
+                    if (node.Kind != NativeFlowNodeKind.Wait || node.DurationSeconds != 0)
+                        throw new ArgumentException($"Native node '{node.Id}' allows a duration expression only on a Wait without a fixed duration.");
+                    NativeExpression.Validate(node.DurationExpression);
+                }
                 if (node.Kind == NativeFlowNodeKind.Receive)
                 {
                     if (string.IsNullOrWhiteSpace(node.Channel) || node.Channel.Length > 128 || node.Channel != node.Channel.Trim()

@@ -9,7 +9,7 @@ BizTalk project -> analyzed artifacts -> canonical Mulse model
 				-> Flow Designer + Mapping Designer -> native Mulse workflow
 ```
 
-Latest verification: 2,442 service tests (the 29 empty leftover files were removed; no tests lost)
+Latest verification: 2,473 service tests (the 29 empty leftover files were removed; no tests lost)
 
 Report-bearing imports remain disabled and fail closed until verified translation support exists. Configuration review and report statuses are not approvals. Older imports without migration metadata require reanalysis/re-import to receive the gate.
 
@@ -86,6 +86,14 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Importer:** `intVariable.ToString()` imports as an explicit text conversion; DateTime/TimeSpan/Type variable blocks now name the Mulse replacement; the "no distinguished field" message names the member; unique scratch `XmlDocument` variables stay known in statements that also contain a dynamic transform (the block now names the real cause instead of `msgXml`); `xs:integer` distinguished fields accept Int32 writes and stay blocked for reads (BizTalk exposes them as Decimal).
 - **Report tool:** new `ORCH_HELPERS` and `ORCH_HOSTCONFIG` (must be supplied together). The real host `.config` is not in the samples.
 - **Billing result:** 132 blocked -> 123. Remaining: 46 ports need binding exports, 37 dynamic transforms need policy exports, DateTime batch loops (`System.DateTime.Compare`, `dtTimeOfBatch`), StatementRef/ListenBranch/Listen/correlation shapes.
+
+### Increment: UTC DateTime values (backend UTC, server-local UI with a toggle)
+
+- **Rule:** the backend stores and computes every date-time as UTC with the invariant culture. The UI shows and accepts date-times in server-local time by default, with a per-field "entered as" UTC / server-local toggle. The importer states this as a warning.
+- **Native model:** new `DateTime` scalar (ISO 8601 text ending in `Z`; non-UTC text is rejected) and expression kinds `Now`, `ParseDateTime`, `DateTimeFromParts`, `Year`..`Second`, `AddDays/Hours/Minutes/Seconds`, `CompareDateTime`, `SecondsBetween`, plus `IsInt32` and `ParseInt32OrZero`. A Wait can take a computed `DurationExpression` instead of fixed seconds (evaluated once; negative becomes 0; over 366 days fails). Time-only text such as `06:15` takes its date from the flow clock, not the machine.
+- **Importer:** `System.DateTime` variables (default `DateTime.MinValue` as UTC), `Now`/`UtcNow`, `Parse`, the six-argument constructor, parts, `AddX`, `Compare`, comparisons, and a Delay of `later.Subtract(earlier)`. `if ([!]Int32.TryParse(s, out v))` is split into a parse step plus an `If`. Arithmetic on DateTimes, `ToString`, culture overloads and compound `TryParse` conditions stay blocked.
+- **UI:** expression editor has the new kinds, a DateTime literal with the zone toggle, and a Wait "Fixed seconds / Computed from an expression" mode.
+- **Billing result:** 123 blocked -> 109 (all DateTime variable, date/time statement and `Subtract` delay blocks are gone). Listen/ListenBranch still block the batch loop itself.
 
 ### Increment: ClientIntegration-specific module solution (`ClientIntegration\ClientIntegration.slnx`)
 
