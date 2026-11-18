@@ -89,10 +89,10 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 
 ### Increment: UTC DateTime values (backend UTC, server-local UI with a toggle)
 
-- **Rule:** the backend stores and computes every date-time as UTC with the invariant culture. The UI shows and accepts date-times in server-local time by default, with a per-field "entered as" UTC / server-local toggle. The importer states this as a warning.
+- **Rule:** the backend stores and computes every date-time as UTC with the invariant culture. The UI shows and accepts date-times in server-local time by default, with one global "Times: server local / UTC" display switch in the side menu (saved in the browser, keyed per workspace so a future multi-workspace setup can differ). The importer states this as a warning.
 - **Native model:** new `DateTime` scalar (ISO 8601 text ending in `Z`; non-UTC text is rejected) and expression kinds `Now`, `ParseDateTime`, `DateTimeFromParts`, `Year`..`Second`, `AddDays/Hours/Minutes/Seconds`, `CompareDateTime`, `SecondsBetween`, plus `IsInt32` and `ParseInt32OrZero`. A Wait can take a computed `DurationExpression` instead of fixed seconds (evaluated once; negative becomes 0; over 366 days fails). Time-only text such as `06:15` takes its date from the flow clock, not the machine.
 - **Importer:** `System.DateTime` variables (default `DateTime.MinValue` as UTC), `Now`/`UtcNow`, `Parse`, the six-argument constructor, parts, `AddX`, `Compare`, comparisons, and a Delay of `later.Subtract(earlier)`. `if ([!]Int32.TryParse(s, out v))` is split into a parse step plus an `If`. Arithmetic on DateTimes, `ToString`, culture overloads and compound `TryParse` conditions stay blocked.
-- **UI:** expression editor has the new kinds, a DateTime literal with the zone toggle, and a Wait "Fixed seconds / Computed from an expression" mode.
+- **UI:** expression editor has the new kinds, a DateTime literal that follows the global display switch, and a Wait "Fixed seconds / Computed from an expression" mode.
 - **Billing result:** 123 blocked -> 109 (all DateTime variable, date/time statement and `Subtract` delay blocks are gone). Listen/ListenBranch still block the batch loop itself.
 
 ### Increment: ClientIntegration-specific module solution (`ClientIntegration\ClientIntegration.slnx`)
