@@ -190,7 +190,7 @@ Each phase ends with working, tested behavior and an update to this document. Re
 | **G. Migration** | M1, M4, M5, M6, M7 (M3 is B4). | The imported sample's blockers appear grouped and ranked; a supplied real-output pair yields classified differences. |
 | **H. Extend** | X1, X2. | Generated module scaffolding builds against the contracts and its tests run. |
 
-Recommended order: A, B, C, D, E, F, G, H. If the migration work is the priority, G's deterministic parts (M1, M2, M6) can move to follow A, since they need only the foundations.
+Recommended order: A, B, C, D, E, F, G, H (confirmed: Foundations, then Understand).
 
 ## Testing
 
@@ -221,11 +221,8 @@ Decided:
 3. **Audit trail.** A separate AI activity log per workspace, linked to flows (see Shared engineering work, item 7). You were unsure; this is the recommended option and can be changed before it is built.
 4. **Saved real-data scenarios.** The user can save comparison pairs and history-derived scenarios, under the rules in "Saved real-data scenarios".
 5. **Enable gate.** A flow with unreviewed AI items cannot be enabled until the user acknowledges them.
-
-Still open:
-
-6. **Who may use AI.** Every signed-in user, or a permission an administrator grants?
-7. **First phase.** Foundations then Understand (proposed), or move the deterministic migration parts (M1 blocker triage, M2 glossary, M6 compare with real output) up after Foundations?
+6. **Who may use AI.** Any signed-in user, as long as an administrator has enabled and configured AI assistance. The application's authentication layer and the AI settings are the only controls; no separate AI permission is added at this time. Principle 9 still applies (the assistant has the user's own permissions and no more), and a per-user or per-role permission can be added later without changing the features.
+7. **First phase.** Foundations, then Understand (the order in the phases table). The deterministic migration parts stay in Phase G.
 
 ## Out of scope
 
