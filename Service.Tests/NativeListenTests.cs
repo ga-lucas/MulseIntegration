@@ -188,12 +188,17 @@ public sealed class NativeListenTests
         public ValueTask<T> InvokeAsync<T>(string identifier, object?[]? args) => throw new NotSupportedException();
         public ValueTask<T> InvokeAsync<T>(string identifier, CancellationToken token, object?[]? args) => throw new NotSupportedException();
     }
+    private static readonly JsonSerializerOptions EditorJson = new(JsonSerializerDefaults.Web) { MaxDepth = 128, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
     private static async Task<string> RenderEditor(NativeFlowDefinition flow)
     {
         await using var services = new ServiceCollection().AddLogging().AddSingleton<Microsoft.JSInterop.IJSRuntime, NoJs>().BuildServiceProvider();
         await using var renderer = new HtmlRenderer(services, services.GetRequiredService<ILoggerFactory>());
         return await renderer.Dispatcher.InvokeAsync(async () => (await renderer.RenderComponentAsync<NativeFlowEditor>(ParameterView.FromDictionary(
-            new Dictionary<string, object?> { ["Value"] = JsonSerializer.Serialize(flow, JsonSerializerOptions.Web) }))).ToHtmlString());
+            new Dictionary<string, object?>
+                        {
+                            ["Value"] = JsonSerializer.Serialize(flow, EditorJson),
+                            ["Modules"] = new[] { "start", "got", "timeout", "after" }.Select(id => new Mulse.Ui.Models.ModuleViewModel(id, id, "Render", "Synthetic", [], [], [], [])).ToArray()
+                        }))).ToHtmlString());
     }
 
     [Fact]

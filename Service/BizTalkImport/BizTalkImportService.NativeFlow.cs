@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml.Linq;
 using Mulse.Modules.ControlFlow;
 using Mulse.Modules.Decisions;
 using Mulse.Modules.Orchestration;
@@ -240,6 +241,51 @@ public sealed partial class BizTalkImportService
             var correlationTypes = FlattenNativeSource(source.Roots).Where(shape => shape.ShapeType == "CorrelationType" && shape.Name.Length > 0).ToArray();
             var inertCorrelations = new Dictionary<int, string>();
             var inertCorrelationRefs = new HashSet<int>();
+            // A set initialized by the activating Receive and followed by later Receives maps to native Receive correlation keys, which pin the keys' metadata values from the initial message.
+            var followCandidates = new List<(OdxNode Declaration, (string[] Keys, OdxNode Initializer, List<OdxNode> Followers) Follow)>();
+            var correlationFailures = new Dictionary<int, string>();
+            var followedCorrelations = new Dictionary<int, string>();
+            var followedCorrelationRefs = new HashSet<int>();
+            var siblingCorrelationTypes = new Lazy<IReadOnlyList<(string Name, OdxNode Type)>>(() => ReadSiblingCorrelationTypes(paths[0]));
+            var followerKeys = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            (string[] Keys, OdxNode Initializer, List<OdxNode> Followers) ReadFollowedCorrelation(OdxNode declaration)
+            {
+                var typeName = declaration.Properties.GetValueOrDefault("Type", "");
+                var matchingTypes = correlationTypes.Where(type => typeName == type.Name || typeName.EndsWith("." + type.Name, StringComparison.Ordinal)).ToArray();
+                if (matchingTypes.Length == 0) matchingTypes = siblingCorrelationTypes.Value.Where(type => type.Name == typeName).Select(type => type.Type).ToArray();
+                if (declaration.Name.Length == 0 || declaration.Properties.GetValueOrDefault("ParamDirection", "In") != "In" || matchingTypes.Length != 1)
+                    throw new NotSupportedException("Correlation set is a service parameter or its type is not declared exactly once in the supplied source; it needs explicit native channel and correlation-key bindings.");
+                OdxNode? initializer = null;
+                var followers = new List<OdxNode>();
+                foreach (var reference in declaration.Children)
+                {
+                    if (reference.ShapeType != "StatementRef" || reference.Children.Count != 0
+                        || !sourceShapes.TryGetValue(reference.Properties.GetValueOrDefault("Ref", ""), out var target) || target.ShapeType != "Receive")
+                        throw new NotSupportedException("Correlation set is initialized by a non-Receive statement or has statements that could not be proven; only Receive-initialized, Receive-followed sets are translated.");
+                    var initializes = reference.Properties.GetValueOrDefault("Initializes");
+                    if (initializes == "True")
+                    {
+                        if (initializer is not null) throw new NotSupportedException("Correlation set is initialized by more than one Receive; it needs explicit native correlation-key bindings.");
+                        initializer = target;
+                    }
+                    else if (initializes == "False" && !followers.Contains(target)) followers.Add(target);
+                    else throw new NotSupportedException("Correlation set statement initialization or duplication could not be proven.");
+                }
+                if (initializer is null || followers.Count == 0 || initializer.Properties.GetValueOrDefault("Activate") != "True" || parents.GetValueOrDefault(initializer.Id)?.ShapeType != "ServiceBody"
+                    || followers.Any(follower => follower.Properties.GetValueOrDefault("Activate") == "True"))
+                    throw new NotSupportedException("A followed correlation set must be initialized by the service's activating Receive and followed only by non-activating Receives; other shapes need explicit native correlation-key bindings.");
+                var initialMessage = initializer.Properties.GetValueOrDefault("MessageName", "");
+                var keys = new List<string>();
+                foreach (var property in matchingTypes[0].Children)
+                {
+                    if (property.ShapeType != "PropertyRef" || property.Children.Count != 0)
+                        throw new NotSupportedException("Correlation type has an unsupported member; only property references are translated.");
+                    var key = contextCatalog.Resolve(initialMessage, property.Properties.GetValueOrDefault("Ref", "")).MetadataKey;
+                    if (!keys.Contains(key, StringComparer.Ordinal)) keys.Add(key);
+                }
+                if (keys.Count == 0 || keys.Count > 128) throw new NotSupportedException("Correlation type has no property references or too many to pin natively.");
+                return ([.. keys], initializer, followers);
+            }
             foreach (var declaration in FlattenNativeSource(source.Roots).Where(shape => shape.ShapeType == "CorrelationDeclaration"))
             {
                 var typeName = declaration.Properties.GetValueOrDefault("Type", "");
@@ -252,9 +298,27 @@ public sealed partial class BizTalkImportService
                         && sourceShapes.TryGetValue(reference.Properties.GetValueOrDefault("Ref", ""), out var target) && target.ShapeType == "Send") senders.Add(target.Name);
                     else inert = false;
                 }
-                if (!inert) continue;
+                if (!inert)
+                {
+                    try { followCandidates.Add((declaration, ReadFollowedCorrelation(declaration))); }
+                    catch (NotSupportedException exception) { correlationFailures[declaration.Id] = exception.Message; }
+                    continue;
+                }
                 inertCorrelations[declaration.Id] = senders.Count == 0 ? "declared, unused" : "initialized by Send " + string.Join(", ", senders.Distinct(StringComparer.Ordinal).Select(name => "'" + name + "'")) + ", never followed";
                 foreach (var reference in declaration.Children) inertCorrelationRefs.Add(reference.Id);
+            }
+            var followerUse = followCandidates.SelectMany(item => item.Follow.Followers.Select(follower => follower.SourceId)).GroupBy(id => id, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            foreach (var (declaration, follow) in followCandidates)
+            {
+                if (follow.Followers.Any(follower => followerUse[follower.SourceId] > 1))
+                {
+                    correlationFailures[declaration.Id] = "A following Receive belongs to more than one correlation set; combine them explicitly in native Receive correlation keys.";
+                    continue;
+                }
+                followedCorrelations[declaration.Id] = "initialized by Receive '" + follow.Initializer.Name + "', followed by Receive " + string.Join(", ", follow.Followers.Select(follower => "'" + follower.Name + "'"))
+                    + "; native correlation keys: " + string.Join(", ", follow.Keys);
+                foreach (var reference in declaration.Children) followedCorrelationRefs.Add(reference.Id);
+                foreach (var follower in follow.Followers) followerKeys[follower.SourceId] = follow.Keys;
             }
             NativeFlowNode Convert(OdxNode node)
             {
@@ -488,6 +552,25 @@ public sealed partial class BizTalkImportService
                             Warn("Receive filters become native receive conditions on promoted-metadata keys. Native comparisons are case-insensitive (BizTalk filters are case-sensitive), and Exists requires a non-blank value (BizTalk tests presence). The host must supply the channel and these metadata keys, and unmatched messages are rejected rather than routed elsewhere; review each filter.");
                         }
                         translated.Kind = NativeFlowNodeKind.Receive; translated.MessageName = message; translated.Channel = channel;
+                        if (followerKeys.TryGetValue(node.SourceId, out var pinnedKeys))
+                        {
+                            translated.CorrelationKeys = [.. pinnedKeys];
+                            Warn("A Receive that follows a correlation set accepts only messages whose metadata values for the set's promoted-property keys equal the values pinned from the initial (activating) message; mismatches are rejected, not routed elsewhere. BizTalk checks the property promotion at design time; here the host must supply these metadata keys (the XSD property-schema names) on every message, and the promotion itself is not verified.");
+                        }
+                        return translated;
+                    case "Listen":
+                        {
+                            var heads = children.Select(branch => branch.Kind == NativeFlowNodeKind.Sequence && branch.Children.Count > 0 ? branch.Children[0] : null).ToArray();
+                            if (node.Children.Count is < 2 or > 16 || node.Children.Any(branch => branch.ShapeType != "ListenBranch"))
+                                return Block(node, "Listen requires 2 to 16 ordered branches, each starting with a Receive or a Delay.", children);
+                            if (heads.Any(head => head is null || head.Kind is not (NativeFlowNodeKind.Receive or NativeFlowNodeKind.Wait)) || heads.Count(head => head!.Kind == NativeFlowNodeKind.Wait) > 1 || heads.All(head => head!.Kind == NativeFlowNodeKind.Wait))
+                                return Block(node, "Listen branches must each start with a translated Receive or a translated Delay (at most one Delay, which acts as the timeout), with at least one Receive; a branch trigger is blocked or unsupported.", children);
+                            translated.Kind = NativeFlowNodeKind.Listen;
+                            Warn("A Listen waits for the first matching Receive branch in source order, or runs its Delay branch when that timeout passes; the timeout is fixed when the Listen is entered and survives restarts. A message arriving after the timeout, or one that matches no branch, is rejected rather than queued. BizTalk's simultaneous-arrival tie-breaking is not reproduced.");
+                            return translated;
+                        }
+                    case "ListenBranch":
+                        translated.Kind = NativeFlowNodeKind.Sequence;
                         return translated;
                     case "Send":
                         if (children.Count > 0) return Block(node, "Send contains unsupported nested behavior.", children);
@@ -544,8 +627,14 @@ public sealed partial class BizTalkImportService
                     case "StatementRef" when inertCorrelationRefs.Contains(node.Id):
                         translated.Name = "StatementRef (not enforced): " + node.Name;
                         return translated;
+                    case "CorrelationDeclaration" when followedCorrelations.TryGetValue(node.Id, out var followedEvidence):
+                        translated.Name = "CorrelationDeclaration (enforced by Receive correlation keys): " + node.Name + " - " + followedEvidence;
+                        return translated;
+                    case "StatementRef" when followedCorrelationRefs.Contains(node.Id):
+                        translated.Name = "StatementRef (enforced by Receive correlation keys): " + node.Name;
+                        return translated;
                     case "CorrelationDeclaration":
-                        return Block(node, "Correlation set is followed by a Receive, is initialized by a non-Send statement, or its type or statements could not be proven; it needs explicit native channel and correlation-key bindings.", children);
+                        return Block(node, correlationFailures.GetValueOrDefault(node.Id, "Correlation set is followed by a Receive, is initialized by a non-Send statement, or its type or statements could not be proven; it needs explicit native channel and correlation-key bindings."), children);
                     case "LongRunningTransaction": case "AtomicTransaction": case "TransactionAttribute":
                         if (children.Count != 0) return Block(node, $"{node.ShapeType} contains unsupported nested behavior.", children);
                         var transactionSettings = string.Join("; ", node.Properties.Where(pair => pair.Key is not ("Name" or "Signal" or "ReportToAnalyst")).OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value));
@@ -594,6 +683,36 @@ public sealed partial class BizTalkImportService
                 ScaffoldedModules = candidate.ScaffoldedModules.Where(module => !module.ModuleId.StartsWith("odx-translated-", StringComparison.Ordinal)).ToArray()
             };
         }
+    }
+
+    // Correlation types may be declared in another orchestration of the same BizTalk project; only the explicitly included XLang items of the one owning .btproj are read.
+    private static IReadOnlyList<(string Name, OdxNode Type)> ReadSiblingCorrelationTypes(string orchestrationPath)
+    {
+        var result = new List<(string, OdxNode)>();
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(orchestrationPath))!;
+            var owners = new List<List<BizTalkArtifactResponse>>();
+            foreach (var projectPath in Directory.EnumerateFiles(directory, "*.btproj", SearchOption.TopDirectoryOnly))
+            {
+                var artifacts = new List<BizTalkArtifactResponse>();
+                AddArtifacts(XDocument.Load(projectPath), directory, directory, "XLang", "Orchestration", artifacts);
+                if (artifacts.Any(artifact => string.Equals(artifact.FullPath, Path.GetFullPath(orchestrationPath), StringComparison.OrdinalIgnoreCase))) owners.Add(artifacts);
+            }
+            if (owners.Count != 1) return result;
+            foreach (var artifact in owners[0].Where(artifact => !string.Equals(artifact.FullPath, Path.GetFullPath(orchestrationPath), StringComparison.OrdinalIgnoreCase)).Take(256))
+            {
+                try
+                {
+                    foreach (var module in FlattenNativeSource(OdxProgramReader.ReadFile(artifact.FullPath).Roots).Where(shape => shape.ShapeType == "Module" && shape.Name.Length > 0))
+                        foreach (var type in module.Children.Where(child => child.ShapeType == "CorrelationType" && child.Name.Length > 0))
+                            result.Add((module.Name + "." + type.Name, type));
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException or ArgumentException or NotSupportedException or InvalidOperationException) { /* An unreadable sibling cannot prove a type; the set stays blocked. */ }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException) { /* No readable owning project: no sibling evidence. */ }
+        return result;
     }
 
     private static int? ReadConstantTimeoutSeconds(string expression)

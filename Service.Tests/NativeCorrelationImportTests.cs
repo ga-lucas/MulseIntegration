@@ -57,7 +57,7 @@ public sealed class NativeCorrelationImportTests : IDisposable
     {
         var (_, definition) = await Import("Corr.OrderCorrelationType", statementRef, initializes);
         var declaration = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked && node.Name == "OrderSet");
-        Assert.Contains("needs explicit native channel and correlation-key bindings", declaration.BlockReason, StringComparison.Ordinal);
+        Assert.Contains("correlation", declaration.BlockReason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

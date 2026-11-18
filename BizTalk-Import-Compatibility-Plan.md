@@ -95,6 +95,15 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **UI:** expression editor has the new kinds, a DateTime literal that follows the global display switch, and a Wait "Fixed seconds / Computed from an expression" mode.
 - **Billing result:** 123 blocked -> 109 (all DateTime variable, date/time statement and `Subtract` delay blocks are gone). Listen/ListenBranch still block the batch loop itself.
 
+### Increment: native Listen and correlation following
+
+- **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.
+- **UI:** the editor and graph offer `Listen` and flag malformed branch shapes (fewer than 2 branches, a head that is not Receive/Wait, two timeouts, no Receive).
+- **Importer:** `Listen`/`ListenBranch` become native Listens. A correlation set initialized by the activating Receive and followed by later Receives becomes `CorrelationKeys` on those Receives, resolved from the correlation type's property references through the property schemas (string/int/boolean only). The correlation type may live in another orchestration of the same `.btproj` (exact module-qualified name). Anything else (Send-initialized plus followed, shared followers, unknown or unsupported properties) stays blocked with a specific reason.
+- **Warnings stated in the draft:** keys are pinned from the initial message's metadata, property promotion is not verified, and simultaneous-arrival tie-breaking is not reproduced.
+- **Tests:** 12 runtime/UI tests (`NativeListenTests`) and 16 importer tests (`NativeListenImportTests`). Suite: 2,503 passed.
+- **Billing result:** 109 blocked -> 97 (Listen, ListenBranch, StatementRef and the correlation sets are gone). The batch loops still need the 37 map choices from policy exports.
+
 ### Increment: ClientIntegration-specific module solution (`ClientIntegration\ClientIntegration.slnx`)
 
 - **Scope rule:** only ClientIntegration-specific code goes in the new plugin solution; general-purpose helpers belong in the Compatibility Pack, `Mulse.Hl7` or the importer.
