@@ -23,6 +23,12 @@ public sealed partial class BizTalkImportService
     private static readonly System.Text.RegularExpressions.Regex NsoftwareTransportPattern = new(@"^nsoftware\.S?FTP( \d{4})?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private static bool ContainsTransformCall(IEnumerable<NativeFlowNode> nodes)
         => nodes.Any(node => node.Kind == NativeFlowNodeKind.InvokeTransform || ContainsTransformCall(node.Children) || ContainsTransformCall(node.Otherwise));
+    private static string UnsupportedVariableHint(string? type) => type switch
+    {
+        "System.DateTime" or "System.TimeSpan" => " Date and time arithmetic is not translated. If this computes a batch window (collect until a daily BatchTime or an N:D/H/M interval), replace the whole loop with the 'durable-batch-augment' module in message/policy mode; for a fixed delay use a native Wait.",
+        "System.Type" => " A System.Type variable only holds a map type chosen at run time; use 'Derive native map choices' or a map-dispatch step instead of translating it.",
+        _ => ""
+    };
     private static bool ContainsNode(IEnumerable<NativeFlowNode> nodes, Func<NativeFlowNode, bool> predicate)
         => nodes.Any(node => predicate(node) || ContainsNode(node.Children, predicate) || ContainsNode(node.Otherwise, predicate));
     private static bool IsHl7Multipart(OdxNode type)
@@ -401,7 +407,7 @@ public sealed partial class BizTalkImportService
                             if (!variableDeclarations.Concat(scopeScalarDeclarations).Any(declaration => declaration.Id == node.Id) || !scalarTypes.TryGetValue(node.Name, out var type)
                                 || node.Children.Count != 0 || node.Properties.GetValueOrDefault("UseDefaultConstructor", "False") != "False"
                                 || node.Properties.GetValueOrDefault("ParamDirection", "In") != "In")
-                                throw new NotSupportedException("Only unique service-level or scope-level scalar variables with explicit or language-default initializers are supported; other constructors are not inferred.");
+                                throw new NotSupportedException("Only unique service-level or scope-level scalar variables with explicit or language-default initializers are supported; other constructors are not inferred." + UnsupportedVariableHint(node.Properties.GetValueOrDefault("Type")));
                             translated.Kind = NativeFlowNodeKind.DeclareVariable; translated.Variable = node.Name; translated.VariableType = type;
                             var initializer = node.Properties.GetValueOrDefault("InitialValue");
                             translated.Expression = string.IsNullOrWhiteSpace(initializer)

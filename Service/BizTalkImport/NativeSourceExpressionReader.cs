@@ -457,6 +457,13 @@ internal sealed class NativeSourceExpressionReader
             return new() { Kind = NativeExpressionKind.RegexIsMatch, Operands = [input, pattern] };
         }
         var dot = token.LastIndexOf('.');
+        if (dot > 0 && token[(dot + 1)..] == "ToString" && _variables.ContainsKey(token[..dot]))
+        {
+            var operand = new NativeExpression { Kind = NativeExpressionKind.Variable, Variable = NativeVariableName(token[..dot]) };
+            RequireType(operand, "ToString", NativeScalarType.String, NativeScalarType.Int32, NativeScalarType.Boolean);
+            Next(); Expect("("); Expect(")");
+            return new() { Kind = NativeExpressionKind.ToText, Operands = [operand] };
+        }
         if (dot <= 0 || token[(dot + 1)..] is not ("Length" or "IndexOf" or "LastIndexOf" or "Substring")) return null;
         var member = token[(dot + 1)..];
         NativeExpression receiver;

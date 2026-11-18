@@ -53,6 +53,18 @@ public sealed class NativeScopeImportTests : IDisposable
     }
 
     [Fact]
+    public async Task DateTimeAndTypeVariablesStayBlockedButNameTheMulseReplacement()
+    {
+        var (_, definition) = await Import(N("VariableDeclaration", "windowEnd", P("Type", "System.DateTime")), N("VariableDeclaration", "mapType", P("Type", "System.Type")),
+            N("VariableDeclaration", "label", P("Type", "System.Decimal")));
+        var reasons = definition.AllNodes().Where(node => node.Kind == NativeFlowNodeKind.Blocked).Select(node => node.BlockReason).ToArray();
+        Assert.Contains(reasons, reason => reason.Contains("durable-batch-augment", StringComparison.Ordinal));
+        Assert.Contains(reasons, reason => reason.Contains("Derive native map choices", StringComparison.Ordinal));
+        Assert.Single(reasons, reason => !reason.Contains("durable-batch-augment", StringComparison.Ordinal) && !reason.Contains("Derive native map choices", StringComparison.Ordinal)
+            && reason.StartsWith("Only unique service-level", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ScopeWithoutCatchIsAPlainSequenceAndScopeLocalScalarsAreDeclared()
     {
         var (candidate, definition) = await Import(N("Scope", "Work", N("VariableDeclaration", "local", P("Type", "System.Int32"), P("InitialValue", "3")),

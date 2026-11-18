@@ -95,7 +95,7 @@ internal sealed class NativeSourceMessageCatalog
         };
         var message = member.Split('.')[0];
         throw new NotSupportedException(_failures.GetValueOrDefault(member, _failures.GetValueOrDefault(message,
-            "Source member has no exact distinguished schema-field declaration; ordinary XML members and context properties are not inferred.")));
+            $"Source member '{member}' has no exact distinguished schema-field declaration; ordinary XML members and context properties are not inferred.")));
     }
 
     public void ValidatePolicyMessage(string message, XmlRulePolicy policy)

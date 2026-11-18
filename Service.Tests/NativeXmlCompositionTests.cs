@@ -115,6 +115,15 @@ public sealed class NativeXmlCompositionTests : IDisposable
         Assert.DoesNotContain("Original JSON is preserved", html); Assert.DoesNotContain("Some nodes are incomplete", html);
     }
 
+    [Fact]
+    public async Task IntegerVariableToStringImportsAsExplicitTextConversionInsideLoadXml()
+    {
+        var (_, definition) = await Import(first: "document = new System.Xml.XmlDocument(); element = document.CreateElement(\"\", rules.RootName, rules.RootNamespace); document.AppendChild(element); count = 2; header.LoadXml(\"<h:Header xmlns:h='urn:header'><Count>\" + count.ToString() + \"</Count></h:Header>\"); document.DocumentElement.AppendChild(document.ImportNode(header.FirstChild, true)); before = document;");
+        Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
+        Assert.Contains(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.CreateXmlMessage && node.Expression!.Kind == NativeExpressionKind.Add
+            && node.Expression.Operands.Any(operand => operand.Kind == NativeExpressionKind.Add && operand.Operands.Any(inner => inner.Kind == NativeExpressionKind.ToText)));
+    }
+
     [Theory]
     [InlineData("document = new System.Xml.XmlDocument(); element = document.CreateElement(\"p\", \"Root\", \"urn:r\"); document.AppendChild(element);")]
     [InlineData("document = new System.Xml.XmlDocument(); element = document.CreateElement(\"\", \"Root\", \"urn:r\"); header.AppendChild(element);")]
