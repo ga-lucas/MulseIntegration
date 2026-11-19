@@ -32,7 +32,7 @@
             <div class="overview-stat"><dt>Disabled</dt><dd>@summary.DisabledCount</dd></div>
             <div class="overview-stat"><dt>Need setup</dt><dd>@summary.FlowsByHealth[FlowHealth.NeedsSetup]</dd></div>
             <div class="overview-stat"><dt>Modules</dt><dd>@summary.ModuleCount</dd></div>
-            <div class="overview-stat"><dt>Success rate</dt><dd>@(summary.SuccessRate is { } rate ? rate.ToString("P0", CultureInfo.InvariantCulture) : "n/a")</dd></div>
+            <div class="overview-stat"><dt>Success rate</dt><dd>@(summary.SuccessRate is { } rate ? Pct(rate) : "n/a")</dd></div>
         </dl>
 
         @if (summary.FlowCount == 0)
@@ -132,6 +132,43 @@
 
             @if (summary.HasRunData)
             {
+                <Panel Title="Failure patterns" Description="Recent failed, held and retrying runs grouped by likely cause. A starting point, not a diagnosis.">
+                    @if (_patternsNote is not null)
+                    {
+                        <p class="empty-state" role="status">Failure patterns are not available. @_patternsNote</p>
+                    }
+                    else if (_patterns is null || _patterns.Patterns.Count == 0)
+                    {
+                        <p class="empty-state">No recent failed, held or retrying runs.</p>
+                    }
+                    else
+                    {
+                        @if (_patterns.Headline is not null)
+                        {
+                            <p class="home-headline">@_patterns.Headline</p>
+                        }
+                        <ul class="home-list">
+                            @foreach (var pattern in _patterns.Patterns.Take(5))
+                            {
+                                <li>
+                                    <span class="home-pattern-title"><strong>@pattern.Category</strong> at <code>@pattern.Stage</code></span>
+                                    <span>@pattern.Runs run(s) (@Pct(pattern.Share)) in @pattern.FlowCount flow(s): @string.Join(", ", pattern.FlowIds)</span>
+                                    <span>Check: @pattern.WhatToCheck</span>
+                                    @if (pattern.FlowIds.Count > 0)
+                                    {
+                                        <a href="@("/history/" + Uri.EscapeDataString(pattern.FlowIds[0]))">See runs for @pattern.FlowIds[0]</a>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                        @if (_patterns.Patterns.Count > 5)
+                        {
+                            <p class="home-more">and @(_patterns.Patterns.Count - 5) more group(s).</p>
+                        }
+                        <p class="home-more">@string.Join(" ", _patterns.Notes)</p>
+                    }
+                </Panel>
+
                 <Panel Title="Recent runs" Description="The latest executions across all flows.">
                     @if (summary.RecentRuns.Count == 0)
                     {
@@ -164,6 +201,8 @@
     private bool _isLoading = true;
     private string? _errorMessage;
     private string? _historyNote;
+    private FailurePatternReportViewModel? _patterns;
+    private string? _patternsNote;
 
     protected override async Task OnInitializedAsync()
     {
@@ -184,6 +223,18 @@
             }
 
             _summary = DashboardSummary.Build(flows, modules, usages, executions, DateTime.UtcNow);
+
+            if (_summary.HasRunData && _summary.Failed + _summary.Held + _summary.RunsByState.GetValueOrDefault("Retrying") > 0)
+            {
+                try
+                {
+                    _patterns = await ApiClient.GetFailurePatternsAsync(100, CancellationToken.None);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    _patternsNote = exception.Message;
+                }
+            }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -245,6 +296,9 @@
 
     private static string TrendLabel(DashboardSummary summary)
         => "Runs per day: " + string.Join(", ", summary.Last7Days.Select(d => $"{d.Date.ToString("MMM d", CultureInfo.InvariantCulture)} {d.Total}"));
+
+    private static string Pct(double fraction)
+        => Math.Round(fraction * 100, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture) + "%";
 
     private static string Percent(int value, int max)
         => value == 0 ? "2px" : (100d * value / max).ToString("0.##", CultureInfo.InvariantCulture) + "%";

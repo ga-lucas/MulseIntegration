@@ -71,6 +71,18 @@ public static class AssistEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
 
+        group.MapGet("/explain/failures", async (int? take, IServiceProvider services, HttpResponse response, CancellationToken cancellationToken) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                var journal = services.GetService<Service.Execution.FlowJournal>()
+                    ?? throw new InvalidOperationException("Execution history requires a database storage engine, so there are no runs to group.");
+                var (runs, total) = await journal.FailuresForAssistAsync(Math.Clamp(take ?? 100, 1, 200), cancellationToken).ConfigureAwait(false);
+                return TypedResults.Ok(AssistFailurePatterns.Analyze(runs, total));
+            })
+            .WithName("ExplainFailurePatterns")
+            .WithSummary("Recent failed, held and retrying runs grouped by likely cause and stage across flows, with the one change that would clear the most. Never repeats error text or message content, and never offers a retry")
+            .ProducesProblem(StatusCodes.Status409Conflict);
+
         group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
             {
                 response.Headers.CacheControl = "no-store";

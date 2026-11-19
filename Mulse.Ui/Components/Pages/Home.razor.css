@@ -33,4 +33,6 @@
 .home-list li { display: grid; gap: 0.15rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border-subtle); }
 .home-list li:last-child { border-bottom: 0; padding-bottom: 0; }
 .home-list li > span { font-size: 0.85rem; color: var(--text-muted); }
+.home-headline { margin: 0 0 0.75rem; font-weight: 600; }
+.home-pattern-title code { font-size: 0.85em; }
 .home-more { margin: 0.75rem 0 0; font-size: 0.85rem; color: var(--text-muted); }

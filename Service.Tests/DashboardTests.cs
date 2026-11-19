@@ -143,6 +143,38 @@ public sealed class DashboardTests
     }
 
     [Fact]
+    public async Task Page_ShowsFailurePatternsWithoutRepeatingAnything()
+    {
+        var html = await RenderAsync(historyAvailable: true);
+
+        Assert.Contains("Failure patterns", html);
+        Assert.Contains("Authentication or permission", html);
+        Assert.Matches("<code[^>]*>deliver:0</code>", html);
+        Assert.Contains("2 run(s) (67%) in 2 flow(s): flow-a, flow-b", html);
+        Assert.Contains("One change would clear the most", html);
+        Assert.Contains("href=\"/history/flow-a\"", html);
+        Assert.Contains("never retries or resends", html);
+    }
+
+    [Fact]
+    public async Task Page_KeepsWorkingWhenFailurePatternsCannotBeLoaded()
+    {
+        var html = await RenderAsync(historyAvailable: true, patternsFail: true);
+
+        Assert.Contains("Failure patterns are not available", html);
+        Assert.Contains("Pattern service down", html);
+        Assert.Contains("Run outcomes", html);
+    }
+
+    [Fact]
+    public async Task Page_DoesNotAskForFailurePatternsWhenNothingFailed()
+    {
+        var html = await RenderAsync(historyAvailable: true, onlyCompleted: true);
+
+        Assert.Contains("No recent failed, held or retrying runs.", html);
+    }
+
+    [Fact]
     public async Task Page_DegradesToFlowStatsWhenHistoryIsUnavailable()
     {
         var html = await RenderAsync(historyAvailable: false);
@@ -151,6 +183,7 @@ public sealed class DashboardTests
         Assert.Contains("Flow health", html);
         Assert.DoesNotContain("Run outcomes", html);
         Assert.DoesNotContain("Recent runs", html);
+        Assert.DoesNotContain("Failure patterns", html);
         Assert.Contains("n/a", html);
     }
 
@@ -162,9 +195,9 @@ public sealed class DashboardTests
         Assert.Contains("Nothing needs attention", html);
     }
 
-    private static async Task<string> RenderAsync(bool historyAvailable, bool empty = false)
+    private static async Task<string> RenderAsync(bool historyAvailable, bool empty = false, bool patternsFail = false, bool onlyCompleted = false)
     {
-        using var httpClient = new HttpClient(new Handler(historyAvailable, empty)) { BaseAddress = new Uri("http://localhost") };
+        using var httpClient = new HttpClient(new Handler(historyAvailable, empty, patternsFail, onlyCompleted)) { BaseAddress = new Uri("http://localhost") };
         await using var services = new ServiceCollection().AddLogging()
             .AddSingleton<NavigationManager>(new TestNavigationManager())
             .AddSingleton<IMulseApiClient>(new MulseApiClient(httpClient)).BuildServiceProvider();
@@ -177,11 +210,30 @@ public sealed class DashboardTests
         public TestNavigationManager() => Initialize("http://localhost/", "http://localhost/");
     }
 
-    private sealed class Handler(bool historyAvailable, bool empty) : HttpMessageHandler
+    private sealed class Handler(bool historyAvailable, bool empty, bool patternsFail, bool onlyCompleted) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/assist/explain/failures")
+            {
+                Assert.False(onlyCompleted, "Failure patterns must not be requested when no run failed.");
+                if (patternsFail)
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+                    {
+                        Content = JsonContent.Create(new Microsoft.AspNetCore.Mvc.ProblemDetails { Detail = "Pattern service down" })
+                    });
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new FailurePatternReportViewModel(3, 3,
+                    [
+                        new("Authentication or permission", "deliver:0", 2, 2d / 3, ["flow-a", "flow-b"], 2, new() { ["Failed"] = 2 }, "2", 2, "Check the credential.", "Renew the credential."),
+                        new("Timeout", "fetch:input", 1, 1d / 3, ["flow-a"], 1, new() { ["Failed"] = 1 }, "3", 1, "Check the destination.", "Raise the timeout.")
+                    ],
+                    "One change would clear the most: 'Authentication or permission' at 'deliver:0'.",
+                    ["This never retries or resends anything."]))
+                });
+            }
             if (path == "/api/history/executions")
             {
                 if (!historyAvailable)
@@ -196,7 +248,7 @@ public sealed class DashboardTests
                     Content = JsonContent.Create(empty ? [] : new[]
                     {
                         Run("1", "flow-a", "Completed", now.AddMinutes(-5)),
-                        Run("2", "flow-b", "Failed", now.AddMinutes(-4))
+                        Run("2", "flow-b", onlyCompleted ? "Completed" : "Failed", now.AddMinutes(-4))
                     })
                 });
             }

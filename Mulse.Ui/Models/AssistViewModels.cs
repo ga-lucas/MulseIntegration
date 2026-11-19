@@ -23,3 +23,6 @@ public sealed record NodeExplanationViewModel(AssistStepViewModel Step, AssistNo
 public sealed record RunDeliveryExplanationViewModel(string Stage, string State, string Meaning, bool NeedsPerson);
 public sealed record RunExplanationViewModel(string ExecutionId, string FlowId, string State, string Meaning, bool NeedsPerson, List<string> WhatHappened,
     List<RunDeliveryExplanationViewModel> Deliveries, List<string> WhatToCheck, string Disclaimer);
+public sealed record FailurePatternViewModel(string Category, string Stage, int Runs, double Share, List<string> FlowIds, int FlowCount,
+    Dictionary<string, int> States, string MostRecentExecutionId, long MostRecentUtcTicks, string WhatToCheck, string SuggestedChange);
+public sealed record FailurePatternReportViewModel(int RunsConsidered, int RunsGrouped, List<FailurePatternViewModel> Patterns, string? Headline, List<string> Notes);

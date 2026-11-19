@@ -382,6 +382,27 @@ public sealed class FlowJournal : IDurableInbox
                 [.. deliveries.Select(row => new Service.Models.AssistRunDeliveryInput(row.Stage, row.State))]));
         }, false, cancellationToken);
 
+    /// <summary>The most recent failed, held or retrying runs with only their trouble events (not the routine ones) and delivery states. Message content is never loaded.</summary>
+    public Task<(IReadOnlyList<Service.Models.AssistFailureRun> Runs, int Total)> FailuresForAssistAsync(int take, CancellationToken cancellationToken)
+        => UseAsync<(IReadOnlyList<Service.Models.AssistFailureRun>, int)>(async session =>
+        {
+            var problem = session.Db.Executions.AsNoTracking().Where(row => row.State == "Failed" || row.State == "Held" || row.State == "Retrying");
+            var total = await problem.CountAsync(cancellationToken).ConfigureAwait(false);
+            var executions = await problem.OrderByDescending(row => row.StartedUtcTicks).Take(take).ToArrayAsync(cancellationToken).ConfigureAwait(false);
+            var keys = executions.Select(row => row.Key).ToArray();
+            var events = await session.Db.ExecutionEvents.AsNoTracking()
+                .Where(row => keys.Contains(row.ExecutionKey) && row.State != "Started" && row.State != "Succeeded" && row.State != "Completed")
+                .OrderBy(row => row.CreatedUtcTicks).ToArrayAsync(cancellationToken).ConfigureAwait(false);
+            var deliveries = await session.Db.Deliveries.AsNoTracking().Where(row => keys.Contains(row.ExecutionKey)).ToArrayAsync(cancellationToken).ConfigureAwait(false);
+            var runs = executions.Select(execution => new Service.Models.AssistFailureRun(
+                new(execution.ExecutionId, execution.FlowId, new Service.Models.AssistRunInput(execution.State,
+                    [.. events.Where(row => row.ExecutionKey == execution.Key).Select(row => new Service.Models.AssistRunEventInput(row.Stage, row.State,
+                        JsonSerializer.Deserialize<string?>(session.Decode(row.Detail, "event:" + row.Id.ToString("N")), Json)))],
+                    [.. deliveries.Where(row => row.ExecutionKey == execution.Key).Select(row => new Service.Models.AssistRunDeliveryInput(row.Stage, row.State))])),
+                execution.StartedUtcTicks)).ToArray();
+            return (runs, total);
+        }, false, cancellationToken);
+
     public static object Summary(ExecutionRecord row) => new { id = row.ExecutionId, row.FlowId, row.State, row.StartedUtcTicks, row.UpdatedUtcTicks };
 
     public Task<string> ReadMessageAsync(Guid id, CancellationToken cancellationToken)
