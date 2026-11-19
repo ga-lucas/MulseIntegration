@@ -13,6 +13,13 @@ public sealed record FlowMigrationReportViewModel(
     public int Version { get; init; } = 1;
 
     public MigrationMapInventoryViewModel? MapInventory { get; init; }
+
+    public MigrationOriginViewModel? Origin { get; init; }
+}
+
+public sealed record MigrationOriginViewModel(IReadOnlyDictionary<string, string> Pieces)
+{
+    public DateTimeOffset? ImportedUtc { get; init; }
 }
 
 public sealed record MigrationMapInventoryViewModel(

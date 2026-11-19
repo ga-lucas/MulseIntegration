@@ -255,6 +255,18 @@ public sealed class NativeSendPipelineChainTests : IDisposable
         Assert.Contains(definition.AllNodes(), node => node.Id.Contains("-pipe-", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task EveryImportedCandidateRecordsItsOriginPiecesWithoutAnImportTime()
+    {
+        var (candidate, _) = await Import(Pipeline(Component("Example.CPC.HL7TypeCaster")));
+        var origin = candidate.DraftFlow.Migration!.Origin;
+        Assert.NotNull(origin);
+        Assert.Null(origin.ImportedUtc);
+        var flowJson = candidate.DraftFlow.Augments.Single().Settings["flowJson"];
+        Assert.Equal(Service.BizTalkImport.Origin.BizTalkOriginPieces.Read(flowJson, candidate.StoredConfigValues).Hashes, origin.Pieces);
+        Assert.Contains("structure", origin.Pieces.Keys);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);

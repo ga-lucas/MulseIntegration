@@ -32,4 +32,7 @@ public sealed record CreateImportedBizTalkFlowRequest
     /// <summary>The suggested flow id of the generated draft flow to import.</summary>
     [Required]
     public required string SuggestedFlowId { get; init; }
+
+    /// <summary>Optional id to save the imported flow under instead of <see cref="SuggestedFlowId"/>, for example a side-by-side draft next to an existing import.</summary>
+    public string? NewFlowId { get; init; }
 }

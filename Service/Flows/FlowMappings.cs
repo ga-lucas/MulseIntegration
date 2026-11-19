@@ -70,7 +70,7 @@ internal static class FlowMappings
     }
 
     public static PipelineDefinition CopyPipeline(PipelineDefinition pipeline, string id, bool enabled, string? category,
-        Mulse.Modules.Pipeline.FlowMigrationReport? migration = null)
+        Mulse.Modules.Pipeline.FlowMigrationReport? migration = null, List<ModuleStepDefinition>? augments = null)
     {
         return new PipelineDefinition
         {
@@ -82,7 +82,7 @@ internal static class FlowMappings
             Trigger = pipeline.Trigger,
             Fetches = pipeline.Fetches,
             Parses = pipeline.Parses,
-            Augments = pipeline.Augments,
+            Augments = augments ?? pipeline.Augments,
             Deliveries = pipeline.Deliveries,
             Retry = pipeline.Retry
         };

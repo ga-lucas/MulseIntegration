@@ -311,6 +311,7 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
             .Select(candidate => AttachRuleEvidence(candidate, rulePolicies))
             .Select(candidate => request.GenerateNativeFlow ? AttachNativeFlow(candidate, nativeBindings, rulePolicies, nativeSchemas!, request.NativePolicyVersions, nativeConfiguration, mapChoicesJson) : candidate)
             .Select(candidate => AttachStoredConfigValues(candidate, storedMapValues))
+            .Select(AttachOrigin)
             .ToArray();
 
         return Task.FromResult(new BizTalkSolutionAnalysisResponse(

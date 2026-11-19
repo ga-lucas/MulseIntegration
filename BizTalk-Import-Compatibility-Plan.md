@@ -379,9 +379,21 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Rules (one structured signal each, aggregated per rule so ids stay stable):** `bindings`, `rule-policies`, `policy-versions` (no evidence; chosen in the Environment step), `unresolved-projects`, `map-owners`, `map-stubs` (no evidence; edit the map), `unknown-components`, `real-output` (Possible), `host-config` (Possible). A request disappears only when a later analysis no longer reports its gap.
 - **Weak signals (documented):** the importer reports no structured signal for "a setting came from the host configuration", so `host-config` is raised as Possible whenever native generation has blocked steps and no host configuration was supplied. `rule-policies` reads the policy name from the importer's own diagnostic message, and `unknown-components` reads component names from blocked-node reasons; both formats are covered by tests. Ambiguous map choices are not yet a request.
 - **Delta:** requests cleared, new and still open; open blockers per flow before and after; derived choice status changes. Blockers are blocked native nodes (Blocking diagnostics when there is no native flow).
-- **Not built:** origin tracking and the update plan, the wizard UI and session storage, the AI layer.
+- **Not built:** the wizard UI and session storage, the AI layer. (Origin tracking and the update plan are built; see the next increment.)
 - **Billing result:** `orch59` unchanged (CLEAN 6, NONE 34, 0 blocked).
 - **Tests:** `BizTalkEvidenceWizardTests` (requests, clearing and delta, policy-version choice, zip tree by evidence id, unsafe entries, limits, cleanup, host/helper pairing) and two cases in `NativeSendPipelineChainTests` (unknown component, HL7 real output).
+
+### Increment: import wizard origin tracking
+
+- **Origin:** every analyzed candidate carries `Migration.Origin` (`MigrationOrigin`: `Pieces` name → 16-character SHA-256 prefix, and `ImportedUtc`). Analysis stays deterministic, so `ImportedUtc` is null there; the import endpoint stamps it when the flow is saved. The UI view model mirrors `Origin`, so a UI round trip keeps it and the provenance guard still passes.
+- **Pieces tracked:** `structure` (node ids, kinds and nesting), `flow` (flow-level settings), `node:<id>` (a node's own fields), `choice:<nodeId>:<value>` and `shared-choice:<value>` (one dispatch choice each), and `config:<name>` (stored config values). Hashes use canonical JSON with sorted keys, so property order does not matter.
+- **Not tracked (never changed by an update):** trigger, fetch, parse and deliver steps and other non-native augments.
+- **Classification** (O = recorded origin, C = saved, N = fresh): Unchanged (O=N=C), KeptEdit (O=N, C edited), AlreadyCurrent (C=N), Add (not in O or C), UpdateInPlace (C=O, N differs), Conflict (C edited and N differs), Removed (N gone; never deleted). Selected by default: Add, UpdateInPlace, AlreadyCurrent. Conflict and KeptEdit need an explicit opt-in.
+- **Modes:** `NoOrigin` (flow not imported with origin), `NewDraft` (structure differs), `InPlace`, `NothingToDo`. NoOrigin and NewDraft save the new import as a separate disabled flow and require `Import.NewFlowId`; otherwise the request returns 400.
+- **API:** `POST /api/biztalk-import/flows/{flowId}/update-plan` (changes nothing) and `POST /api/biztalk-import/flows/{flowId}/update` (`import`, `replacePieces`). The import endpoint also accepts `newFlowId`. In-place order: new config values, the flow save, then config overwrites, so a rejected save never loses an edited value.
+- **Guard:** `IFlowDefinitionService.ReplaceImportedAsync` requires the saved flow and the new pipeline to carry `Migration`, forces `Enabled=false`, skips the client-edit provenance guard, and keeps validation and module pinning. `UpdateAsync` still rejects client-supplied `Migration` changes.
+- **Billing result:** `orch60` unchanged (CLEAN 6, NONE 34, 0 blocked).
+- **Tests:** `BizTalkImportUpdateTests` (hashing, each classification, per-choice and shared choices, structure change, no origin, config pieces, selection validation, `ReplaceImportedAsync`, UI round trip) and an origin check in `NativeSendPipelineChainTests`.
 
 ### Increment: native Listen and correlation following
 
@@ -851,7 +863,7 @@ Verification: 76 targeted tests and 1,508 service tests passed; solution build a
 
 Dynamic DateTime delays, sub-second timing and the other N4/N5 behavior remain untranslated; no BizTalk equivalence or browser interaction was verified. The full suite was not rerun in this continuation.
 
-## Planned: guided import wizard (backend built; origin tracking, UI and AI not built)
+## Planned: guided import wizard (backend and origin tracking built; UI and AI not built)
 
 Status: step 1 of the build order (the backend) is built, see "Increment: import wizard backend". Steps 2-4 are not. Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional.
 
@@ -926,7 +938,7 @@ Built on the AI assistance plan (surfaces, redaction, proposal pipeline, audit).
 ### Build order
 
 1. **Backend (built):** evidence request model and rule catalog; analysis input with inline evidence and temporary materialization; delta computation; tests per rule (synthetic data, no org types).
-2. **Origin tracking:** import-origin hashes written on flow creation; the classification above; update-plan endpoint; tests for unchanged, edited and structural cases.
+2. **Origin tracking (built):** import-origin hashes written on flow creation; the classification above; update-plan and update endpoints; tests for unchanged, edited and structural cases.
 3. **UI:** wizard shell replacing the floating panel, the request cards, session storage, upload and paste, export and import session.
 4. **AI layer** (after AI Phase A foundations).
 
