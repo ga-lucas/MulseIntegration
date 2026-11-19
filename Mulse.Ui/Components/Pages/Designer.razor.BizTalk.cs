@@ -151,6 +151,26 @@ public partial class Designer
             _errorMessage = "Import settings changed or analysis failed. Analyze the source again before loading a candidate.";
             return;
         }
+
+        LoadCandidateOntoCanvas(candidate);
+    }
+
+    // The wizard checks that its own analysis is current before offering this, so it skips the quick form's fingerprint check.
+    private void LoadWizardCandidate(BizTalkFlowCandidateViewModel candidate) => LoadCandidateOntoCanvas(candidate);
+
+    private void AddWizardRulePolicy(string policyJson) => AddImportedRulePolicy(policyJson);
+
+    private void ToggleBizTalkWizard()
+    {
+        _showBizTalkWizard = !_showBizTalkWizard;
+        if (_showBizTalkWizard)
+        {
+            _showSamplePanel = false;
+        }
+    }
+
+    private void LoadCandidateOntoCanvas(BizTalkFlowCandidateViewModel candidate)
+    {
         var draft = candidate.DraftFlow;
 
         _nodes.Clear();
@@ -206,6 +226,7 @@ public partial class Designer
         _migration = draft.Migration;
         _seedSource = SeedSource.BizTalk;
         _showBizTalkPanel = false;
+        _showBizTalkWizard = false;
         AutoLayout();
         _statusMessage = $"Loaded BizTalk draft flow '{candidate.SuggestedFlowId}' onto the canvas with {ParseNodes.Count} source lane(s) ({FetchNodes.Count} fetch node(s)). Save it disabled; execution remains blocked until verified translation support exists.";
     }

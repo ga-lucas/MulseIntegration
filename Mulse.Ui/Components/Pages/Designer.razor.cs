@@ -119,6 +119,7 @@ public partial class Designer : IAsyncDisposable
     private FlowDesignAnalysisViewModel? _analysis;
 
     private bool _showBizTalkPanel;
+    private bool _showBizTalkWizard;
     private bool _isAnalyzingBizTalk;
     private string _sourcePath = string.Empty;
     private string _additionalSourcePaths = string.Empty;

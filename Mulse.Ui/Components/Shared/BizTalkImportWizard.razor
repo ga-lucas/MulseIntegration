@@ -1,0 +1,749 @@
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using Mulse.Ui.Models
+@using Mulse.Ui.Services
+@inject IMulseApiClient Api
+@inject IBizTalkSessionStore Store
+@inject IJSRuntime JS
+
+<div class="biztalk-wizard" data-stage="@_stage">
+    <p class="field-hint" data-testid="wizard-storage-note">
+        Import sessions are saved in this browser only, not on the server and not shared with other people or browsers. Export a session to keep a copy or move it elsewhere.
+        Evidence you paste or upload is kept in this browser and is sent to the Mulse service each time you analyze, so handle it like private source code.
+    </p>
+
+    @if (!string.IsNullOrEmpty(_storageError))
+    {
+        <p class="status-banner error" role="alert">@_storageError</p>
+    }
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <p class="status-banner error" role="alert">@_error</p>
+    }
+    @if (!string.IsNullOrEmpty(_status))
+    {
+        <p class="status-banner success" role="status">@_status</p>
+    }
+
+    <details class="wizard-session" open="@(_saved.Count > 0 && _analysis is null)">
+        <summary>Session: @_session.Name@(_savedUtc is { } saved ? " (saved " + saved.ToString("HH:mm:ss") + ")" : null)</summary>
+        <label class="field-label">Session name
+            <input class="mapping-input" id="wizard-session-name" @bind="_sessionName" @bind:event="oninput" />
+        </label>
+        <div class="action-row">
+            <button class="run-button" disabled="@_busy" @onclick="SaveNowAsync">Save</button>
+            <button class="secondary-button" disabled="@_busy" @onclick="NewSession">New session</button>
+        </div>
+        @if (_saved.Count > 0)
+        {
+            <label class="field-label">Saved sessions in this browser
+                <select class="mapping-input" id="wizard-saved-sessions" @bind="_selectedSaved">
+                    <option value="">Choose a session</option>
+                    @foreach (var listing in _saved)
+                    {
+                        <option value="@listing.Name">@listing.Name@(listing.UpdatedUtc is { } updated ? " (" + updated.ToString("u") + ")" : null)</option>
+                    }
+                </select>
+            </label>
+            <div class="action-row">
+                <button class="secondary-button" disabled="@(_busy || string.IsNullOrEmpty(_selectedSaved))" @onclick="LoadSelectedAsync">Resume</button>
+                <button class="secondary-button" disabled="@(_busy || string.IsNullOrEmpty(_selectedSaved))" @onclick="DeleteSelectedAsync">Delete</button>
+            </div>
+        }
+        <label class="field-label"><input type="checkbox" @bind="_includeContent" /> Include pasted and uploaded evidence when exporting</label>
+        <div class="action-row">
+            <button class="secondary-button" disabled="@_busy" @onclick="ExportAsync">Export session (.json)</button>
+        </div>
+        <label class="field-label">Import a session file
+            <InputFile OnChange="ImportSessionAsync" accept=".json" disabled="@_busy" />
+        </label>
+        <p class="field-hint">An export made without evidence keeps your settings and answers; add the evidence again afterwards.</p>
+    </details>
+
+    <nav class="wizard-steps" aria-label="Import steps">
+        @foreach (var stage in BizTalkWizardStages.All)
+        {
+            var open = OpenCount(stage);
+            <button class="secondary-button @(stage == _stage ? "active" : null)" aria-current="@(stage == _stage ? "step" : null)" @onclick="() => GoTo(stage)">
+                @BizTalkWizardStages.Title(stage)@(open > 0 ? " (" + open + " open)" : null)
+            </button>
+        }
+    </nav>
+    <p class="field-hint">@BizTalkWizardStages.Purpose(_stage)</p>
+
+    @if (_analysis is not null)
+    {
+        var open = _session.StillOpen(_analysis);
+        <div class="wizard-open-summary" role="status" data-testid="wizard-open-summary">
+            @if (open.Count == 0)
+            {
+                <p><strong>Nothing is waiting for evidence.</strong> Review the result and import.</p>
+            }
+            else
+            {
+                <p><strong>@open.Count request(s) still open.</strong> Provide the evidence, or skip or mark it not available.</p>
+                <ul>
+                    @foreach (var request in open)
+                    {
+                        <li><button class="secondary-button" @onclick="() => GoTo(BizTalkWizardStages.StageOf(request.Id))">@request.Title</button> <span class="muted">(@BizTalkWizardStages.Title(BizTalkWizardStages.StageOf(request.Id)))</span></li>
+                    }
+                </ul>
+            }
+        </div>
+        @if (_stale)
+        {
+            <p class="status-banner error" role="alert">The evidence or settings changed since the last analysis. Analyze again to apply them before importing.</p>
+        }
+    }
+
+    @switch (_stage)
+    {
+        case BizTalkWizardStage.Source:
+            <section class="wizard-stage" aria-label="Source">
+                <label class="field-label" for="wizard-source-path">Source path on the service machine</label>
+                <input id="wizard-source-path" class="mapping-input" value="@_session.SourcePath" @onchange="e => SetSourcePath(e.Value?.ToString())" placeholder="C:\Users\...\MyBizTalkApp.sln" />
+                <HelpTooltip Label="BizTalk source path">A solution, project, directory, or .odx file. An .odx file must be included by exactly one .btproj in the same folder. Leave this empty if you upload the source below.</HelpTooltip>
+
+                <label class="field-label" for="wizard-additional-sources">Additional solutions or projects (optional)</label>
+                <input id="wizard-additional-sources" class="mapping-input" value="@Join(_session.AdditionalSourcePaths)" @onchange="e => SetList(_session.AdditionalSourcePaths, e.Value?.ToString())" placeholder="C:\...\Partners.sln; C:\...\Core.sln" />
+                <p class="field-hint">Semicolon-separated. They are analyzed with the source path as one combined workspace.</p>
+
+                <label class="field-label"><input type="checkbox" id="wizard-generate-native" @bind="_session.GenerateNativeFlow" @bind:after="MarkChanged" /> Generate the native control-flow draft</label>
+                <p class="field-hint">Uses native ordered nodes and exact logical port bindings. Anything that is not proven stays a visible blocker, and imported flows stay disabled. Nothing here runs BizTalk code.</p>
+                @if (_session.GenerateNativeFlow)
+                {
+                    <label class="field-label"><input type="checkbox" id="wizard-derive-maps" @bind="_session.DeriveNativeMapChoices" @bind:after="MarkChanged" /> Derive map replacement choices from policies and Transform shapes</label>
+                }
+
+                @RequestCard(SourceRequest)
+                @MissingContentNotice()
+
+                <div class="action-row">
+                    <button class="run-button" disabled="@_busy" @onclick="AnalyzeAsync">@(_busy ? "Analyzing..." : _analysis is null ? "Analyze and continue" : "Analyze again")</button>
+                </div>
+            </section>
+            break;
+
+        case BizTalkWizardStage.Environment:
+            <section class="wizard-stage" aria-label="Environment">
+                <label class="field-label" for="wizard-binding-paths">Binding export paths (optional)</label>
+                <input id="wizard-binding-paths" class="mapping-input" value="@Join(_session.AdditionalBindingPaths)" @onchange="e => SetList(_session.AdditionalBindingPaths, e.Value?.ToString())" placeholder="C:\Exports\Bindings; C:\Exports\Prod.BindingInfo.xml" />
+                <p class="field-hint">Semicolon-separated files or folders exported from the BizTalk Administration Console.</p>
+                @if (_session.GenerateNativeFlow)
+                {
+                    <label class="field-label" for="wizard-host-config">Host configuration snapshot (optional)</label>
+                    <input id="wizard-host-config" class="mapping-input" value="@_session.NativeHostConfigurationPath" @onchange="e => SetHostConfig(e.Value?.ToString())" placeholder="C:\Exports\BTSNTSvc64.exe.config" />
+                    <label class="field-label" for="wizard-helper-paths">Configuration helper source files (optional)</label>
+                    <input id="wizard-helper-paths" class="mapping-input" value="@Join(_session.NativeConfigurationHelperPaths)" @onchange="e => SetList(_session.NativeConfigurationHelperPaths, e.Value?.ToString())" placeholder="C:\Source\Settings.cs" />
+                    <p class="field-hint">Semicolon-separated .cs files (up to 16). Only complete literal-key appSettings getters become pinned values, and values referenced by imported code are saved as editable literals, so use nonsensitive settings only. No assembly or external configuration is loaded.</p>
+                }
+                @StageCards(BizTalkWizardStage.Environment)
+                <details>
+                    <summary>Add other evidence for this stage</summary>
+                    @RequestCard(EnvironmentRequest)
+                </details>
+                @AnalyzeRow()
+            </section>
+            break;
+
+        case BizTalkWizardStage.RulesAndMaps:
+            <section class="wizard-stage" aria-label="Rules and maps">
+                <label class="field-label" for="wizard-rule-paths">Rule policy export paths (optional)</label>
+                <input id="wizard-rule-paths" class="mapping-input" value="@Join(_session.AdditionalRulePaths)" @onchange="e => SetList(_session.AdditionalRulePaths, e.Value?.ToString())" placeholder="C:\Exports\rules.xml" />
+                <p class="field-hint">Semicolon-separated BRL export files. Versions and client rules are separate. No deployed version is inferred.</p>
+                @StageCards(BizTalkWizardStage.RulesAndMaps)
+                <details>
+                    <summary>Add other evidence for this stage</summary>
+                    @RequestCard(RulesRequest)
+                </details>
+                @if (_analysis is not null)
+                {
+                    <BizTalkRulePolicies Policies="_analysis.RulePolicies" OnAddPolicy="AddRulePolicyAsync" EnableNativeTargets="@(_session.GenerateNativeFlow && !_busy)" OnSelectNativeTarget="SelectPolicyTargetAsync" />
+                    @if (_session.GenerateNativeFlow && _session.NativePolicyVersions.Count > 0)
+                    {
+                        <p class="field-hint">Policy versions the draft follows: @string.Join(", ", _session.NativePolicyVersions.Select(pair => pair.Key + " " + pair.Value)). These are test targets, not statements about what is deployed.</p>
+                        <button class="secondary-button" disabled="@_busy" @onclick="ClearPolicyTargetsAsync">Clear policy versions and analyze again</button>
+                    }
+                    <BizTalkDerivedMapChoices Choices="_analysis.DerivedMapChoices" CanUse="@(_analysis.EffectiveMapChoicesJson is not null)" OnUseAsExplicit="UseDerivedChoices" />
+                }
+                @if (_session.GenerateNativeFlow)
+                {
+                    <details>
+                        <summary>Map replacement choices you set yourself</summary>
+                        <p class="field-hint">Use the exact map-name string a policy returns, including any assembly qualification. Your choices win over derived ones. They select native replacements; they do not prove the deployed map is equivalent. Analyze again after editing.</p>
+                        <RenderDispatchEditor Settings="_mapSettings" Modules="Modules" NativeSelectionMode="true" Changed="MapChoicesChanged" />
+                    </details>
+                }
+                @AnalyzeRow()
+            </section>
+            break;
+
+        case BizTalkWizardStage.Behavior:
+            <section class="wizard-stage" aria-label="Evidence of behavior">
+                @if (_analysis is null)
+                {
+                    <p>Analyze the source first. The importer then lists the components and samples it needs.</p>
+                }
+                @StageCards(BizTalkWizardStage.Behavior)
+                <details>
+                    <summary>Add a real input and output sample</summary>
+                    @RequestCard(BehaviorRequest)
+                </details>
+                <p class="field-hint">Samples are kept with the session. Comparing them against native output is not built yet, so adding one does not unblock anything on its own.</p>
+                @AnalyzeRow()
+            </section>
+            break;
+
+        default:
+            <section class="wizard-stage" aria-label="Review and import">
+                @if (_analysis is null)
+                {
+                    <p>Analyze the source first.</p>
+                    @AnalyzeRow()
+                }
+                else
+                {
+                    @ReviewContent(_analysis)
+                }
+            </section>
+            break;
+    }
+</div>
+
+@code {
+    private static readonly BizTalkEvidenceRequestViewModel SourceRequest = new("source", "source", "Upload or point to the BizTalk source",
+        "The importer reads orchestrations, maps, schemas and pipelines from source. It does not need a server.",
+        ["Zip the solution folder (or the project folders you need) and upload it, or give a path the Mulse service can read.", "Leave out bin and obj folders and any file with passwords."],
+        [BizTalkEvidenceKinds.Source, BizTalkEvidenceKinds.HelperSource],
+        "Needed for everything else.", [], "Source includes expressions and literal values. Handle it as private code.");
+
+    private static readonly BizTalkEvidenceRequestViewModel EnvironmentRequest = new("environment-extra", "environment-extra", "Bindings and host configuration",
+        "Port addresses and some settings are only in the deployed environment.",
+        ["BizTalk Administration Console: right-click the application, Export, Bindings.", "Copy BTSNTSvc64.exe.config from the BizTalk install folder on the host server."],
+        [BizTalkEvidenceKinds.Bindings, BizTalkEvidenceKinds.HostConfig, BizTalkEvidenceKinds.HelperSource],
+        "Optional until the importer asks.", [], "Configuration files can hold connection strings. Remove secrets first.");
+
+    private static readonly BizTalkEvidenceRequestViewModel RulesRequest = new("rules-extra", "rules-extra", "Business rule exports",
+        "Policies hold the rules that orchestrations call at run time.",
+        ["Business Rule Engine Deployment Wizard: Export policy/vocabularies to file.", "Export each version you need to compare."],
+        [BizTalkEvidenceKinds.RulePolicy], "Optional until the importer asks.", [], null);
+
+    private static readonly BizTalkEvidenceRequestViewModel BehaviorRequest = new("behavior-extra", "behavior-extra", "A real input and output sample",
+        "A recorded pair of what BizTalk received and sent is the strongest check of the migrated flow.",
+        ["Use the Administration Console or BizTalk tracking to save a real input message and the output it produced.", "Zip several pairs together."],
+        [BizTalkEvidenceKinds.RealOutput], "Optional.", [], "Samples can contain personal or patient data. Anonymise them first.");
+
+    [Parameter] public IReadOnlyList<ModuleViewModel> Modules { get; set; } = [];
+    [Parameter] public EventCallback<BizTalkFlowCandidateViewModel> OnLoadCandidate { get; set; }
+    [Parameter] public EventCallback<string> OnAddRulePolicy { get; set; }
+    [Parameter] public TimeProvider Time { get; set; } = TimeProvider.System;
+
+    private BizTalkImportSession _session = new() { Name = "import" };
+    private string _sessionName = "import";
+    private string _selectedSaved = string.Empty;
+    private IReadOnlyList<BizTalkSessionListing> _saved = [];
+    private BizTalkWizardStage _stage = BizTalkWizardStage.Source;
+    private BizTalkSolutionAnalysisViewModel? _analysis;
+    private BizTalkUpdatePlanViewModel? _plan;
+    private BizTalkFlowCandidateViewModel? _planCandidate;
+    private readonly Dictionary<string, string> _mapSettings = new() { ["casesJson"] = "[]" };
+    private bool _stale;
+    private bool _busy;
+    private bool _dirty;
+    private bool _includeContent = true;
+    private string? _error;
+    private string? _status;
+    private string? _storageError;
+    private DateTimeOffset? _savedUtc;
+    private string _newFlowId = string.Empty;
+    private string _updateFlowId = string.Empty;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await RefreshSavedAsync();
+            StateHasChanged();
+        }
+        else if (_dirty && !_busy)
+        {
+            _dirty = false;
+            await PersistAsync();
+            StateHasChanged();
+        }
+    }
+
+    private RenderFragment RequestCard(BizTalkEvidenceRequestViewModel request) => builder =>
+    {
+        builder.OpenComponent<BizTalkEvidenceRequestCard>(0);
+        builder.AddComponentParameter(1, nameof(BizTalkEvidenceRequestCard.Request), request);
+        builder.AddComponentParameter(2, nameof(BizTalkEvidenceRequestCard.Status), _session.StatusOf(request));
+        builder.AddComponentParameter(3, nameof(BizTalkEvidenceRequestCard.Note), _session.RequestNotes.TryGetValue(request.Id, out var note) ? note.Note : null);
+        builder.AddComponentParameter(4, nameof(BizTalkEvidenceRequestCard.Evidence), (IReadOnlyList<BizTalkSessionEvidence>)[.. _session.Evidence.Where(e => request.Accepts.Contains(e.Kind, StringComparer.Ordinal))]);
+        builder.AddComponentParameter(5, nameof(BizTalkEvidenceRequestCard.Busy), _busy);
+        builder.AddComponentParameter(6, nameof(BizTalkEvidenceRequestCard.AllowAnswer), _analysis?.EvidenceRequests.Any(r => r.Id == request.Id) == true);
+        builder.AddComponentParameter(7, nameof(BizTalkEvidenceRequestCard.OnAdd), EventCallback.Factory.Create<BizTalkEvidenceAdd>(this, AddEvidence));
+        builder.AddComponentParameter(8, nameof(BizTalkEvidenceRequestCard.OnRemove), EventCallback.Factory.Create<string>(this, RemoveEvidence));
+        builder.AddComponentParameter(9, nameof(BizTalkEvidenceRequestCard.OnAnswer), EventCallback.Factory.Create<BizTalkRequestAnswer>(this, answer => Answer(request.Id, answer)));
+        builder.AddComponentParameter(10, nameof(BizTalkEvidenceRequestCard.OnReopen), EventCallback.Factory.Create(this, () => Reopen(request.Id)));
+        builder.SetKey(request.Id);
+        builder.CloseComponent();
+    };
+
+    private RenderFragment StageCards(BizTalkWizardStage stage) => builder =>
+    {
+        if (_analysis is null)
+        {
+            builder.AddMarkupContent(0, "<p>Analyze the source first. The importer then lists exactly what it needs for this stage.</p>");
+            return;
+        }
+
+        var requests = _analysis.EvidenceRequests.Where(r => BizTalkWizardStages.StageOf(r.Id) == stage).ToArray();
+        if (requests.Length == 0)
+        {
+            builder.AddMarkupContent(1, "<p>The importer has no requests for this stage.</p>");
+            return;
+        }
+
+        foreach (var request in requests) builder.AddContent(2, RequestCard(request));
+    };
+
+    private RenderFragment AnalyzeRow() => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "action-row");
+        builder.OpenElement(2, "button");
+        builder.AddAttribute(3, "class", "run-button");
+        builder.AddAttribute(4, "disabled", _busy);
+        builder.AddAttribute(5, "onclick", EventCallback.Factory.Create(this, AnalyzeAsync));
+        builder.AddContent(6, _busy ? "Analyzing..." : "Analyze again");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment MissingContentNotice() => builder =>
+    {
+        var missing = _session.EvidenceMissingContent();
+        if (missing.Count == 0) return;
+        builder.OpenElement(0, "p");
+        builder.AddAttribute(1, "class", "status-banner error");
+        builder.AddAttribute(2, "role", "alert");
+        builder.AddContent(3, $"{missing.Count} evidence item(s) have no content in this browser: {string.Join(", ", missing.Select(e => e.Name))}. They are left out of analysis until you add them again. Remove them from their request card once replaced.");
+        builder.CloseElement();
+    };
+
+    private int OpenCount(BizTalkWizardStage stage)
+        => _analysis is null ? 0 : _session.StillOpen(_analysis).Count(r => BizTalkWizardStages.StageOf(r.Id) == stage);
+
+    private static string Join(IEnumerable<string> values) => string.Join("; ", values);
+
+    private static List<string> Split(string? value)
+        => [.. (value ?? string.Empty).Split([';', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    private void GoTo(BizTalkWizardStage stage)
+    {
+        _stage = stage;
+        _plan = null;
+    }
+
+    private void MarkChanged()
+    {
+        _dirty = true;
+        if (_analysis is not null) _stale = true;
+    }
+
+    private void SetSourcePath(string? value)
+    {
+        _session.SourcePath = value?.Trim() ?? string.Empty;
+        MarkChanged();
+    }
+
+    private void SetList(List<string> target, string? value)
+    {
+        target.Clear();
+        target.AddRange(Split(value));
+        MarkChanged();
+    }
+
+    private void SetHostConfig(string? value)
+    {
+        _session.NativeHostConfigurationPath = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        MarkChanged();
+    }
+
+    private void MapChoicesChanged()
+    {
+        var json = _mapSettings.GetValueOrDefault("casesJson")?.Trim();
+        _session.NativeMapChoicesJson = string.IsNullOrEmpty(json) || json == "[]" ? null : json;
+        MarkChanged();
+    }
+
+    private void UseDerivedChoices()
+    {
+        if (_analysis?.EffectiveMapChoicesJson is not { } json) return;
+        _mapSettings["casesJson"] = json;
+        MapChoicesChanged();
+    }
+
+    private void AddEvidence(BizTalkEvidenceAdd add)
+    {
+        try
+        {
+            var name = string.IsNullOrWhiteSpace(add.Name) ? null : add.Name.Trim();
+            switch (add.Origin)
+            {
+                case BizTalkEvidenceOrigins.Path:
+                    _session.AddPath(add.Kind, add.Path ?? string.Empty, name, Time);
+                    break;
+                case BizTalkEvidenceOrigins.Text:
+                    _session.AddText(add.Kind, name ?? BizTalkEvidenceKinds.Describe(add.Kind), add.Text ?? string.Empty, Time);
+                    break;
+                default:
+                    _session.AddUpload(add.Kind, name ?? "upload", add.Bytes ?? [], Time);
+                    break;
+            }
+
+            _error = null;
+            _status = "Evidence added. Analyze again to apply it.";
+            MarkChanged();
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or InvalidDataException)
+        {
+            _error = $"Unable to add the evidence: {exception.Message}";
+        }
+    }
+
+    private void RemoveEvidence(string id)
+    {
+        if (_session.RemoveEvidence(id)) MarkChanged();
+    }
+
+    private void Answer(string requestId, BizTalkRequestAnswer answer)
+    {
+        _session.Answer(requestId, answer.Answer, answer.Note);
+        _dirty = true;
+    }
+
+    private void Reopen(string requestId)
+    {
+        _session.Reopen(requestId);
+        _dirty = true;
+    }
+
+    private async Task RunAsync(Func<Task> action, string failure)
+    {
+        _busy = true;
+        _error = null;
+        _status = null;
+        try
+        {
+            await action();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _error = $"{failure}: {exception.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task AnalyzeAsync() => RunAsync(async () =>
+    {
+        if (string.IsNullOrWhiteSpace(_session.EffectiveSourcePath()))
+            throw new InvalidOperationException("Give a source path or upload the source first.");
+        var analysis = await Api.AnalyzeBizTalkSolutionAsync(_session.BuildAnalyzeRequest(), CancellationToken.None);
+        _session.ApplyAnalysis(analysis, Time);
+        _analysis = analysis;
+        _stale = false;
+        _plan = null;
+        _dirty = true;
+        var open = _session.StillOpen(analysis).Count;
+        _status = $"Analyzed {analysis.BizTalkProjectCount} BizTalk project(s) into {analysis.FlowCandidates.Count} draft flow(s). {(open == 0 ? "Nothing is waiting for evidence." : open + " request(s) still open.")}";
+        if (_stage == BizTalkWizardStage.Source) _stage = BizTalkWizardStage.Environment;
+    }, "Unable to analyze the BizTalk source");
+
+    private Task SelectPolicyTargetAsync(BizTalkRulePolicyViewModel policy)
+    {
+        _session.NativePolicyVersions[policy.Name] = $"{policy.MajorVersion}.{policy.MinorVersion}";
+        MarkChanged();
+        return AnalyzeAsync();
+    }
+
+    private Task ClearPolicyTargetsAsync()
+    {
+        _session.NativePolicyVersions.Clear();
+        MarkChanged();
+        return AnalyzeAsync();
+    }
+
+    private Task AddRulePolicyAsync(string policyJson) => OnAddRulePolicy.InvokeAsync(policyJson);
+
+    // Sessions
+
+    private async Task RefreshSavedAsync()
+    {
+        try
+        {
+            _saved = await Store.ListAsync(CancellationToken.None);
+            _storageError = null;
+        }
+        catch (Exception exception) when (exception is JSException or JSDisconnectedException or InvalidOperationException)
+        {
+            _storageError = $"Browser storage is not available, so the session cannot be saved or resumed here: {exception.Message} You can still export it.";
+        }
+    }
+
+    private async Task PersistAsync()
+    {
+        if (!BizTalkImportSession.IsValidName(_sessionName))
+        {
+            _storageError = "Name the session with up to 80 letters, digits, spaces, dots, dashes or underscores to save it.";
+            return;
+        }
+
+        _session.Name = _sessionName;
+        _session.UpdatedUtc = Time.GetUtcNow();
+        try
+        {
+            await Store.SaveAsync(_session, CancellationToken.None);
+            _savedUtc = Time.GetUtcNow();
+            _storageError = null;
+            await RefreshSavedAsync();
+        }
+        catch (Exception exception) when (exception is JSException or JSDisconnectedException or InvalidOperationException)
+        {
+            _storageError = $"The session could not be saved in this browser: {exception.Message} Export it to keep a copy.";
+        }
+    }
+
+    private Task SaveNowAsync() => RunAsync(async () =>
+    {
+        await PersistAsync();
+        if (_storageError is null) _status = $"Saved '{_session.Name}' in this browser.";
+    }, "Unable to save the session");
+
+    private void NewSession()
+    {
+        _session = new BizTalkImportSession { Name = "import" };
+        _sessionName = "import";
+        _analysis = null;
+        _plan = null;
+        _stale = false;
+        _stage = BizTalkWizardStage.Source;
+        _mapSettings["casesJson"] = "[]";
+        _error = null;
+        _status = "Started a new session. Save it to keep it.";
+    }
+
+    private void Adopt(BizTalkImportSession session)
+    {
+        _session = session;
+        _sessionName = session.Name;
+        _analysis = null;
+        _plan = null;
+        _stale = false;
+        _stage = BizTalkWizardStage.Source;
+        _mapSettings["casesJson"] = session.NativeMapChoicesJson ?? "[]";
+        _dirty = true;
+    }
+
+    private Task LoadSelectedAsync() => RunAsync(async () =>
+    {
+        var session = await Store.LoadAsync(_selectedSaved, CancellationToken.None)
+            ?? throw new InvalidOperationException($"No saved session is named '{_selectedSaved}'.");
+        Adopt(session);
+        _status = $"Resumed '{session.Name}' with {session.Evidence.Count} evidence item(s). Analyze to pick up where you left off.";
+    }, "Unable to resume the session");
+
+    private Task DeleteSelectedAsync() => RunAsync(async () =>
+    {
+        var name = _selectedSaved;
+        await Store.DeleteAsync(name, CancellationToken.None);
+        _selectedSaved = string.Empty;
+        await RefreshSavedAsync();
+        _status = $"Deleted '{name}' from this browser.";
+    }, "Unable to delete the session");
+
+    private Task ExportAsync() => RunAsync(async () =>
+    {
+        _session.Name = BizTalkImportSession.IsValidName(_sessionName) ? _sessionName : _session.Name;
+        var json = _session.Export(_includeContent);
+        await DownloadAsync($"{_session.Name}.biztalk-import.json", "application/json", System.Text.Encoding.UTF8.GetBytes(json));
+        _status = _includeContent ? "Exported the session with its evidence. The file can contain private source and data." : "Exported the session without evidence.";
+    }, "Unable to export the session");
+
+    private Task ImportSessionAsync(InputFileChangeEventArgs args) => RunAsync(async () =>
+    {
+        await using var stream = args.File.OpenReadStream(256L * 1024 * 1024);
+        using var reader = new StreamReader(stream);
+        var session = BizTalkImportSession.Import(await reader.ReadToEndAsync());
+        Adopt(session);
+        var missing = session.EvidenceMissingContent().Count;
+        _status = $"Imported '{session.Name}'.{(missing > 0 ? $" {missing} evidence item(s) came without content and must be added again." : string.Empty)}";
+    }, "Unable to import the session");
+
+    private async Task DownloadAsync(string fileName, string contentType, byte[] bytes)
+    {
+        try
+        {
+            await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/file-download.js");
+            await module.InvokeVoidAsync("downloadFile", fileName, contentType, Convert.ToBase64String(bytes));
+        }
+        catch (JSException exception)
+        {
+            throw new InvalidOperationException($"Unable to download '{fileName}': {exception.Message}", exception);
+        }
+    }
+
+    // Review and import
+
+    private RenderFragment ReviewContent(BizTalkSolutionAnalysisViewModel analysis) => @<text>
+        @if (analysis.Delta is { } delta)
+        {
+            <div class="wizard-delta" data-testid="wizard-delta">
+                <h3>What changed since the last analysis</h3>
+                @if (delta.ClearedRequests.Count == 0 && delta.NewRequests.Count == 0 && delta.FlowChanges.Count == 0 && delta.DerivedChoiceChanges.Count == 0)
+                {
+                    <p>Nothing changed.</p>
+                }
+                <ul>
+                    @foreach (var cleared in delta.ClearedRequests)
+                    {
+                        <li>Resolved: @cleared.Title</li>
+                    }
+                    @foreach (var added in delta.NewRequests)
+                    {
+                        <li>Newly requested: @added.Title</li>
+                    }
+                    @foreach (var change in delta.FlowChanges)
+                    {
+                        <li>@change.FlowId: @change.Before blocker(s) before, @change.After now</li>
+                    }
+                    @foreach (var change in delta.DerivedChoiceChanges)
+                    {
+                        <li>Map choice '@change.Value': @(change.Before ?? "none") to @(change.After ?? "none")</li>
+                    }
+                </ul>
+            </div>
+        }
+
+        @foreach (var request in _session.StillOpen(analysis).Where(r => BizTalkWizardStages.StageOf(r.Id) == BizTalkWizardStage.Review))
+        {
+            @RequestCard(request)
+        }
+
+        @if (analysis.Warnings.Count > 0)
+        {
+            <div class="warning-panel">
+                <h3>Analysis warnings</h3>
+                <ul>
+                    @foreach (var warning in analysis.Warnings)
+                    {
+                        <li>@warning</li>
+                    }
+                </ul>
+            </div>
+        }
+
+        <BizTalkDependencyReport Projects="analysis.BizTalkProjects" />
+
+        @if (analysis.FlowCandidates.Count == 0)
+        {
+            <p>No draft flows were generated for this source.</p>
+        }
+
+        @if (_plan is not null && _planCandidate is not null)
+        {
+            <BizTalkUpdatePlanView Plan="_plan" Busy="_busy" OnApply="ApplyUpdateAsync" OnCancel="ClosePlan" />
+        }
+
+        <div class="card-grid">
+            @foreach (var candidate in analysis.FlowCandidates)
+            {
+                <section class="flow-card" data-candidate="@candidate.SuggestedFlowId">
+                    <div class="flow-card-header">
+                        <div>
+                            <h3>@candidate.SuggestedFlowId</h3>
+                            <p><strong>Project:</strong> @candidate.SourceProject</p>
+                            @if (candidate.IsLikelyTestArtifact)
+                            {
+                                <p class="test-artifact-badge">Looks like a test or debug artifact. Confirm before migrating.</p>
+                            }
+                        </div>
+                    </div>
+                    <p>@candidate.Summary</p>
+                    @if (candidate.DraftFlow.Migration is { } migration)
+                    {
+                        <MigrationReport Report="migration" />
+                    }
+                    @if (candidate.OpenQuestions.Count > 0)
+                    {
+                        <p><strong>Open questions:</strong> @string.Join("; ", candidate.OpenQuestions)</p>
+                    }
+                    <div class="action-row">
+                        <button class="run-button" disabled="@(_busy || _stale)" @onclick="() => OnLoadCandidate.InvokeAsync(candidate)">Load onto canvas</button>
+                        <button class="secondary-button" disabled="@(_busy || _stale)" @onclick="() => SaveNewAsync(candidate)">Save as new disabled flow</button>
+                        <button class="secondary-button" disabled="@(_busy || _stale)" @onclick="() => PlanUpdateAsync(candidate)">Update an existing flow</button>
+                    </div>
+                    <label class="field-label">New flow id (optional)
+                        <input class="mapping-input" @bind="_newFlowId" @bind:event="oninput" placeholder="@candidate.SuggestedFlowId" />
+                    </label>
+                    <label class="field-label">Flow to update
+                        <input class="mapping-input" @bind="_updateFlowId" @bind:event="oninput" placeholder="@(_session.ImportedFlowId ?? candidate.SuggestedFlowId)" />
+                    </label>
+                    @if (candidate.DraftFlow.Migration?.SourceOrchestration is not null)
+                    {
+                        <p><button class="secondary-button" disabled="@(_busy || _stale)" @onclick="() => DownloadControlFlowAsync(candidate)">Download developer control-flow model (.json)</button></p>
+                    }
+                    @if (candidate.ScaffoldedModules.Count > 0)
+                    {
+                        <p><button class="secondary-button" disabled="@(_busy || _stale)" @onclick="() => DownloadModulesAsync(candidate)">Download @candidate.ScaffoldedModules.Count scaffolded module(s) (.zip)</button></p>
+                    }
+                </section>
+            }
+        </div>
+    </text>;
+
+    private Task SaveNewAsync(BizTalkFlowCandidateViewModel candidate) => RunAsync(async () =>
+    {
+        var flow = await Api.ImportBizTalkDraftFlowAsync(_session.BuildImportRequest(candidate.SuggestedFlowId, _newFlowId), CancellationToken.None);
+        _session.ImportedFlowId = flow.Id;
+        _updateFlowId = flow.Id;
+        _dirty = true;
+        _status = $"Saved '{flow.Id}' as a disabled flow. Open it in the designer to review it.";
+    }, "Unable to save the flow");
+
+    private Task PlanUpdateAsync(BizTalkFlowCandidateViewModel candidate) => RunAsync(async () =>
+    {
+        var flowId = string.IsNullOrWhiteSpace(_updateFlowId) ? _session.ImportedFlowId ?? candidate.SuggestedFlowId : _updateFlowId.Trim();
+        _plan = await Api.PlanBizTalkFlowUpdateAsync(flowId, _session.BuildImportRequest(candidate.SuggestedFlowId), CancellationToken.None);
+        _planCandidate = candidate;
+    }, "Unable to plan the update");
+
+    private Task ApplyUpdateAsync(string[] pieces) => RunAsync(async () =>
+    {
+        if (_plan is null || _planCandidate is null) return;
+        var request = new UpdateImportedBizTalkFlowRequestViewModel(_session.BuildImportRequest(_planCandidate.SuggestedFlowId), pieces);
+        var result = await Api.UpdateBizTalkFlowAsync(_plan.FlowId, request, CancellationToken.None);
+        _session.ImportedFlowId = result.Flow.Id;
+        _dirty = true;
+        _status = $"Updated '{result.Flow.Id}': replaced {result.ReplacedPieces.Count} piece(s). {string.Join(" ", result.Notes)}";
+        _plan = null;
+    }, "Unable to update the flow");
+
+    private void ClosePlan() => _plan = null;
+
+    private Task DownloadControlFlowAsync(BizTalkFlowCandidateViewModel candidate) => RunAsync(async () =>
+    {
+        var file = await Api.DownloadBizTalkControlFlowAsync(_session.BuildImportRequest(candidate.SuggestedFlowId), CancellationToken.None);
+        await DownloadAsync(file.FileName, file.ContentType, file.Content);
+    }, "Unable to download the control-flow model");
+
+    private Task DownloadModulesAsync(BizTalkFlowCandidateViewModel candidate) => RunAsync(async () =>
+    {
+        var file = await Api.DownloadBizTalkScaffoldedModulesAsync(_session.BuildImportRequest(candidate.SuggestedFlowId), CancellationToken.None);
+        await DownloadAsync(file.FileName, file.ContentType, file.Content);
+    }, "Unable to download the scaffolded modules");
+}

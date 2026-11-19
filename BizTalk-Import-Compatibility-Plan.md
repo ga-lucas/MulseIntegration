@@ -395,6 +395,18 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Billing result:** `orch60` unchanged (CLEAN 6, NONE 34, 0 blocked).
 - **Tests:** `BizTalkImportUpdateTests` (hashing, each classification, per-choice and shared choices, structure change, no origin, config pieces, selection validation, `ReplaceImportedAsync`, UI round trip) and an origin check in `NativeSendPipelineChainTests`.
 
+### Increment: import wizard UI
+
+- **Entry point:** the Designer's "Import from BizTalk" button opens the wizard. The former form stays as "BizTalk quick import" for one-shot imports.
+- **Stages:** Source, Environment, Rules and maps, Evidence of behavior, Review and import. Each shows its open request count and a running "request(s) still open" summary. Request ids map to stages in `BizTalkWizardStages`; an id this build does not know appears in Review.
+- **Request card:** why it matters, numbered steps to get it, impact and risk, the evidence already added, and add by path, paste or upload ("zip when several"). A request can be skipped or marked not available with a note, and reopened. Answers never satisfy a request; only the importer's analysis does.
+- **Re-entry:** adding, removing or changing evidence marks the analysis stale; re-analysis sends the evidence and the previous summary and shows what was resolved, which blockers changed per flow, and which map choices appeared.
+- **Sessions:** saved automatically in this browser only (localStorage index, IndexedDB content read back in 16 KB slices to stay under the circuit's receive limit). Resume, delete, export and import a session file, with or without pasted and uploaded content. Names are limited to 80 letters, digits, spaces, dots, dashes and underscores because they become storage keys. Storage failures are shown and never stop the wizard.
+- **Candidates:** load onto the canvas, save as a new disabled flow, or update an existing imported flow through the update plan, where each piece can be kept or replaced and edited pieces are never selected by default. Downloads: control-flow model and scaffolded modules.
+- **Not built:** the AI assist. Real-output samples are only recorded until the compare feature (M6) exists. The Save new and Update actions have no UI tests; the service behind them does.
+- **Result:** `orch61` unchanged (CLEAN 6, NONE 34, 0 blocked). Full suite 2,727 tests; one `ModulePackageLifecycleTests` cleanup flake passed on rerun.
+- **Tests:** `BizTalkWizardUiTests` (16): stage mapping, initial render, request cards with rationale and counts, answers and reopen, stale analysis and delta, unknown request ids, missing source, resume, storage failure, invalid name, update-plan view, and the browser store round trip with slicing and failure wrapping. The static renderer does not run after-render hooks, so the test host invokes them.
+
 ### Increment: native Listen and correlation following
 
 - **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.
@@ -863,9 +875,9 @@ Verification: 76 targeted tests and 1,508 service tests passed; solution build a
 
 Dynamic DateTime delays, sub-second timing and the other N4/N5 behavior remain untranslated; no BizTalk equivalence or browser interaction was verified. The full suite was not rerun in this continuation.
 
-## Planned: guided import wizard (backend and origin tracking built; UI and AI not built)
+## Planned: guided import wizard (backend, origin tracking and UI built; AI not built)
 
-Status: step 1 of the build order (the backend) is built, see "Increment: import wizard backend". Steps 2-4 are not. Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional.
+Status: steps 1-3 of the build order are built, see "Increment: import wizard backend", "Increment: import origin tracking and update plan" and "Increment: import wizard UI". Step 4 (AI) is not. Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional.
 
 ### Why
 
@@ -939,7 +951,7 @@ Built on the AI assistance plan (surfaces, redaction, proposal pipeline, audit).
 
 1. **Backend (built):** evidence request model and rule catalog; analysis input with inline evidence and temporary materialization; delta computation; tests per rule (synthetic data, no org types).
 2. **Origin tracking (built):** import-origin hashes written on flow creation; the classification above; update-plan and update endpoints; tests for unchanged, edited and structural cases.
-3. **UI:** wizard shell replacing the floating panel, the request cards, session storage, upload and paste, export and import session.
+3. **UI (built):** wizard shell, request cards, browser session storage, upload and paste, export and import session, update-plan view. See "Increment: import wizard UI".
 4. **AI layer** (after AI Phase A foundations).
 
 ### Decisions on the former open questions

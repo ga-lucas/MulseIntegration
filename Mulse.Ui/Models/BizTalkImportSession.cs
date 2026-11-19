@@ -81,6 +81,10 @@ public sealed class BizTalkImportSession
     public static bool IsValidId(string? id)
         => !string.IsNullOrEmpty(id) && id.Length <= MaxIdLength && id.All(static c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_');
 
+    /// <summary>Session names become storage keys, so they stay plain: letters, digits, spaces, dot, dash and underscore.</summary>
+    public static bool IsValidName(string? name)
+        => !string.IsNullOrWhiteSpace(name) && name.Length <= MaxNameLength && name == name.Trim() && name.All(static c => char.IsAsciiLetterOrDigit(c) || c is ' ' or '.' or '-' or '_');
+
     /// <summary>Derives a unique, valid id from the kind and name, for example <c>bindings-export-2</c>.</summary>
     public string NewEvidenceId(string kind, string? name)
     {
@@ -261,7 +265,7 @@ public sealed class BizTalkImportSession
     private static BizTalkImportSession Validate(BizTalkImportSession session)
     {
         if (session.Version is < 1 or > CurrentVersion) throw new InvalidDataException($"Session version {session.Version} is not supported by this version of the wizard.");
-        if (string.IsNullOrWhiteSpace(session.Name) || session.Name.Length > MaxNameLength) throw new InvalidDataException("The session needs a name of up to 80 characters.");
+        if (!IsValidName(session.Name)) throw new InvalidDataException("The session needs a name of up to 80 letters, digits, spaces, dots, dashes or underscores.");
         if (session.Evidence.Count > MaxEvidenceItems) throw new InvalidDataException($"A session holds at most {MaxEvidenceItems} evidence items.");
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in session.Evidence)

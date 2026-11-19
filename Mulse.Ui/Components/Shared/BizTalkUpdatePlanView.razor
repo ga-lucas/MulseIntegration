@@ -1,0 +1,87 @@
+@using Mulse.Ui.Models
+
+<section class="flow-card update-plan" aria-label="Update plan for @Plan.FlowId">
+    <h3>Update '@Plan.FlowId'</h3>
+    <p><strong>@Plan.Mode:</strong> @Plan.Reason</p>
+    @if (Plan.ImportedUtc is { } imported)
+    {
+        <p class="field-hint">Originally imported @imported.ToString("u").</p>
+    }
+    @if (Plan.Notes.Count > 0)
+    {
+        <ul>
+            @foreach (var note in Plan.Notes)
+            {
+                <li>@note</li>
+            }
+        </ul>
+    }
+
+    @if (Plan.Mode != "InPlace")
+    {
+        <p class="field-hint">@(Plan.Mode == "NothingToDo" ? "Nothing needs importing." : "This flow cannot be updated piece by piece. Save the new import as a separate disabled flow instead.")</p>
+        <button class="secondary-button" disabled="@Busy" @onclick="() => OnCancel.InvokeAsync()">Close</button>
+    }
+    else if (Plan.Pieces.Count == 0)
+    {
+        <p>Nothing in this flow comes from the import, so there is nothing to update.</p>
+    }
+    else
+    {
+        <table class="update-pieces">
+            <thead><tr><th>Replace</th><th>Piece</th><th>State</th></tr></thead>
+            <tbody>
+                @foreach (var piece in Plan.Pieces)
+                {
+                    <tr data-piece="@piece.Key" class="piece-@piece.State.ToLowerInvariant()">
+                        <td>
+                            <input type="checkbox" aria-label="Replace @piece.Label" disabled="@(!piece.Selectable || Busy)" checked="@Selected.Contains(piece.Key)" @onchange="e => Toggle(piece.Key, e.Value is true)" />
+                        </td>
+                        <td>@piece.Label <span class="muted">(@piece.Kind)</span></td>
+                        <td>@StateText(piece.State)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <p class="field-hint">Pieces you edited by hand are never selected for you. Replacing one overwrites your edits with the newly imported version.</p>
+        <div class="action-row">
+            <button class="run-button" disabled="@(Busy || Selected.Count == 0)" @onclick="() => OnApply.InvokeAsync(Selected.ToArray())">Replace @Selected.Count selected piece(s)</button>
+            <button class="secondary-button" disabled="@Busy" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public BizTalkUpdatePlanViewModel Plan { get; set; } = default!;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<string[]> OnApply { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private BizTalkUpdatePlanViewModel? _seeded;
+    private HashSet<string> Selected { get; set; } = new(StringComparer.Ordinal);
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_seeded, Plan)) return;
+        _seeded = Plan;
+        Selected = [.. Plan.Pieces.Where(p => p.Selectable && p.SelectedByDefault).Select(p => p.Key)];
+    }
+
+    private void Toggle(string key, bool selected)
+    {
+        if (selected) Selected.Add(key);
+        else Selected.Remove(key);
+    }
+
+    private static string StateText(string state) => state switch
+    {
+        "Unchanged" => "Same as the new import",
+        "KeptEdit" => "Edited by hand; left alone unless you select it to reset",
+        "AlreadyCurrent" => "Already holds the new import",
+        "Add" => "New in this import",
+        "UpdateInPlace" => "The new import differs; never edited by hand",
+        "Conflict" => "Changed by the import and edited by hand; replacing discards your edit",
+        "Removed" => "No longer produced by the import; reported only, never deleted",
+        _ => state
+    };
+}

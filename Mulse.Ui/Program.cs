@@ -60,6 +60,7 @@ builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddGitHubCopilotSignIn(builder.Configuration, builder.Environment);
 builder.Services.AddHttpClient("oidc-token");
 builder.Services.AddSingleton<MulseApiAccessTokenProvider>();
+builder.Services.AddScoped<IBizTalkSessionStore, BizTalkSessionStore>();
 builder.Services.AddTransient<MulseApiAccessTokenHandler>();
 builder.Services.AddHttpClient<IMulseApiClient, MulseApiClient>((serviceProvider, httpClient) =>
 {
