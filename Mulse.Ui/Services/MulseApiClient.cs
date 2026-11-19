@@ -466,6 +466,21 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<BizTalkAssistResponseViewModel>(response, cancellationToken, "BizTalk assist response").ConfigureAwait(false);
     }
 
+    public async Task<CompareExplainDisclosureViewModel> PreviewCompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/compare-explain/preview", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<CompareExplainDisclosureViewModel>(response, cancellationToken, "explanation preview").ConfigureAwait(false);
+    }
+
+    public async Task<CompareExplainResponseViewModel> CompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/compare-explain") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<CompareExplainResponseViewModel>(response, cancellationToken, "explanation").ConfigureAwait(false);
+    }
+
     private async Task AttachCopilotCredentialAsync(HttpClient destinationClient, HttpRequestMessage request, CancellationToken cancellationToken, bool requireCopilot = false)
     {
         if (copilotCredential is null)

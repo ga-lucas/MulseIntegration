@@ -15,6 +15,15 @@ public static class OutputComparer
     public const int MaxChars = 1_000_000;
     private const int MaxValueChars = 200;
 
+    /// <summary>Every class the comparer can report. Anything else is not a comparer result.</summary>
+    public static readonly IReadOnlySet<string> KnownClasses = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "ByteOrderMark", "XmlDeclaration", "Whitespace", "NamespacePrefix", "AttributeOrder", "EmptyElementForm", "Encoding", "ElementOrder",
+        "MissingElement", "ExtraElement", "MissingAttribute", "ExtraAttribute", "Structure", "Namespace", "ElementName", "Format",
+        "DateTimeFormat", "DateTimeValue", "NumberFormat", "ValueCase", "ValueWhitespace", "Value",
+        "LineEndings", "TrailingNewline", "TrailingSpaces", "MissingLine", "ExtraLine"
+    };
+
     private static readonly string[] MomentFormats =
     [
         "yyyyMMdd", "yyyyMMddHHmm", "yyyyMMddHHmmss", "yyyyMMddHHmmss.FFFF", "yyyy-MM-dd", "MM/dd/yyyy", "M/d/yyyy",

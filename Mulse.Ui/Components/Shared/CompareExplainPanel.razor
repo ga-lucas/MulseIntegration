@@ -1,0 +1,140 @@
+@using Mulse.Ui.Models
+@using Mulse.Ui.Services
+@inject IMulseApiClient Api
+
+<div class="biztalk-assist" data-testid="explain-panel">
+    <p class="field-hint">
+        AI can explain what the classes of difference below usually mean and what to check. It is only ever sent the difference classes, how many there are, whether each is cosmetic and where it is.
+        It never sees your real output, Mulse's output, sample names, inputs or saved scenarios. You see exactly what would be sent first and nothing is sent until you agree.
+        The explanation is a suggestion only; it changes nothing and does not decide whether the flows match.
+    </p>
+    <button type="button" class="secondary-button" disabled="@(_working || !HasDifferences)" @onclick="PrepareAsync" data-testid="explain-start">Explain the differences with AI</button>
+
+    @if (_working) { <p class="field-hint" role="status">Working...</p> }
+    @if (_error is not null) { <p class="status-banner error" role="alert" data-testid="explain-error">@_error</p> }
+    @if (_unavailable is not null) { <p class="status-banner error" role="status" data-testid="explain-unavailable">AI help is not available: @_unavailable</p> }
+
+    @if (_awaitingConsent && _disclosure is not null)
+    {
+        <div class="warning-panel" data-testid="explain-consent">
+            <h4>Review before anything is sent</h4>
+            <p>This will be sent to <strong>@_disclosure.Provider</strong> (model <strong>@_disclosure.Model</strong>). Nothing has been sent yet.</p>
+            <ul>
+                @foreach (var note in _disclosure.Notes) { <li>@note</li> }
+            </ul>
+            <pre class="assist-payload" data-testid="explain-payload">@_disclosure.Payload</pre>
+            <div class="action-row">
+                <button class="run-button" disabled="@_working" @onclick="() => SendAsync(false)" data-testid="explain-send">Send</button>
+                <button class="secondary-button" disabled="@_working" @onclick="() => SendAsync(true)" data-testid="explain-send-remember">Send and don't ask again this session</button>
+                <button class="secondary-button" disabled="@_working" @onclick="Cancel" data-testid="explain-cancel">Cancel</button>
+            </div>
+            <p class="field-hint">"Don't ask again" lasts until you leave or reload this page. It is never saved, and the same limits on what is sent still apply.</p>
+        </div>
+    }
+
+    @if (_reply is not null)
+    {
+        <div class="assist-reply" data-testid="explain-reply">
+            <h4>AI-generated explanation</h4>
+            <p class="field-hint">From @_replyProvider (@_replyModel). It may be wrong and it could not see any values. It has not been applied to anything.</p>
+            <div class="assist-reply-text">@_reply</div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<NativeFlowComparePairResultViewModel> Results { get; set; } = default!;
+    [Parameter, EditorRequired] public BizTalkAssistConsent Consent { get; set; } = default!;
+
+    private IReadOnlyList<NativeFlowComparePairResultViewModel>? _boundResults;
+    private CompareExplainRequestViewModel? _pending;
+    private CompareExplainDisclosureViewModel? _disclosure;
+    private bool _awaitingConsent;
+    private bool _working;
+    private string? _unavailable;
+    private string? _error;
+    private string? _reply;
+    private string? _replyProvider;
+    private string? _replyModel;
+
+    private bool HasDifferences => Results.Any(result => result.Differences.Count > 0);
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_boundResults, Results)) return;
+        // A new comparison starts clean, so an old approval or explanation is never shown against different results.
+        _boundResults = Results;
+        _pending = null;
+        _disclosure = null;
+        _awaitingConsent = false;
+        _unavailable = null;
+        _error = null;
+        _reply = null;
+    }
+
+    private CompareExplainRequestViewModel BuildRequest()
+        => new(Results.Select(result => new CompareExplainSampleViewModel(result.Verdict,
+            result.Differences.Select(difference => new CompareExplainDifferenceViewModel(difference.Class, difference.Path, difference.Cosmetic)).ToList(),
+            result.Truncated)).ToList());
+
+    private async Task PrepareAsync()
+    {
+        _unavailable = null; _error = null; _reply = null; _disclosure = null; _pending = null; _awaitingConsent = false;
+        _working = true;
+        try
+        {
+            var request = BuildRequest();
+            var disclosure = await Api.PreviewCompareExplainAsync(request, CancellationToken.None);
+            _disclosure = disclosure;
+            _pending = request with { DisclosureSha256 = disclosure.PayloadSha256 };
+            if (!disclosure.AiAvailable) { _unavailable = disclosure.Unavailable; return; }
+            if (Consent.SkipMetadataPrompt) { await SendCoreAsync(); return; }
+            _awaitingConsent = true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _error = $"Unable to prepare the explanation: {exception.Message}";
+        }
+        finally
+        {
+            _working = false;
+        }
+    }
+
+    private async Task SendAsync(bool remember)
+    {
+        _working = true;
+        try
+        {
+            if (remember) Consent.SkipMetadataPrompt = true;
+            await SendCoreAsync();
+        }
+        finally
+        {
+            _working = false;
+        }
+    }
+
+    private async Task SendCoreAsync()
+    {
+        if (_pending is null) return;
+        _awaitingConsent = false;
+        try
+        {
+            var response = await Api.CompareExplainAsync(_pending, CancellationToken.None);
+            _reply = response.Reply;
+            _replyProvider = response.Provider;
+            _replyModel = response.Model;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _error = $"The AI request failed: {exception.Message}";
+        }
+    }
+
+    private void Cancel()
+    {
+        _awaitingConsent = false;
+        _pending = null;
+    }
+}

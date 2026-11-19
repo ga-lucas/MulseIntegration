@@ -8,6 +8,7 @@ public static class AiAuthoringEndpoints
 {
     private const int MaxSettingsBodyBytes = 16 * 1024;
     private const int MaxBizTalkAssistBodyBytes = 8 * 1024 * 1024;
+    private const int MaxCompareExplainBodyBytes = 512 * 1024;
 
     public static WebApplication MapAiAuthoringEndpoints(this WebApplication app)
     {
@@ -78,6 +79,20 @@ public static class AiAuthoringEndpoints
             var body = await ReadBodyAsync<BizTalkAssistRequest>(request, MaxBizTalkAssistBodyBytes, cancellationToken).ConfigureAwait(false);
             return await Guarded(async () => Results.Ok(await service.BizTalkAssistAsync(body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
         }).WithName("BizTalkAssist").WithSummary("Explain an evidence request or review supplied evidence. Sends only what the preview showed");
+
+        group.MapPost("/compare-explain/preview", async (HttpRequest request, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<CompareExplainRequest>(request, MaxCompareExplainBodyBytes, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(service.PreviewCompareExplain(body));
+        }).WithName("PreviewCompareExplain").WithSummary("Show exactly what an explanation of comparison differences would send. Contacts no AI provider");
+
+        group.MapPost("/compare-explain", async (HttpRequest request, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<CompareExplainRequest>(request, MaxCompareExplainBodyBytes, cancellationToken).ConfigureAwait(false);
+            return await Guarded(async () => Results.Ok(await service.CompareExplainAsync(body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
+        }).WithName("CompareExplain").WithSummary("Explain classes of comparison differences. Sends only what the preview showed and never any values");
 
         return app;
     }

@@ -174,4 +174,10 @@ public interface IMulseApiClient
 
     Task<BizTalkAssistResponseViewModel> BizTalkAssistAsync(BizTalkAssistRequestViewModel request, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support BizTalk import assistance.");
+
+    Task<CompareExplainDisclosureViewModel> PreviewCompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI explanations of comparison differences.");
+
+    Task<CompareExplainResponseViewModel> CompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI explanations of comparison differences.");
 }

@@ -128,6 +128,7 @@
                 @if (item.Truncated) { <p class="field-hint">More differences exist than are shown.</p> }
             }
         }
+        <CompareExplainPanel Results="_comparison.Results" Consent="_explainConsent" />
     }
     <h4>Saved scenarios</h4>
     <p class="field-hint">Keep the samples above to run again after you change the definition. Scenarios are stored encrypted on the Mulse server, apart from flows, exports and backups, and are never sent to AI. The definition itself is not saved. A scenario can contain real data, so choose how long to keep it and delete it when you no longer need it. Running a saved scenario uses the input, mocks and samples as they were saved; Load copies its samples here to edit, and uses the test setup above.</p>
@@ -205,6 +206,7 @@
     private bool _scenarioRealData = true, _scenarioBusy;
     private string? _scenarioError, _scenarioNotice, _confirmDeleteId;
     private IReadOnlyList<ComparisonScenarioSummaryViewModel>? _scenarios;
+    private readonly BizTalkAssistConsent _explainConsent = new();
     protected override void OnParametersSet()
     {
         if (_definition == Value) return;

@@ -61,6 +61,7 @@ public sealed class NativeFlowCompareUiTests
             Assert.Contains("Changes content", html);
             Assert.Contains("Formatting only", html);
             Assert.Contains("not proof that the flows are equivalent", html);
+            Assert.Contains("data-testid=\"explain-panel\"", html);
         });
     }
 
