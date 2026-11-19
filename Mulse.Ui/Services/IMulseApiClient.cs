@@ -65,6 +65,15 @@ public interface IMulseApiClient
     Task<NativeFlowCompareResponseViewModel> RunComparisonScenarioAsync(string id, string flowJson, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support saved comparison scenarios.");
 
+    Task<FlowExplanationViewModel> ExplainNativeFlowAsync(string flowJson, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support flow explanations.");
+
+    Task<NodeExplanationViewModel> ExplainNativeNodeAsync(string flowJson, string nodeId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support flow explanations.");
+
+    Task<IReadOnlyList<AssistGlossaryEntryViewModel>> SearchAssistGlossaryAsync(string? search, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the glossary.");
+
     Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken);
 
     Task<NativeMapConversionViewModel> ImportNativeXmlMappingAsync(XmlMappingImportRequestViewModel request, CancellationToken cancellationToken);

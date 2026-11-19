@@ -1,0 +1,120 @@
+@inject IServiceProvider Services
+
+<details data-testid="explain-panel">
+    <summary>Explain this flow</summary>
+    <p class="field-hint">Plain-language facts read from the definition and the installed modules. This works on the Mulse server only: no AI provider is used and nothing is sent anywhere. Setting values are never shown, only whether each one is set.</p>
+    <button type="button" class="secondary-button" disabled="@_busy" @onclick="ExplainFlowAsync" data-testid="explain-flow">Explain the flow</button>
+    @if (_error is not null) { <p class="status-banner error" role="alert" data-testid="explain-error">@_error</p> }
+    @if (_flow is not null)
+    {
+        <p data-testid="explain-summary">@_flow.NodeCount step(s)@(_flow.Durable ? ", durable (state is kept while it waits)" : ", not durable"): @string.Join(", ", _flow.KindCounts.Select(pair => $"{pair.Value} {pair.Key}"))</p>
+        @if (_flow.Findings.Count == 0) { <p class="field-hint" data-testid="explain-no-findings">Nothing to point out.</p> }
+        else
+        {
+            <h4>Worth a look</h4>
+            <ul data-testid="explain-findings">
+                @foreach (var finding in _flow.Findings)
+                {
+                    <li>@finding.Severity: @finding.Text @if (finding.NodeId is not null) { <button type="button" class="secondary-button" disabled="@_busy" @onclick="() => ExplainNodeAsync(finding.NodeId)">Show step</button> }</li>
+                }
+            </ul>
+        }
+        @if (_flow.Effects.Count > 0)
+        {
+            <h4>What it sends</h4>
+            <ul data-testid="explain-effects">@foreach (var effect in _flow.Effects) { <li>@effect</li> }</ul>
+        }
+        <h4>Steps</h4>
+        <ol data-testid="explain-steps" style="list-style:none;padding-left:0">
+            @foreach (var step in _flow.Steps)
+            {
+                <li @key="step.Id" style="@($"margin-left:{step.Depth * 1.25}rem")">
+                    <strong>@step.Title</strong> <span class="field-hint">(@step.Kind@(step.ModuleName is not null ? ", " + step.ModuleName : ""))</span>
+                    <button type="button" class="secondary-button" disabled="@_busy" @onclick="() => ExplainNodeAsync(step.Id)" data-testid="explain-step">Explain</button>
+                    @foreach (var note in step.Notes) { <div class="field-hint">@note</div> }
+                </li>
+            }
+        </ol>
+        <p class="field-hint" data-testid="explain-disclaimer">@_flow.Disclaimer</p>
+    }
+    @if (_node is not null)
+    {
+        <div data-testid="explain-node">
+            <h4>@_node.Step.Title (@_node.KindInfo.Title)</h4>
+            @foreach (var fact in _node.Facts) { <p>@fact</p> }
+            @if (_node.ModuleDescription is not null) { <p>Module: @_node.ModuleDescription</p> }
+            @if (_node.Settings.Count > 0)
+            {
+                <table class="compare-differences" data-testid="explain-settings">
+                    <thead><tr><th>Setting</th><th>Required</th><th>State</th></tr></thead>
+                    <tbody>
+                    @foreach (var setting in _node.Settings)
+                    {
+                        <tr title="@setting.Description"><td>@setting.Label</td><td>@(setting.Required ? "Yes" : "No")</td><td>@setting.State</td></tr>
+                    }
+                    </tbody>
+                </table>
+            }
+            @foreach (var finding in _node.Findings) { <p class="field-hint">@finding.Severity: @finding.Text</p> }
+        </div>
+    }
+    <h4>BizTalk terms</h4>
+    <label class="field-label">Look up a term <input class="mapping-input" @bind="_search" maxlength="80" data-testid="glossary-search" /></label>
+    <button type="button" class="secondary-button" disabled="@_busy" @onclick="SearchAsync" data-testid="glossary-go">Look up</button>
+    @if (_terms is not null)
+    {
+        @if (_terms.Count == 0) { <p class="field-hint" data-testid="glossary-empty">No matching term.</p> }
+        else
+        {
+            <dl data-testid="glossary-results">
+                @foreach (var term in _terms) { <dt @key="term.Term">@term.Term</dt><dd>@term.Meaning <em>In Mulse: @term.InMulse</em></dd> }
+            </dl>
+        }
+    }
+</details>
+
+@code {
+    [Parameter] public string Value { get; set; } = "";
+    private string _definition = "", _search = "";
+    private string? _error;
+    private bool _busy;
+    private int _revision;
+    private FlowExplanationViewModel? _flow;
+    private NodeExplanationViewModel? _node;
+    private IReadOnlyList<AssistGlossaryEntryViewModel>? _terms;
+
+    protected override void OnParametersSet()
+    {
+        if (_definition == Value) return;
+        _definition = Value;
+        _revision++;
+        _flow = null; _node = null; _error = null;
+    }
+
+    private async Task RunAsync(Func<IMulseApiClient, int, Task> action)
+    {
+        _error = null;
+        if (Services.GetService(typeof(IMulseApiClient)) is not IMulseApiClient api) { _error = "The explanation API is unavailable."; return; }
+        var revision = _revision;
+        _busy = true;
+        try { await action(api, revision); }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or NotSupportedException)
+        { if (revision == _revision) _error = exception.Message; }
+        finally { _busy = false; }
+    }
+
+    private Task ExplainFlowAsync() => RunAsync(async (api, revision) =>
+    {
+        var result = await api.ExplainNativeFlowAsync(Value, default);
+        if (revision != _revision) return;
+        _flow = result; _node = null;
+    });
+
+    private Task ExplainNodeAsync(string nodeId) => RunAsync(async (api, revision) =>
+    {
+        var result = await api.ExplainNativeNodeAsync(Value, nodeId, default);
+        if (revision == _revision) _node = result;
+    });
+
+    private Task SearchAsync() => RunAsync(async (api, _) => _terms = await api.SearchAssistGlossaryAsync(_search, default));
+}

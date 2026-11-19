@@ -166,6 +166,25 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<NativeFlowCompareResponseViewModel>(response, cancellationToken, "comparison result").ConfigureAwait(false);
     }
 
+    public async Task<FlowExplanationViewModel> ExplainNativeFlowAsync(string flowJson, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/assist/explain/flow", new { FlowJson = flowJson }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowExplanationViewModel>(response, cancellationToken, "flow explanation").ConfigureAwait(false);
+    }
+
+    public async Task<NodeExplanationViewModel> ExplainNativeNodeAsync(string flowJson, string nodeId, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/assist/explain/node", new { FlowJson = flowJson, NodeId = nodeId }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<NodeExplanationViewModel>(response, cancellationToken, "step explanation").ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<AssistGlossaryEntryViewModel>> SearchAssistGlossaryAsync(string? search, CancellationToken cancellationToken)
+    {
+        var url = string.IsNullOrWhiteSpace(search) ? "/api/assist/glossary" : "/api/assist/glossary?search=" + Uri.EscapeDataString(search.Trim());
+        using var response = await httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<List<AssistGlossaryEntryViewModel>>(response, cancellationToken, "glossary").ConfigureAwait(false);
+    }
+
     public async Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken)
     {
         using var response = await httpClient.PostAsJsonAsync("/api/flow-designer/xml-mapping/schemas", request, cancellationToken).ConfigureAwait(false);
