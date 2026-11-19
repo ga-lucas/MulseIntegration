@@ -124,6 +124,12 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<NativeFlowTestResponseViewModel>(response, cancellationToken, "native test result").ConfigureAwait(false);
     }
 
+    public async Task<NativeFlowCompareResponseViewModel> CompareNativeFlowAsync(NativeFlowCompareRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/flow-designer/native/compare", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<NativeFlowCompareResponseViewModel>(response, cancellationToken, "comparison result").ConfigureAwait(false);
+    }
+
     public async Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken)
     {
         using var response = await httpClient.PostAsJsonAsync("/api/flow-designer/xml-mapping/schemas", request, cancellationToken).ConfigureAwait(false);

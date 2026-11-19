@@ -47,6 +47,9 @@ public interface IMulseApiClient
     Task<NativeFlowTestResponseViewModel> TestNativeFlowAsync(NativeFlowTestRequestViewModel request, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support isolated native testing.");
 
+    Task<NativeFlowCompareResponseViewModel> CompareNativeFlowAsync(NativeFlowCompareRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support comparing with real output.");
+
     Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken);
 
     Task<NativeMapConversionViewModel> ImportNativeXmlMappingAsync(XmlMappingImportRequestViewModel request, CancellationToken cancellationToken);

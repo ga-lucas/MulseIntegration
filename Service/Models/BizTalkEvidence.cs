@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Service.Models;
 
-/// <summary>What a piece of supplied evidence is. The importer reads Source, Bindings, RulePolicy, HostConfig and HelperSource; RealOutput is only recorded for later comparison.</summary>
+/// <summary>What a piece of supplied evidence is. The importer reads Source, Bindings, RulePolicy, HostConfig and HelperSource; RealOutput is only recorded; it is compared in the native test panel ("Compare with real output").</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<BizTalkEvidenceKind>))]
 public enum BizTalkEvidenceKind
 {

@@ -219,7 +219,7 @@ public static partial class BizTalkEvidenceRules
         var choices = CountAssumptionChoices(analysis.EffectiveMapChoicesJson);
         if (assumptionFlows.Length == 0 && choices == 0) return null;
         return new("real-output", "real-output", "Provide samples of what BizTalk really produced",
-            $"{assumptionFlows.Length} flow(s) and {choices} shared choice(s) write flat-file or HL7 output whose exact BizTalk format was not verified (escaping, trailing delimiters, line endings). Samples are recorded for later comparison; the importer does not read them yet.",
+            $"{assumptionFlows.Length} flow(s) and {choices} shared choice(s) write flat-file or HL7 output whose exact BizTalk format was not verified (escaping, trailing delimiters, line endings). Samples are recorded with the session; the importer does not read them. After the flow is saved, paste each input and real output into \"Compare with real output\" in the flow's native test panel to see classified differences.",
         [
             "Pick a few real outbound messages that were delivered to the partner, ideally the ones with optional or empty fields.",
             "Take them from the partner drop folder or a send port archive, and note the input message that produced each.",

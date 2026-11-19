@@ -84,6 +84,51 @@
             <ul>@foreach (var pair in payload.Metadata) { <li>@pair.Key: @pair.Value</li> }</ul>
         }
     }
+    <h4>Compare with real output</h4>
+    <p class="field-hint">Paste output captured from the real server for an input. Mulse runs this same isolated test (same mocks) and compares what the chosen delivery receives with your sample, then classifies each difference. A match means the supplied samples match; it does not show the flows are equivalent. Samples can contain real data: they are compared on this server, not stored and never sent to AI.</p>
+    @foreach (var sample in _samples)
+    {
+        <fieldset @key="sample"><legend>Sample: @sample.Name</legend>
+            <label class="field-label">Sample name <input class="mapping-input" @bind="sample.Name" @bind:after="ClearComparison" /></label>
+            <label class="field-label">Input text (leave empty to use the synthetic input above) <textarea class="mapping-input" @bind="sample.Input" @bind:after="ClearComparison"></textarea></label>
+            <label class="field-label">Compare the input of delivery
+                <select @bind="sample.Delivery" @bind:after="ClearComparison">
+                    <option value="">The last delivery, or the output if nothing is delivered</option>
+                    @foreach (var module in DeliveryModules) { <option value="@module">@module</option> }
+                </select>
+            </label>
+            <label class="field-label">Expected real output <textarea class="mapping-input" @bind="sample.Expected" @bind:after="ClearComparison"></textarea></label>
+            <button type="button" class="secondary-button" @onclick="() => RemoveSample(sample)">Remove sample</button>
+        </fieldset>
+    }
+    <button type="button" class="secondary-button" @onclick="AddSample">Add real-output sample</button>
+    <button type="button" class="secondary-button" disabled="@(_comparing || _samples.Count == 0)" @onclick="CompareAsync">Compare with real output</button>
+    @if (_compareError is not null) { <p class="status-banner error" role="alert">@_compareError</p> }
+    @if (_comparison is not null)
+    {
+        <p class="compare-summary">@_comparison.Summary.Statement</p>
+        @foreach (var item in _comparison.Results)
+        {
+            <h5>@item.Name: @VerdictText(item.Verdict)</h5>
+            @if (item.Error is not null) { <p class="status-banner error" role="alert">@item.Error</p> }
+            @if (item.Differences.Count > 0)
+            {
+                <table class="compare-differences">
+                    <thead><tr><th>Difference</th><th>Where</th><th>Expected (real)</th><th>Mulse</th><th>Effect</th></tr></thead>
+                    <tbody>
+                    @foreach (var difference in item.Differences)
+                    {
+                        <tr title="@difference.Explanation">
+                            <td>@difference.Class</td><td>@difference.Path</td><td><code>@difference.Expected</code></td><td><code>@difference.Actual</code></td>
+                            <td>@(difference.Cosmetic ? "Formatting only" : "Changes content")</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+                @if (item.Truncated) { <p class="field-hint">More differences exist than are shown.</p> }
+            }
+        }
+    }
 </details>
 
 @code {
@@ -97,6 +142,11 @@
     private bool _running;
     private bool _advanceWaits;
     private int _revision;
+    private int _comparisonRevision;
+    private readonly List<SampleEntry> _samples = [];
+    private NativeFlowCompareResponseViewModel? _comparison;
+    private string? _compareError;
+    private bool _comparing;
     protected override void OnParametersSet()
     {
         if (_definition == Value) return;
@@ -116,7 +166,45 @@
             foreach (var child in All(node.Otherwise)) yield return child;
         }
     }
-    private void Invalidate() { _revision++; _result = null; _error = null; }
+    private IEnumerable<string> DeliveryModules => _mocks.Where(mock => mock.Kind == "Deliver" && !string.IsNullOrWhiteSpace(mock.Module)).Select(mock => mock.Module).Distinct();
+    private void Invalidate() { _revision++; _result = null; _error = null; ClearComparison(); }
+    private void ClearComparison() { _comparisonRevision++; _comparison = null; _compareError = null; }
+    private void AddSample() { _samples.Add(new() { Name = "sample " + (_samples.Count + 1) }); ClearComparison(); }
+    private void RemoveSample(SampleEntry sample) { _samples.Remove(sample); ClearComparison(); }
+    private static string VerdictText(string verdict) => verdict switch
+    {
+        "Identical" => "identical",
+        "FormattingOnly" => "matches apart from formatting",
+        "Different" => "differs",
+        _ => "not compared"
+    };
+    private async Task CompareAsync()
+    {
+        _comparison = null; _compareError = null;
+        if (Services.GetService(typeof(IMulseApiClient)) is not IMulseApiClient api) { _compareError = "The comparison API is unavailable."; return; }
+        if (_samples.Count == 0) { _compareError = "Add at least one real-output sample."; return; }
+        if (_samples.Any(sample => string.IsNullOrWhiteSpace(sample.Name)) || _samples.Select(sample => sample.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != _samples.Count)
+        { _compareError = "Sample names must be nonempty and unique."; return; }
+        if (_samples.Any(sample => string.IsNullOrEmpty(sample.Expected))) { _compareError = "Every sample needs the expected real output."; return; }
+        if (!ValidMetadata(_metadata) || _mocks.Any(mock => mock.Enabled && (mock.Kind != "Deliver" || mock.HasOutput) && mock.UseCustomMetadata && !ValidMetadata(mock.Metadata)))
+        { _compareError = "Input and mock output metadata keys must be nonempty and unique."; return; }
+        var metadata = _metadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        var mocks = _mocks.Where(mock => mock.Enabled).Select(mock => new NativeFlowTestMockViewModel(mock.Kind, mock.Module,
+            mock.Kind == "Deliver" && !mock.HasOutput ? null : new(mock.Name, mock.Content, mock.ContentType,
+                mock.UseCustomMetadata ? mock.Metadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal) : metadata))).ToList();
+        var pairs = _samples.Select(sample => new NativeFlowComparePairViewModel(sample.Name.Trim(), sample.Expected,
+            new(_name, string.IsNullOrEmpty(sample.Input) ? _content : sample.Input, _contentType, metadata), mocks,
+            string.IsNullOrEmpty(sample.Delivery) ? null : sample.Delivery)).ToList();
+        var revision = _comparisonRevision; _comparing = true;
+        try
+        {
+            var result = await api.CompareNativeFlowAsync(new(Value, pairs, _advanceWaits), default);
+            if (revision == _comparisonRevision) _comparison = result;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or NotSupportedException)
+        { if (revision == _comparisonRevision) _compareError = exception.Message; }
+        finally { _comparing = false; }
+    }
     private void AddMetadata() { _metadata.Add(new()); Invalidate(); }
     private void RemoveMetadata(MetadataEntry entry) { _metadata.Remove(entry); Invalidate(); }
     private void AddMock() { _mocks.Add(new() { Manual = true, Kind = "Render" }); Invalidate(); }
@@ -146,6 +234,7 @@
         { if (revision == _revision) _error = exception.Message; }
         finally { _running = false; }
     }
+    private sealed class SampleEntry { public string Name { get; set; } = ""; public string Input { get; set; } = ""; public string Delivery { get; set; } = ""; public string Expected { get; set; } = ""; }
     private sealed class MetadataEntry { public string Key { get; set; } = ""; public string Value { get; set; } = ""; }
     private sealed class MockEntry
     {

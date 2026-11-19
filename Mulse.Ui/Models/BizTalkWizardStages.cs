@@ -33,7 +33,7 @@ public static class BizTalkWizardStages
         BizTalkWizardStage.Source => "Tell the importer where the BizTalk source is. A solution, project or folder on the service machine, or a zip you upload.",
         BizTalkWizardStage.Environment => "Deployment facts that are not in source: port bindings and host configuration values.",
         BizTalkWizardStage.RulesAndMaps => "Business rule exports, the policy versions to follow, and the maps that rules or orchestrations select at run time.",
-        BizTalkWizardStage.Behavior => "Components the importer cannot read, and samples of what the real system produced. Samples are recorded for later comparison.",
+        BizTalkWizardStage.Behavior => "Components the importer cannot read, and samples of what the real system produced. Samples are recorded with the session and compared in the flow's native test panel (\"Compare with real output\").",
         _ => "What changed since the last analysis, what is still open, and the flows to create or update."
     };
 

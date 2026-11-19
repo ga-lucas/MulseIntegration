@@ -465,6 +465,23 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1rem; height: 1rem;
     font-weight: 600;
 }
 
+.compare-differences {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.compare-differences th,
+.compare-differences td {
+    padding: 0.25rem 0.5rem;
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+}
+
+.compare-summary {
+    font-weight: 600;
+}
+
 .biztalk-wizard .update-pieces th,
 .biztalk-wizard .update-pieces td {
     padding: 0.25rem 0.5rem;
