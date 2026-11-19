@@ -89,6 +89,12 @@ public interface IMulseApiClient
     Task<IReadOnlyList<AiActivityEntryViewModel>> GetAiActivityAsync(string? flowId, int take, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support the AI activity list.");
 
+    Task<RunWordingDisclosureViewModel> PreviewRunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI wording of run explanations.");
+
+    Task<FlowWordingResponseViewModel> RunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI wording of run explanations.");
+
     Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken);
 
     Task<NativeMapConversionViewModel> ImportNativeXmlMappingAsync(XmlMappingImportRequestViewModel request, CancellationToken cancellationToken);

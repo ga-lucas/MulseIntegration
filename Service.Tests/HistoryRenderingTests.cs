@@ -316,6 +316,7 @@ public sealed class HistoryRenderingTests
             await InvokeAsync(page, "SelectExecutionAsync", "run-new");
             Assert.Contains("data-testid=\"run-explain\"", html());
             Assert.DoesNotContain("run-explanation", html());
+            Assert.DoesNotContain("run-wording-panel", html());
             Assert.DoesNotContain(handler.Requests, path => path.StartsWith("/api/assist/"));
 
             await InvokeAsync(page, "ExplainRunAsync");
@@ -328,10 +329,13 @@ public sealed class HistoryRenderingTests
             Assert.Contains("does not resend or retry on your behalf", text);
             Assert.DoesNotContain(Secret, text);
             Assert.DoesNotContain(">Retry", text);
+            Assert.Contains("data-testid=\"run-wording-start\"", text);
+            Assert.DoesNotContain(handler.Requests, path => path.StartsWith("/api/authoring/"));
             Assert.Contains("/api/assist/explain/run/run-new", handler.Requests);
 
             await InvokeAsync(page, "SelectExecutionAsync", "run-held");
             Assert.DoesNotContain("run-explanation", html());
+            Assert.DoesNotContain("run-wording-panel", html());
         });
     }
 

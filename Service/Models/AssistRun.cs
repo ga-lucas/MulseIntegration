@@ -16,3 +16,17 @@ public sealed record RunExplanation(
 
 /// <summary>A run as read from storage for the assistant. <paramref name="Run"/> may hold error text; it never leaves the server unless it is redacted first.</summary>
 public sealed record AssistRunSource(string ExecutionId, string FlowId, AssistRunInput Run);
+
+/// <summary>Ask for a run to be put in plain words. The run is read on the server by the id in the route; the server rebuilds the redacted payload and refuses to send unless its hash matches what the user approved.</summary>
+public sealed record RunWordingRequest(string? Question = null, bool IncludeErrorText = false, string? DisclosureSha256 = null);
+
+/// <summary>Exactly what a run wording request would send. Nothing has been sent when this is returned.</summary>
+public sealed record RunWordingDisclosure(
+    bool AiAvailable,
+    string? Unavailable,
+    string Provider,
+    string Model,
+    string Payload,
+    string PayloadSha256,
+    bool IncludesErrorText,
+    IReadOnlyList<string> Notes);

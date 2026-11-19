@@ -11,6 +11,8 @@ public sealed record ConfigReferenceViewModel(string Kind, string Name, List<str
 public sealed record FlowWordingRequestViewModel(string FlowJson, string? Question = null, bool IncludeBlockReasons = false, string? FlowId = null, string? DisclosureSha256 = null);
 public sealed record FlowWordingDisclosureViewModel(bool AiAvailable, string? Unavailable, string Provider, string Model, string Payload, string PayloadSha256, bool IncludesBlockReasons, IReadOnlyList<string> Notes);
 public sealed record FlowWordingResponseViewModel(string Reply, string Provider, string Model);
+public sealed record RunWordingRequestViewModel(string? Question = null, bool IncludeErrorText = false, string? DisclosureSha256 = null);
+public sealed record RunWordingDisclosureViewModel(bool AiAvailable, string? Unavailable, string Provider, string Model, string Payload, string PayloadSha256, bool IncludesErrorText, IReadOnlyList<string> Notes);
 public sealed record AiActivityEntryViewModel(Guid Id, DateTimeOffset At, string? Actor, string Surface, string Action, string Provider, string Model, List<string> Categories,
     string? FlowId, int PayloadChars, string PayloadSha256, string Outcome, string? Detail, bool? ProposalProduced, int? ProposalErrors);
 public sealed record AssistMissingModuleViewModel(string Module, string Kind, List<string> NodeIds);

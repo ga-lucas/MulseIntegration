@@ -527,6 +527,21 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<FlowWordingResponseViewModel>(response, cancellationToken, "flow wording").ConfigureAwait(false);
     }
 
+    public async Task<RunWordingDisclosureViewModel> PreviewRunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/run-wording/" + Uri.EscapeDataString(executionId) + "/preview", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<RunWordingDisclosureViewModel>(response, cancellationToken, "run wording preview").ConfigureAwait(false);
+    }
+
+    public async Task<FlowWordingResponseViewModel> RunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/run-wording/" + Uri.EscapeDataString(executionId)) { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowWordingResponseViewModel>(response, cancellationToken, "run wording").ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<AiActivityEntryViewModel>> GetAiActivityAsync(string? flowId, int take, CancellationToken cancellationToken)
     {
         var url = "/api/assist/activity?take=" + take + (string.IsNullOrWhiteSpace(flowId) ? "" : "&flowId=" + Uri.EscapeDataString(flowId.Trim()));

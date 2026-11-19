@@ -126,6 +126,7 @@
                     <h4>What to check</h4>
                     <ul data-testid="run-explain-check">@foreach (var line in _runExplanation.WhatToCheck) { <li>@line</li> }</ul>
                     <p class="field-hint" data-testid="run-explain-disclaimer">@_runExplanation.Disclaimer</p>
+                    <RunWordingPanel @key="_runExplanation.ExecutionId" ExecutionId="@_runExplanation.ExecutionId" Consent="_aiConsent" />
                 </div>
             }
             @if (_detail.Execution.State == "Held")
@@ -259,6 +260,7 @@
     private bool _isExplainingRun;
     private string? _runExplainError;
     private RunExplanationViewModel? _runExplanation;
+    private readonly BizTalkAssistConsent _aiConsent = new();
     private bool CanCloseExecution => _showExecutionClosure && _detail?.Execution.State == "Held"
         && _closeConfirmation == "CLOSE WITHOUT REPLAY" && !string.IsNullOrWhiteSpace(_closeEvidence);
     private bool IsBusy => _isLoadingList || _isLoadingDetail || _isLoadingPayload || _isLoadingMessages || _isConfirmingDelivery || _isClosingExecution;

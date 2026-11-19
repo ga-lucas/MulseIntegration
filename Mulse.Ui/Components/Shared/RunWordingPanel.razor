@@ -1,0 +1,123 @@
+@using Mulse.Ui.Models
+@using Mulse.Ui.Services
+@inject IServiceProvider Services
+
+<div data-testid="run-wording-panel">
+    <h4>Put this run in plain words with AI</h4>
+    <p class="field-hint">Optional. AI can describe what happened in this run and answer a question about it. It is only sent facts: the run's state, the stage names and states of its events and deliveries, and what Mulse says each state means. It never sees message content, setting values or secrets. You see exactly what would be sent first. The wording is a suggestion; it changes nothing and never retries or resends anything.</p>
+    <label class="field-label">Question (optional)
+        <input class="mapping-input" @bind="_question" maxlength="500" data-testid="run-wording-question" />
+    </label>
+    <label class="checkbox-label"><input type="checkbox" @bind="_includeErrorText" data-testid="run-wording-error-text" /> Also send the error text from events (addresses, paths, identifiers and credential-looking values are removed, but it can still quote your data, so you will always be asked first)</label>
+    <button type="button" class="secondary-button" disabled="@_working" @onclick="PrepareAsync" data-testid="run-wording-start">Put the run in plain words</button>
+    @if (_working) { <p class="field-hint" role="status">Working...</p> }
+    @if (_error is not null) { <p class="status-banner error" role="alert" data-testid="run-wording-error">@_error</p> }
+    @if (_unavailable is not null) { <p class="status-banner error" role="status" data-testid="run-wording-unavailable">AI help is not available: @_unavailable</p> }
+    @if (_awaitingConsent && _disclosure is not null)
+    {
+        <div class="warning-panel" data-testid="run-wording-consent">
+            <h4>Review before anything is sent</h4>
+            <p>This will be sent to <strong>@_disclosure.Provider</strong> (model <strong>@_disclosure.Model</strong>). Nothing has been sent yet.</p>
+            <ul>@foreach (var note in _disclosure.Notes) { <li>@note</li> }</ul>
+            <pre class="assist-payload" data-testid="run-wording-payload">@_disclosure.Payload</pre>
+            <div class="action-row">
+                <button class="run-button" disabled="@_working" @onclick="() => SendAsync(false)" data-testid="run-wording-send">Send</button>
+                @if (!_disclosure.IncludesErrorText)
+                {
+                    <button class="secondary-button" disabled="@_working" @onclick="() => SendAsync(true)" data-testid="run-wording-send-remember">Send and don't ask again this session</button>
+                }
+                <button class="secondary-button" disabled="@_working" @onclick="Cancel" data-testid="run-wording-cancel">Cancel</button>
+            </div>
+            <p class="field-hint">"Don't ask again" lasts until you leave or reload this page. It is never saved. It is not offered when error text is included.</p>
+        </div>
+    }
+    @if (_reply is not null)
+    {
+        <div class="assist-reply" data-testid="run-wording-reply">
+            <h4>AI-generated explanation</h4>
+            <p class="field-hint">From @_provider (@_model). It may be wrong and it could not see any message content. It has not been applied to anything.</p>
+            <div class="assist-reply-text">@_reply</div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string ExecutionId { get; set; } = "";
+    [Parameter] public BizTalkAssistConsent Consent { get; set; } = new();
+
+    private string _question = "", _executionId = "";
+    private bool _includeErrorText, _working, _awaitingConsent;
+    private RunWordingRequestViewModel? _pending;
+    private RunWordingDisclosureViewModel? _disclosure;
+    private string? _error, _unavailable, _reply, _provider, _model;
+    private int _revision;
+
+    protected override void OnParametersSet()
+    {
+        if (_executionId == ExecutionId) return;
+        _executionId = ExecutionId;
+        _revision++;
+        Reset();
+    }
+
+    // An approval or reply belongs to the exact run it was prepared for, so it is dropped whenever the run changes.
+    private void Reset()
+    {
+        _pending = null; _disclosure = null; _awaitingConsent = false;
+        _error = null; _unavailable = null; _reply = null;
+    }
+
+    private async Task PrepareAsync()
+    {
+        Reset();
+        if (Services.GetService(typeof(IMulseApiClient)) is not IMulseApiClient api) { _error = "The explanation API is unavailable."; return; }
+        var revision = _revision;
+        _working = true;
+        try
+        {
+            var question = string.IsNullOrWhiteSpace(_question) ? null : _question.Trim();
+            var request = new RunWordingRequestViewModel(question, _includeErrorText);
+            var disclosure = await api.PreviewRunWordingAsync(_executionId, request, default);
+            if (revision != _revision) return;
+            _disclosure = disclosure;
+            _pending = request with { DisclosureSha256 = disclosure.PayloadSha256 };
+            if (!disclosure.AiAvailable) { _unavailable = disclosure.Unavailable; return; }
+            if (Consent.SkipMetadataPrompt && !disclosure.IncludesErrorText) { await SendCoreAsync(api, revision); return; }
+            _awaitingConsent = true;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or NotSupportedException)
+        { if (revision == _revision) _error = $"Unable to prepare the explanation: {exception.Message}"; }
+        finally { _working = false; }
+    }
+
+    private async Task SendAsync(bool remember)
+    {
+        if (Services.GetService(typeof(IMulseApiClient)) is not IMulseApiClient api) return;
+        _working = true;
+        try
+        {
+            if (remember && _disclosure is { IncludesErrorText: false }) Consent.SkipMetadataPrompt = true;
+            await SendCoreAsync(api, _revision);
+        }
+        finally { _working = false; }
+    }
+
+    private async Task SendCoreAsync(IMulseApiClient api, int revision)
+    {
+        if (_pending is null) return;
+        _awaitingConsent = false;
+        try
+        {
+            var response = await api.RunWordingAsync(_executionId, _pending, default);
+            if (revision != _revision) return;
+            _reply = response.Reply; _provider = response.Provider; _model = response.Model;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or NotSupportedException)
+        { if (revision == _revision) _error = $"The AI request failed: {exception.Message}"; }
+    }
+
+    private void Cancel()
+    {
+        _awaitingConsent = false; _pending = null;
+    }
+}

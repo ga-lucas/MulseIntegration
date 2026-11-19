@@ -59,7 +59,7 @@ public static class AssistSurfaces
             [Action("custom-function", "Copy a prompt for a formula stub (manual copy and paste)", Built: true, NeedsAi: false), Action("field-matches", "Suggest field matches", Built: false, NeedsAi: true)]),
         new("history", "History",
             [Part("Run outcome and failing step", AssistCategory.Structure, 10_000), Part("Error text", AssistCategory.RunLogs, 20_000), Part("Message content", AssistCategory.MessageData, 20_000)],
-            [Action("explain-run", "Explain this run", Built: true, NeedsAi: false)]),
+            [Action("explain-run", "Explain this run", Built: true, NeedsAi: false), Action("explain-run-ai", "Put the run explanation in plain words", Built: true, NeedsAi: true)]),
         new("config-values", "Config values",
             [Part("Config value names and where they are used", AssistCategory.Structure, 20_000), Part("Config values", AssistCategory.ConfigAndSecrets, 0)],
             [Action("explain-config", "Explain a config value", Built: false, NeedsAi: false)]),

@@ -12,6 +12,7 @@ internal sealed partial class AiAuthoringService
         public static readonly string[] StructureAndSettingValues = ["Structure", "SettingValues"];
         public static readonly string[] StructureAndMessageData = ["Structure", "MessageData"];
         public static readonly string[] StructureAndSourceExpressions = ["Structure", "SourceExpressions"];
+        public static readonly string[] StructureAndRunLogs = ["Structure", "RunLogs"];
         public static readonly string[] None = [];
     }
 

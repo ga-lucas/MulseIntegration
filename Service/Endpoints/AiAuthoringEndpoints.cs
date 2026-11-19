@@ -10,6 +10,7 @@ public static class AiAuthoringEndpoints
     private const int MaxBizTalkAssistBodyBytes = 8 * 1024 * 1024;
     private const int MaxCompareExplainBodyBytes = 512 * 1024;
     private const int MaxFlowWordingBodyBytes = 2 * 1024 * 1024;
+    private const int MaxRunWordingBodyBytes = 16 * 1024;
 
     public static WebApplication MapAiAuthoringEndpoints(this WebApplication app)
     {
@@ -109,7 +110,32 @@ public static class AiAuthoringEndpoints
             return await Guarded(async () => Results.Ok(await service.FlowWordingAsync(body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
         }).WithName("FlowWording").WithSummary("Put the structure of a native flow into plain words. Sends only what the preview showed and never any values");
 
+        group.MapPost("/run-wording/{executionId}/preview", async (string executionId, HttpRequest request, IServiceProvider services, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<RunWordingRequest>(request, MaxRunWordingBodyBytes, cancellationToken).ConfigureAwait(false);
+            var source = await LoadRunAsync(services, executionId, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(service.PreviewRunWording(source, body));
+        }).WithName("PreviewRunWording").WithSummary("Show exactly what putting one run into plain words would send. Contacts no AI provider")
+            .ProducesProblem(StatusCodes.Status404NotFound).ProducesProblem(StatusCodes.Status409Conflict);
+
+        group.MapPost("/run-wording/{executionId}", async (string executionId, HttpRequest request, IServiceProvider services, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<RunWordingRequest>(request, MaxRunWordingBodyBytes, cancellationToken).ConfigureAwait(false);
+            var source = await LoadRunAsync(services, executionId, cancellationToken).ConfigureAwait(false);
+            return await Guarded(async () => Results.Ok(await service.RunWordingAsync(source, body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
+        }).WithName("RunWording").WithSummary("Put one run into plain words. Sends only what the preview showed, never message content, and never offers a retry")
+            .ProducesProblem(StatusCodes.Status404NotFound).ProducesProblem(StatusCodes.Status409Conflict);
+
         return app;
+    }
+
+    private static async Task<AssistRunSource> LoadRunAsync(IServiceProvider services, string executionId, CancellationToken cancellationToken)
+    {
+        var journal = services.GetService<Service.Execution.FlowJournal>()
+            ?? throw new InvalidOperationException("Execution history requires a database storage engine, so there is no run to explain.");
+        return await journal.RunForAssistAsync(executionId, cancellationToken).ConfigureAwait(false);
     }
 
     private static string? UserToken(HttpRequest request)
