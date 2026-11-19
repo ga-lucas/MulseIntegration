@@ -2007,6 +2007,30 @@ its DLL changes. Built-in packages cannot be unloaded or replaced.
 API clients can `PATCH /api/module-packages/{packageId}/enabled` with `{ "enabled": true }`, or
 `{ "enabled": false, "confirmation": "UNLOAD PACKAGE" }` to unload.
 
+### Edit history in the flow designer
+
+The Flow Designer keeps an edit history for everything you change on the page, including the nested
+editors (native flow steps, XML and parsed-data mappings, render pipelines, ODX send settings, join
+editors, node positions, connections and AI-applied proposals).
+
+- **Undo / Redo** in the top bar step through the history. **Ctrl/Cmd+Z** undoes and **Ctrl+Y** or
+  **Ctrl/Cmd+Shift+Z** redoes. The shortcuts are ignored while the cursor is in a text box, select or
+  editable field, so normal text editing keeps the browser's own undo.
+- **Reset** returns the draft to the state it had when the designer loaded (or was last saved) and is
+  itself undoable, so you can bring your changes back with Undo.
+- **Reload** (existing flows only) discards the draft and the history and loads the saved flow from
+  the server. When there are unsaved changes it asks for confirmation inline. If the server cannot be
+  reached the draft is kept. Reload re-runs the automatic layout, so manual positions are lost.
+- The **Unsaved changes** pill shows while the draft differs from the last saved state. Saving moves
+  that baseline but keeps the undo history.
+- Rapid typing in the same field within one second is coalesced into a single step. The history keeps
+  at most 100 steps and roughly 50 million characters of snapshots; the oldest steps are dropped first.
+- Restoring a step never saves and never enables a flow. Imported BizTalk flows stay disabled
+  until you enable them deliberately, and the existing save guard still applies.
+- The viewport, selection, open panels, sample data and warnings are not part of the history. Edits
+  inside nested editors are captured when their change or click event completes.
+- History replaces the single-step undo of AI proposals; applying a proposal is one history step.
+
 ### Appearance and designer panels
 
 Use **Collapse menu** beneath the Mulse logo to reduce the desktop navigation to an icon rail.

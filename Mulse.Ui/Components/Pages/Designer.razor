@@ -12,8 +12,19 @@
         <div class="designer-heading">
             <p class="eyebrow">Integration builder</p>
             <h1>@(string.IsNullOrWhiteSpace(_flowName) ? IsExistingFlow ? FlowId : "New flow" : _flowName)</h1>
+            @if (HasUnsavedChanges)
+            {
+                <span class="status-pill warning" role="status" data-testid="unsaved-changes">Unsaved changes</span>
+            }
         </div>
         <div class="designer-topbar-actions" role="group" aria-label="Flow actions">
+            <button class="secondary-button" @onclick="UndoEdit" disabled="@(!CanUndoEdit)" title="@UndoTitle" aria-keyshortcuts="Control+Z">Undo</button>
+            <button class="secondary-button" @onclick="RedoEdit" disabled="@(!CanRedoEdit)" title="@RedoTitle" aria-keyshortcuts="Control+Y">Redo</button>
+            <button class="secondary-button" @onclick="ResetEdits" disabled="@(!HasUnsavedChanges || _isSaving || _isLoading)" title="Discard every change since this flow was loaded or last saved. Undo brings them back.">Reset</button>
+            @if (IsExistingFlow)
+            {
+                <button class="secondary-button" @onclick="RequestReloadAsync" disabled="@(_isSaving || _isLoading)" title="Load the saved flow again from the server, discarding unsaved changes and the undo history.">Reload</button>
+            }
             @if (IsExistingFlow)
             {
                 <a class="secondary-button" href="@($"/history/{Uri.EscapeDataString(FlowId!)}")">History</a>
@@ -42,6 +53,15 @@
         <div class="status-banner error designer-banner" role="alert">@_errorMessage</div>
     }
 
+    @if (_confirmReload)
+    {
+        <div class="status-banner designer-banner" role="alertdialog" aria-label="Confirm reload" data-testid="reload-confirmation">
+            <span>Reloading discards your unsaved changes and the undo history, and loads the flow as saved.</span>
+            <button class="run-button" @onclick="ReloadSavedAsync">Discard and reload</button>
+            <button class="secondary-button" @onclick="CancelReload">Keep editing</button>
+        </div>
+    }
+
     @if (_showAssistant)
     {
         <FlowAssistant @key="(typeof(FlowAssistant), FlowId)" CaptureDraft="CaptureAuthoringDraftAsync" Apply="ApplyAuthoringProposal" Close="() => _showAssistant = false" />
@@ -55,7 +75,7 @@
         <button @ref="_mappingTab" id="mapping-workspace-tab" role="tab" type="button" aria-selected="@(_showMappingDesigner ? "true" : "false")" aria-controls="mapping-workspace" tabindex="@(_showMappingDesigner ? 0 : -1)" @onclick="() => SetMappingWorkspace(true)" @onkeydown="args => HandleWorkspaceKeyAsync(args, 1)">Mapping</button>
         <button @ref="_augmentTab" id="augment-workspace-tab" role="tab" type="button" aria-selected="@(_showAugmentDesigner ? "true" : "false")" aria-controls="augment-workspace" tabindex="@(_showAugmentDesigner ? 0 : -1)" @onclick="SetAugmentWorkspace" @onkeydown="args => HandleWorkspaceKeyAsync(args, 2)">Augment steps</button>
     </div>
-    <div class="designer-surface">
+    <div class="designer-surface" @onchange="ObserveSurfaceEvent" @onclick="ObserveSurfaceEvent">
         <div id="flow-workspace" class="flow-workspace" role="tabpanel" aria-labelledby="flow-workspace-tab" hidden="@(_showMappingDesigner || _showAugmentDesigner)">
         @if (_showSamplePanel)
         {

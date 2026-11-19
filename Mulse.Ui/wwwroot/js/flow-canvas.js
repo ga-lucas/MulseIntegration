@@ -524,3 +524,28 @@ export function disposeFileDrop(svg) {
     svg.classList.remove('drop-target');
     delete svg.__fileDrop;
 }
+
+let historyShortcutHandler = null;
+
+/// Ctrl/Cmd+Z undoes and Ctrl+Y or Ctrl/Cmd+Shift+Z redoes the designer draft. Fields keep their own native text undo,
+/// so the shortcut is ignored while focus is in a text input, select, or editable element.
+export function initializeHistoryShortcuts(dotNetRef) {
+    disposeHistoryShortcuts();
+    historyShortcutHandler = event => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable || target.closest('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=range])'))) return;
+        const key = event.key.toLowerCase();
+        const action = key === 'z' ? (event.shiftKey ? 'redo' : 'undo') : key === 'y' && !event.shiftKey ? 'redo' : null;
+        if (!action) return;
+        event.preventDefault();
+        dotNetRef.invokeMethodAsync('OnHistoryShortcut', action);
+    };
+    document.addEventListener('keydown', historyShortcutHandler);
+}
+
+export function disposeHistoryShortcuts() {
+    if (!historyShortcutHandler) return;
+    document.removeEventListener('keydown', historyShortcutHandler);
+    historyShortcutHandler = null;
+}
