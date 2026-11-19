@@ -154,6 +154,143 @@ public sealed class NativeFlowExplainPanelUiTests
         Assert.Equal("?search=orch", fixture.Requests[0].Query);
     }
 
+    private static FlowWordingDisclosureViewModel Disclosure(bool available = true, bool blockReasons = false) => new(available, available ? null : "AI assistance is turned off.", "OpenAI", "test-model",
+        "FLOW: structure only", "HASH1", blockReasons, ["Only the structure of the flow is sent."]);
+
+    private static void SetField(object target, string name, object? value)
+        => typeof(NativeFlowExplainPanel).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+
+    [Fact]
+    public async Task ListsConfigAndSecretNamesTheFlowRefersTo()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/assist/explain/flow"] = Explanation() with { ConfigReferences = [new("secret", "sftp-password", ["d"]), new("config", "sftp-host", ["d", "w"])] };
+        await fixture.RunAsync(async component =>
+        {
+            await fixture.CallAsync(component, "ExplainFlowAsync");
+            await fixture.RefreshAsync(component);
+            var html = fixture.Html();
+            Assert.Contains("data-testid=\"explain-references\"", html);
+            Assert.Contains("sftp-password", html);
+            Assert.Contains("secret, used by 1 step(s)", html);
+            Assert.Contains("config, used by 2 step(s)", html);
+        });
+    }
+
+    [Fact]
+    public async Task WordingShowsWhatWouldBeSentAndSendsNothingUntilApproved()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/authoring/flow-wording/preview"] = Disclosure();
+        fixture.Replies["/api/authoring/flow-wording"] = new FlowWordingResponseViewModel("It sends one file.", "OpenAI", "test-model");
+        await fixture.RunAsync(async component =>
+        {
+            SetField(component, "_wordingQuestion", " What if it fails? ");
+            await fixture.CallAsync(component, "PrepareWordingAsync");
+            await fixture.RefreshAsync(component);
+            var html = fixture.Html();
+            Assert.Contains("data-testid=\"wording-consent\"", html);
+            Assert.Contains("FLOW: structure only", html);
+            Assert.DoesNotContain("wording-reply", html);
+            Assert.DoesNotContain("/flow-wording\"", string.Join(' ', fixture.Requests.Select(request => request.Path + "\"")));
+
+            await fixture.CallAsync(component, "SendWordingAsync", false);
+            await fixture.RefreshAsync(component);
+            html = fixture.Html();
+            Assert.Contains("It sends one file.", html);
+            Assert.Contains("AI-generated explanation", html);
+            Assert.DoesNotContain("wording-consent", html);
+            Assert.False(((BizTalkAssistConsent)typeof(NativeFlowExplainPanel).GetProperty("Consent")!.GetValue(component)!).SkipMetadataPrompt);
+        });
+        using var preview = JsonDocument.Parse(fixture.Requests[0].Body);
+        Assert.Equal("What if it fails?", preview.RootElement.GetProperty("question").GetString());
+        Assert.False(preview.RootElement.GetProperty("includeBlockReasons").GetBoolean());
+        Assert.Equal(("POST", "/api/authoring/flow-wording"), (fixture.Requests[1].Method, fixture.Requests[1].Path));
+        using var send = JsonDocument.Parse(fixture.Requests[1].Body);
+        Assert.Equal("HASH1", send.RootElement.GetProperty("disclosureSha256").GetString());
+        Assert.Equal(Flow, send.RootElement.GetProperty("flowJson").GetString());
+    }
+
+    [Fact]
+    public async Task DontAskAgainSkipsTheReviewNextTimeButBlockReasonsAlwaysAsk()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/authoring/flow-wording/preview"] = Disclosure();
+        fixture.Replies["/api/authoring/flow-wording"] = new FlowWordingResponseViewModel("Reply.", "OpenAI", "test-model");
+        await fixture.RunAsync(async component =>
+        {
+            await fixture.CallAsync(component, "PrepareWordingAsync");
+            await fixture.CallAsync(component, "SendWordingAsync", true);
+
+            fixture.Requests.Clear();
+            await fixture.CallAsync(component, "PrepareWordingAsync");
+            await fixture.RefreshAsync(component);
+            Assert.Equal(["/api/authoring/flow-wording/preview", "/api/authoring/flow-wording"], fixture.Requests.Select(request => request.Path));
+            Assert.DoesNotContain("wording-consent", fixture.Html());
+
+            fixture.Replies["/api/authoring/flow-wording/preview"] = Disclosure(blockReasons: true);
+            fixture.Requests.Clear();
+            await fixture.CallAsync(component, "PrepareWordingAsync");
+            await fixture.RefreshAsync(component);
+            Assert.Single(fixture.Requests);
+            var html = fixture.Html();
+            Assert.Contains("wording-consent", html);
+            Assert.DoesNotContain("wording-send-remember", html);
+            Assert.DoesNotContain("wording-reply", html);
+        });
+    }
+
+    [Fact]
+    public async Task WordingSaysWhenAiIsUnavailableAndNeverSends()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/authoring/flow-wording/preview"] = Disclosure(available: false);
+        await fixture.RunAsync(async component =>
+        {
+            await fixture.CallAsync(component, "PrepareWordingAsync");
+            await fixture.RefreshAsync(component);
+            var html = fixture.Html();
+            Assert.Contains("wording-unavailable", html);
+            Assert.Contains("AI assistance is turned off.", html);
+            Assert.DoesNotContain("wording-consent", html);
+        });
+        Assert.Single(fixture.Requests);
+    }
+
+    [Fact]
+    public async Task ChangingTheFlowDropsAPendingApprovalAndAnOldReply()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/authoring/flow-wording/preview"] = Disclosure();
+        await fixture.RunAsync(async component =>
+        {
+            await fixture.CallAsync(component, "PrepareWordingAsync");
+            await fixture.RefreshAsync(component);
+            Assert.Contains("wording-consent", fixture.Html());
+
+            await component.SetParametersAsync(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Value"] = """{"version":1,"nodes":[{"id":"x"}]}""" }));
+            Assert.DoesNotContain("wording-consent", fixture.Html());
+        });
+    }
+
+    [Fact]
+    public async Task ShowsAServerRefusalOfTheSend()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/authoring/flow-wording/preview"] = Disclosure();
+        await fixture.RunAsync(async component =>
+        {
+            await fixture.CallAsync(component, "PrepareWordingAsync");
+            fixture.Status = HttpStatusCode.Conflict;
+            await fixture.CallAsync(component, "SendWordingAsync", false);
+            await fixture.RefreshAsync(component);
+            var html = fixture.Html();
+            Assert.Contains("wording-error", html);
+            Assert.Contains("The AI request failed", html);
+            Assert.DoesNotContain("wording-reply", html);
+        });
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly ServiceProvider _services;

@@ -5,7 +5,14 @@ public sealed record AssistGlossaryEntryViewModel(string Term, string Meaning, s
 public sealed record AssistStepViewModel(int Depth, string Id, string Kind, string Title, string? Module, string? ModuleName, string Summary, List<string> Notes);
 public sealed record AssistFindingViewModel(string Severity, string Text, string? NodeId);
 public sealed record FlowExplanationViewModel(bool Durable, int NodeCount, Dictionary<string, int> KindCounts, List<AssistStepViewModel> Steps,
-    List<string> Effects, List<AssistFindingViewModel> Findings, string Disclaimer, List<AssistMissingModuleViewModel>? MissingModules = null);
+    List<string> Effects, List<AssistFindingViewModel> Findings, string Disclaimer, List<AssistMissingModuleViewModel>? MissingModules = null,
+    List<ConfigReferenceViewModel>? ConfigReferences = null);
+public sealed record ConfigReferenceViewModel(string Kind, string Name, List<string> NodeIds);
+public sealed record FlowWordingRequestViewModel(string FlowJson, string? Question = null, bool IncludeBlockReasons = false, string? FlowId = null, string? DisclosureSha256 = null);
+public sealed record FlowWordingDisclosureViewModel(bool AiAvailable, string? Unavailable, string Provider, string Model, string Payload, string PayloadSha256, bool IncludesBlockReasons, IReadOnlyList<string> Notes);
+public sealed record FlowWordingResponseViewModel(string Reply, string Provider, string Model);
+public sealed record AiActivityEntryViewModel(Guid Id, DateTimeOffset At, string? Actor, string Surface, string Action, string Provider, string Model, List<string> Categories,
+    string? FlowId, int PayloadChars, string PayloadSha256, string Outcome, string? Detail, bool? ProposalProduced, int? ProposalErrors);
 public sealed record AssistMissingModuleViewModel(string Module, string Kind, List<string> NodeIds);
 public sealed record ModulePromptViewModel(string Module, string Kind, List<string> NodeIds, List<string> SettingKeys, List<string> UnloadedPackages, string Prompt, string Disclaimer);
 public sealed record AssistSettingStateViewModel(string Key, string Label, string Description, bool Required, string State);

@@ -38,6 +38,17 @@
             <h4>What it sends</h4>
             <ul data-testid="explain-effects">@foreach (var effect in _flow.Effects) { <li>@effect</li> }</ul>
         }
+        @if (_flow.ConfigReferences is { Count: > 0 })
+        {
+            <h4>Config values and secrets it refers to</h4>
+            <p class="field-hint">Names only. Make sure each one exists in this environment before enabling the flow. Values are never shown.</p>
+            <ul data-testid="explain-references">
+                @foreach (var reference in _flow.ConfigReferences)
+                {
+                    <li @key="@(reference.Kind + reference.Name)"><strong>@reference.Name</strong> <span class="field-hint">(@reference.Kind, used by @reference.NodeIds.Count step(s))</span></li>
+                }
+            </ul>
+        }
         <h4>Steps</h4>
         <ol data-testid="explain-steps" style="list-style:none;padding-left:0">
             @foreach (var step in _flow.Steps)
@@ -88,6 +99,44 @@
             }
         </div>
     }
+    <div data-testid="wording-panel">
+        <h4>Put it in plain words with AI</h4>
+        <p class="field-hint">Optional. AI can describe the flow in plain words and answer a question about it. It is only sent the shape of the flow: step kinds and plain names, module ids, setting names with whether each is set, retry numbers and the names of config values and secrets. It never sees setting values, conditions, expressions, messages or secrets. You see exactly what would be sent first. The wording is a suggestion and changes nothing.</p>
+        <label class="field-label">Question (optional)
+            <input class="mapping-input" @bind="_wordingQuestion" maxlength="500" data-testid="wording-question" />
+        </label>
+        <label class="checkbox-label"><input type="checkbox" @bind="_includeBlockReasons" data-testid="wording-block-reasons" /> Also send the reasons steps could not be imported (addresses, paths and credential-looking values are removed, but they can still quote the source system, so you will always be asked first)</label>
+        <button type="button" class="secondary-button" disabled="@(_busy || _wordingWorking)" @onclick="PrepareWordingAsync" data-testid="wording-start">Put the flow in plain words</button>
+        @if (_wordingWorking) { <p class="field-hint" role="status">Working...</p> }
+        @if (_wordingError is not null) { <p class="status-banner error" role="alert" data-testid="wording-error">@_wordingError</p> }
+        @if (_wordingUnavailable is not null) { <p class="status-banner error" role="status" data-testid="wording-unavailable">AI help is not available: @_wordingUnavailable</p> }
+        @if (_awaitingConsent && _wordingDisclosure is not null)
+        {
+            <div class="warning-panel" data-testid="wording-consent">
+                <h4>Review before anything is sent</h4>
+                <p>This will be sent to <strong>@_wordingDisclosure.Provider</strong> (model <strong>@_wordingDisclosure.Model</strong>). Nothing has been sent yet.</p>
+                <ul>@foreach (var note in _wordingDisclosure.Notes) { <li>@note</li> }</ul>
+                <pre class="assist-payload" data-testid="wording-payload">@_wordingDisclosure.Payload</pre>
+                <div class="action-row">
+                    <button class="run-button" disabled="@_wordingWorking" @onclick="() => SendWordingAsync(false)" data-testid="wording-send">Send</button>
+                    @if (!_wordingDisclosure.IncludesBlockReasons)
+                    {
+                        <button class="secondary-button" disabled="@_wordingWorking" @onclick="() => SendWordingAsync(true)" data-testid="wording-send-remember">Send and don't ask again this session</button>
+                    }
+                    <button class="secondary-button" disabled="@_wordingWorking" @onclick="CancelWording" data-testid="wording-cancel">Cancel</button>
+                </div>
+                <p class="field-hint">"Don't ask again" lasts until you leave or reload this page. It is never saved. It is not offered when the reasons for blocked steps are included.</p>
+            </div>
+        }
+        @if (_wordingReply is not null)
+        {
+            <div class="assist-reply" data-testid="wording-reply">
+                <h4>AI-generated explanation</h4>
+                <p class="field-hint">From @_wordingProvider (@_wordingModel). It may be wrong and it could not see any values. It has not been applied to anything.</p>
+                <div class="assist-reply-text">@_wordingReply</div>
+            </div>
+        }
+    </div>
     <h4>BizTalk terms</h4>
     <label class="field-label">Look up a term <input class="mapping-input" @bind="_search" maxlength="80" data-testid="glossary-search" /></label>
     <button type="button" class="secondary-button" disabled="@_busy" @onclick="SearchAsync" data-testid="glossary-go">Look up</button>
@@ -105,6 +154,13 @@
 
 @code {
     [Parameter] public string Value { get; set; } = "";
+    [Parameter] public string? FlowId { get; set; }
+    [Parameter] public BizTalkAssistConsent Consent { get; set; } = new();
+    private string _wordingQuestion = "";
+    private bool _includeBlockReasons, _wordingWorking, _awaitingConsent;
+    private FlowWordingRequestViewModel? _wordingPending;
+    private FlowWordingDisclosureViewModel? _wordingDisclosure;
+    private string? _wordingError, _wordingUnavailable, _wordingReply, _wordingProvider, _wordingModel;
     private string _definition = "", _search = "";
     private string? _error;
     private bool _busy;
@@ -122,6 +178,68 @@
         _definition = Value;
         _revision++;
         _flow = null; _node = null; _error = null; _prompt = null; _promptModule = null;
+        ResetWording();
+    }
+
+    // An approval or reply belongs to the exact flow it was prepared for, so it is dropped whenever the flow changes.
+    private void ResetWording()
+    {
+        _wordingPending = null; _wordingDisclosure = null; _awaitingConsent = false;
+        _wordingError = null; _wordingUnavailable = null; _wordingReply = null;
+    }
+
+    private async Task PrepareWordingAsync()
+    {
+        ResetWording();
+        if (Services.GetService(typeof(IMulseApiClient)) is not IMulseApiClient api) { _wordingError = "The explanation API is unavailable."; return; }
+        var revision = _revision;
+        _wordingWorking = true;
+        try
+        {
+            var question = string.IsNullOrWhiteSpace(_wordingQuestion) ? null : _wordingQuestion.Trim();
+            var request = new FlowWordingRequestViewModel(Value, question, _includeBlockReasons, FlowId);
+            var disclosure = await api.PreviewFlowWordingAsync(request, default);
+            if (revision != _revision) return;
+            _wordingDisclosure = disclosure;
+            _wordingPending = request with { DisclosureSha256 = disclosure.PayloadSha256 };
+            if (!disclosure.AiAvailable) { _wordingUnavailable = disclosure.Unavailable; return; }
+            if (Consent.SkipMetadataPrompt && !disclosure.IncludesBlockReasons) { await SendWordingCoreAsync(api, revision); return; }
+            _awaitingConsent = true;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or NotSupportedException)
+        { if (revision == _revision) _wordingError = $"Unable to prepare the explanation: {exception.Message}"; }
+        finally { _wordingWorking = false; }
+    }
+
+    private async Task SendWordingAsync(bool remember)
+    {
+        if (Services.GetService(typeof(IMulseApiClient)) is not IMulseApiClient api) return;
+        _wordingWorking = true;
+        try
+        {
+            if (remember && _wordingDisclosure is { IncludesBlockReasons: false }) Consent.SkipMetadataPrompt = true;
+            await SendWordingCoreAsync(api, _revision);
+        }
+        finally { _wordingWorking = false; }
+    }
+
+    private async Task SendWordingCoreAsync(IMulseApiClient api, int revision)
+    {
+        if (_wordingPending is null) return;
+        _awaitingConsent = false;
+        try
+        {
+            var response = await api.FlowWordingAsync(_wordingPending, default);
+            if (revision != _revision) return;
+            _wordingReply = response.Reply; _wordingProvider = response.Provider; _wordingModel = response.Model;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or NotSupportedException)
+        { if (revision == _revision) _wordingError = $"The AI request failed: {exception.Message}"; }
+    }
+
+    private void CancelWording()
+    {
+        _awaitingConsent = false; _wordingPending = null;
     }
 
     private async Task RunAsync(Func<IMulseApiClient, int, Task> action)

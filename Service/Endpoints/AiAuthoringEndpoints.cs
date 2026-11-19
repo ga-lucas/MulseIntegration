@@ -9,6 +9,7 @@ public static class AiAuthoringEndpoints
     private const int MaxSettingsBodyBytes = 16 * 1024;
     private const int MaxBizTalkAssistBodyBytes = 8 * 1024 * 1024;
     private const int MaxCompareExplainBodyBytes = 512 * 1024;
+    private const int MaxFlowWordingBodyBytes = 2 * 1024 * 1024;
 
     public static WebApplication MapAiAuthoringEndpoints(this WebApplication app)
     {
@@ -93,6 +94,20 @@ public static class AiAuthoringEndpoints
             var body = await ReadBodyAsync<CompareExplainRequest>(request, MaxCompareExplainBodyBytes, cancellationToken).ConfigureAwait(false);
             return await Guarded(async () => Results.Ok(await service.CompareExplainAsync(body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
         }).WithName("CompareExplain").WithSummary("Explain classes of comparison differences. Sends only what the preview showed and never any values");
+
+        group.MapPost("/flow-wording/preview", async (HttpRequest request, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<FlowWordingRequest>(request, MaxFlowWordingBodyBytes, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(service.PreviewFlowWording(body));
+        }).WithName("PreviewFlowWording").WithSummary("Show exactly what putting a native flow into plain words would send. Contacts no AI provider");
+
+        group.MapPost("/flow-wording", async (HttpRequest request, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<FlowWordingRequest>(request, MaxFlowWordingBodyBytes, cancellationToken).ConfigureAwait(false);
+            return await Guarded(async () => Results.Ok(await service.FlowWordingAsync(body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
+        }).WithName("FlowWording").WithSummary("Put the structure of a native flow into plain words. Sends only what the preview showed and never any values");
 
         return app;
     }

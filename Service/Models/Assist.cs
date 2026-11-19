@@ -31,7 +31,8 @@ public sealed record FlowExplanation(
     IReadOnlyList<string> Effects,
     IReadOnlyList<AssistFinding> Findings,
     string Disclaimer,
-    IReadOnlyList<AssistMissingModule>? MissingModules = null);
+    IReadOnlyList<AssistMissingModule>? MissingModules = null,
+    IReadOnlyList<ConfigReference>? ConfigReferences = null);
 
 /// <summary>A module the flow uses that is not installed on this server, with the steps that use it.</summary>
 public sealed record AssistMissingModule(string Module, string Kind, IReadOnlyList<string> NodeIds);
@@ -92,3 +93,18 @@ public sealed record RedactedRunEvent(string Stage, string State, string? Detail
 public sealed record RedactedRunDelivery(string Stage, string State);
 
 public sealed record RedactedRun(string State, IReadOnlyList<RedactedRunEvent> Events, IReadOnlyList<RedactedRunDelivery> Deliveries, IReadOnlyList<string> Notes);
+/// <summary>Ask for the explanation of a flow in plain words. The server rebuilds the redacted payload and refuses to send unless its hash matches what the user approved.</summary>
+public sealed record FlowWordingRequest(string FlowJson, string? Question = null, bool IncludeBlockReasons = false, string? FlowId = null, string? DisclosureSha256 = null);
+
+/// <summary>Exactly what a wording request would send. Nothing has been sent when this is returned.</summary>
+public sealed record FlowWordingDisclosure(
+    bool AiAvailable,
+    string? Unavailable,
+    string Provider,
+    string Model,
+    string Payload,
+    string PayloadSha256,
+    bool IncludesBlockReasons,
+    IReadOnlyList<string> Notes);
+
+public sealed record FlowWordingResponse(string Reply, string Provider, string Model);

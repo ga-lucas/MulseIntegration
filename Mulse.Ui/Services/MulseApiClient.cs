@@ -506,6 +506,28 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<CompareExplainResponseViewModel>(response, cancellationToken, "explanation").ConfigureAwait(false);
     }
 
+    public async Task<FlowWordingDisclosureViewModel> PreviewFlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/flow-wording/preview", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowWordingDisclosureViewModel>(response, cancellationToken, "wording preview").ConfigureAwait(false);
+    }
+
+    public async Task<FlowWordingResponseViewModel> FlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/flow-wording") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowWordingResponseViewModel>(response, cancellationToken, "flow wording").ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<AiActivityEntryViewModel>> GetAiActivityAsync(string? flowId, int take, CancellationToken cancellationToken)
+    {
+        var url = "/api/assist/activity?take=" + take + (string.IsNullOrWhiteSpace(flowId) ? "" : "&flowId=" + Uri.EscapeDataString(flowId.Trim()));
+        using var response = await httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<List<AiActivityEntryViewModel>>(response, cancellationToken, "AI activity").ConfigureAwait(false);
+    }
+
     private async Task AttachCopilotCredentialAsync(HttpClient destinationClient, HttpRequestMessage request, CancellationToken cancellationToken, bool requireCopilot = false)
     {
         if (copilotCredential is null)
