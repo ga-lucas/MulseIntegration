@@ -90,6 +90,9 @@ public interface IMulseApiClient
     Task<FlowRunbookViewModel> BuildFlowRunbookAsync(string flowId, RunbookRequestViewModel request, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support flow runbooks.");
 
+    Task<BlockerTriageViewModel> GetBlockerTriageAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support blocker triage.");
+
     Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support failure patterns.");
 

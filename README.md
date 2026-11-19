@@ -2130,6 +2130,12 @@ canvas is ignored. Risky changes (enabling the flow, switching to an automatic t
 a retry, confirmation or undo step, changing a step's module) open the note with a short "Worth a second look" list.
 The note disappears on your next edit. It is advisory only and never blocks a save.
 
+## Blocker triage for imported flows
+
+When some flows were imported from another system, the Flows page shows **See what blocks them**. It groups the importer's findings across all imported flows by cause and ranks the groups by how many flows each touches. Each group says what it means and what to do, is tagged as needing **information from the source system**, a **decision**, a **stub or formula**, or a **module that does not exist yet**, and shows how many flows it would unblock on its own (flows where it is the only blocker). The headline names the single step that unblocks the most flows.
+
+It needs no AI provider and changes nothing. It uses only finding codes and counts, never messages, paths or values, and clearing a group does not make a flow correct: imported flows still have to be rebuilt with native steps and saved before they can run. The API is `GET /api/assist/triage`.
+
 ## Flow runbook
 
 On the Flows page, **Runbook** opens a quiet panel for one flow. Type a purpose, a contact and any notes (only you know these), then **Generate runbook**. Mulse writes the rest from the stored definition: overview and schedule, inputs, processing (including native steps), outputs, dependencies (modules, and the config values and secrets the flow refers to, with whether each has a stored value), failure behavior (retry per step, and whether a retry could send twice), and the current pre-enable review counts. The result is shown as Markdown you can select and copy into your own documentation.

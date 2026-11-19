@@ -125,6 +125,14 @@ public static class AssistEndpoints
             .WithSummary("A runbook for a stored flow, written from its definition: schedule, inputs, processing, outputs, dependencies, failure behavior and review state, as sections and as Markdown. Purpose, contact and notes are text the caller supplies. Names and numbers only; never setting values, config values or secrets. Nothing is saved")
             .ProducesProblem(StatusCodes.Status404NotFound);
 
+        group.MapGet("/triage", (IServiceProvider services, HttpResponse response) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                return TypedResults.Ok(AssistBlockerTriage.Analyze(services.GetRequiredService<Service.Flows.IFlowDefinitionService>().GetAll()));
+            })
+            .WithName("TriageImportedFlowBlockers")
+            .WithSummary("Groups the blockers and warnings of imported flows by cause with fixed rules: how many flows each touches, which it alone would unblock, and whether it needs a decision, information, a stub or a module. Codes, counts and flow ids only; never messages, paths or values. Nothing is changed");
+
         group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
             {
                 response.Headers.CacheControl = "no-store";

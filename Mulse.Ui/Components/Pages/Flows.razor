@@ -112,6 +112,18 @@
                     </section>
                 }
 
+                @if (HasImportedFlows)
+                {
+                    @if (_triageOpen)
+                    {
+                        <BlockerTriagePanel Report="_triage" Loading="_triageLoading" Failed="_triageFailed" OnClose="CloseTriage" />
+                    }
+                    else
+                    {
+                        <p class="field-hint">Some flows were imported. <button type="button" class="secondary-button" data-testid="triage-open" @onclick="ShowTriageAsync">See what blocks them</button></p>
+                    }
+                }
+
                 @if (_flows.Count == 0)
                 {
                     <div class="empty-state">

@@ -1,0 +1,80 @@
+@using Mulse.Ui.Models
+
+<section class="review-panel" data-testid="blocker-triage" aria-label="Blockers across imported flows">
+    <h3>What blocks the imported flows</h3>
+
+    @if (Loading)
+    {
+        <p role="status">Grouping the findings...</p>
+    }
+    else if (Failed || Report is null)
+    {
+        <p class="field-hint" role="status" data-testid="triage-unavailable">The summary is not available right now. Each flow's own migration report is still shown on its card.</p>
+    }
+    else
+    {
+        @if (Report.Headline is not null)
+        {
+            <p role="status" data-testid="triage-headline">@Report.Headline</p>
+        }
+        else if (Report.Groups.Count == 0)
+        {
+            <p role="status" data-testid="triage-headline">No blockers or warnings are recorded for the @Report.ImportedFlows imported flow(s).</p>
+        }
+
+        @if (Report.Tags.Count > 0)
+        {
+            <ul class="review-where" aria-label="By kind of work" data-testid="triage-tags">
+                @foreach (var tag in Report.Tags)
+                {
+                    <li data-tag="@tag.Tag">@tag.Label: @tag.Groups group(s), @tag.Flows flow(s)</li>
+                }
+            </ul>
+        }
+
+        @if (Report.Groups.Count > 0)
+        {
+            <ol class="review-items">
+                @foreach (var group in Report.Groups)
+                {
+                    <li class="review-item" data-code="@group.Code" data-tag="@group.Tag">
+                        <span class="status-pill @(group.Severity == "Blocker" ? "blocker" : "warning")">@group.Severity</span>
+                        <strong>@group.Title</strong>
+                        <p>@group.WhatItMeans</p>
+                        <p>Affects @group.Flows flow(s)@(group.Occurrences > group.Flows ? $", {group.Occurrences} times in all" : null).@(group.ClearsFlowsAlone > 0 ? $" Would unblock {group.ClearsFlowsAlone} flow(s) on its own." : null)</p>
+                        @if (group.FlowIds.Count > 0)
+                        {
+                            <ul class="review-where" aria-label="Flows">
+                                @foreach (var id in group.FlowIds)
+                                {
+                                    <li><a href="@($"/designer/{Uri.EscapeDataString(id)}")">@id</a></li>
+                                }
+                                @if (group.Flows > group.FlowIds.Count)
+                                {
+                                    <li>and @(group.Flows - group.FlowIds.Count) more</li>
+                                }
+                            </ul>
+                        }
+                        <p class="review-fix"><strong>To do:</strong> @group.WhatToDo</p>
+                    </li>
+                }
+            </ol>
+        }
+
+        <details>
+            <summary>About this summary</summary>
+            <ul>@foreach (var note in Report.Notes) { <li>@note</li> }</ul>
+        </details>
+    }
+
+    <div class="flow-card-actions">
+        <button type="button" class="secondary-button" data-testid="triage-close" @onclick="OnClose">Close</button>
+    </div>
+</section>
+
+@code {
+    [Parameter] public BlockerTriageViewModel? Report { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool Failed { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}
