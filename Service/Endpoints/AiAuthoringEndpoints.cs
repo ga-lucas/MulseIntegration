@@ -7,6 +7,7 @@ namespace Service.Endpoints;
 public static class AiAuthoringEndpoints
 {
     private const int MaxSettingsBodyBytes = 16 * 1024;
+    private const int MaxBizTalkAssistBodyBytes = 8 * 1024 * 1024;
 
     public static WebApplication MapAiAuthoringEndpoints(this WebApplication app)
     {
@@ -63,6 +64,20 @@ public static class AiAuthoringEndpoints
             var body = await ReadBodyAsync<ConnectionAssistanceRequest>(request, 2_000_000, cancellationToken).ConfigureAwait(false);
             return await Guarded(async () => Results.Ok(await service.AssistConnectionAsync(body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
         }).WithName("AssistAuthoringConnection").WithSummary("Propose a scoped mapping and compare every sample without running flows or plugins");
+
+        group.MapPost("/biztalk-assist/preview", async (HttpRequest request, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<BizTalkAssistRequest>(request, MaxBizTalkAssistBodyBytes, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(service.PreviewBizTalkAssist(body));
+        }).WithName("PreviewBizTalkAssist").WithSummary("Show exactly what a BizTalk import assist would send, and check supplied evidence locally. Contacts no AI provider");
+
+        group.MapPost("/biztalk-assist", async (HttpRequest request, AiAuthoringService service, HttpResponse response, CancellationToken cancellationToken) =>
+        {
+            response.Headers.CacheControl = "no-store";
+            var body = await ReadBodyAsync<BizTalkAssistRequest>(request, MaxBizTalkAssistBodyBytes, cancellationToken).ConfigureAwait(false);
+            return await Guarded(async () => Results.Ok(await service.BizTalkAssistAsync(body, cancellationToken, UserToken(request)).ConfigureAwait(false))).ConfigureAwait(false);
+        }).WithName("BizTalkAssist").WithSummary("Explain an evidence request or review supplied evidence. Sends only what the preview showed");
 
         return app;
     }

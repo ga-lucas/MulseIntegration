@@ -247,6 +247,7 @@
     private BizTalkUpdatePlanViewModel? _plan;
     private BizTalkFlowCandidateViewModel? _planCandidate;
     private readonly Dictionary<string, string> _mapSettings = new() { ["casesJson"] = "[]" };
+    private BizTalkAssistConsent _assistConsent = new();
     private bool _stale;
     private bool _busy;
     private bool _dirty;
@@ -286,9 +287,27 @@
         builder.AddComponentParameter(8, nameof(BizTalkEvidenceRequestCard.OnRemove), EventCallback.Factory.Create<string>(this, RemoveEvidence));
         builder.AddComponentParameter(9, nameof(BizTalkEvidenceRequestCard.OnAnswer), EventCallback.Factory.Create<BizTalkRequestAnswer>(this, answer => Answer(request.Id, answer)));
         builder.AddComponentParameter(10, nameof(BizTalkEvidenceRequestCard.OnReopen), EventCallback.Factory.Create(this, () => Reopen(request.Id)));
+        builder.AddComponentParameter(11, nameof(BizTalkEvidenceRequestCard.AssistConsent), _assistConsent);
+        builder.AddComponentParameter(12, nameof(BizTalkEvidenceRequestCard.GetAssistEvidence), (Func<IReadOnlyList<BizTalkAssistEvidenceViewModel>>)(() => AssistEvidenceFor(request)));
         builder.SetKey(request.Id);
         builder.CloseComponent();
     };
+
+    private const long MaxAssistUploadBytes = 1_000_000;
+
+    // Only this request's evidence is offered, and large uploads go without content, so the service reports them as not inspected.
+    private IReadOnlyList<BizTalkAssistEvidenceViewModel> AssistEvidenceFor(BizTalkEvidenceRequestViewModel request)
+        => [.. _session.Evidence
+            .Where(e => request.Accepts.Contains(e.Kind, StringComparer.Ordinal))
+            .Take(8)
+            .Select(e =>
+            {
+                _session.Content.TryGetValue(e.Id, out var content);
+                var name = e.Origin == BizTalkEvidenceOrigins.Path ? e.Path ?? e.Name : e.Name;
+                return new BizTalkAssistEvidenceViewModel(e.Id, e.Kind, e.Origin, name,
+                    e.Origin == BizTalkEvidenceOrigins.Text ? content?.Text : null,
+                    e.Origin == BizTalkEvidenceOrigins.Upload && e.SizeBytes <= MaxAssistUploadBytes ? content?.ContentBase64 : null);
+            })];
 
     private RenderFragment StageCards(BizTalkWizardStage stage) => builder =>
     {
@@ -527,6 +546,7 @@
     private void NewSession()
     {
         _session = new BizTalkImportSession { Name = "import" };
+        _assistConsent = new();
         _sessionName = "import";
         _analysis = null;
         _plan = null;
@@ -540,6 +560,7 @@
     private void Adopt(BizTalkImportSession session)
     {
         _session = session;
+        _assistConsent = new();
         _sessionName = session.Name;
         _analysis = null;
         _plan = null;

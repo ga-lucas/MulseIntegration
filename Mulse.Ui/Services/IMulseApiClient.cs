@@ -150,4 +150,10 @@ public interface IMulseApiClient
 
     Task<ConnectionAssistanceResponseViewModel> AssistConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support connection assistance.");
+
+    Task<BizTalkAssistDisclosureViewModel> PreviewBizTalkAssistAsync(BizTalkAssistRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support BizTalk import assistance.");
+
+    Task<BizTalkAssistResponseViewModel> BizTalkAssistAsync(BizTalkAssistRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support BizTalk import assistance.");
 }

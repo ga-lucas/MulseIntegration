@@ -379,7 +379,7 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Rules (one structured signal each, aggregated per rule so ids stay stable):** `bindings`, `rule-policies`, `policy-versions` (no evidence; chosen in the Environment step), `unresolved-projects`, `map-owners`, `map-stubs` (no evidence; edit the map), `unknown-components`, `real-output` (Possible), `host-config` (Possible). A request disappears only when a later analysis no longer reports its gap.
 - **Weak signals (documented):** the importer reports no structured signal for "a setting came from the host configuration", so `host-config` is raised as Possible whenever native generation has blocked steps and no host configuration was supplied. `rule-policies` reads the policy name from the importer's own diagnostic message, and `unknown-components` reads component names from blocked-node reasons; both formats are covered by tests. Ambiguous map choices are not yet a request.
 - **Delta:** requests cleared, new and still open; open blockers per flow before and after; derived choice status changes. Blockers are blocked native nodes (Blocking diagnostics when there is no native flow).
-- **Not built:** the wizard UI and session storage, the AI layer. (Origin tracking and the update plan are built; see the next increment.)
+- **Not built:** the wizard UI and session storage. (Origin tracking, the update plan, the UI and the AI assist are built; see the later increments.)
 - **Billing result:** `orch59` unchanged (CLEAN 6, NONE 34, 0 blocked).
 - **Tests:** `BizTalkEvidenceWizardTests` (requests, clearing and delta, policy-version choice, zip tree by evidence id, unsafe entries, limits, cleanup, host/helper pairing) and two cases in `NativeSendPipelineChainTests` (unknown component, HL7 real output).
 
@@ -403,9 +403,23 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Re-entry:** adding, removing or changing evidence marks the analysis stale; re-analysis sends the evidence and the previous summary and shows what was resolved, which blockers changed per flow, and which map choices appeared.
 - **Sessions:** saved automatically in this browser only (localStorage index, IndexedDB content read back in 16 KB slices to stay under the circuit's receive limit). Resume, delete, export and import a session file, with or without pasted and uploaded content. Names are limited to 80 letters, digits, spaces, dots, dashes and underscores because they become storage keys. Storage failures are shown and never stop the wizard.
 - **Candidates:** load onto the canvas, save as a new disabled flow, or update an existing imported flow through the update plan, where each piece can be kept or replaced and edited pieces are never selected by default. Downloads: control-flow model and scaffolded modules.
-- **Not built:** the AI assist. Real-output samples are only recorded until the compare feature (M6) exists.
+- **Not built:** the real-output comparison (M6). Real-output samples are only recorded until the compare feature exists.
 - **Result:** `orch61` unchanged (CLEAN 6, NONE 34, 0 blocked). Full suite 2,727 tests; one `ModulePackageLifecycleTests` cleanup flake passed on rerun.
 - **Tests:** `BizTalkWizardUiTests` (24): stage mapping, initial render, request cards with rationale and counts, answers and reopen, stale analysis and delta, unknown request ids, missing source, resume, storage failure, invalid name, update-plan view, the browser store round trip with slicing and failure wrapping, and the import actions: save as new (typed and suggested id, same inputs sent, flow remembered, refusal), update (plan, typed or suggested flow id, escaped, apply only chosen pieces, refused plan, no plan, close) and the actions being disabled while the analysis is out of date. The static renderer does not run after-render hooks, so the test host invokes them.
+
+### Increment: import wizard AI assist
+
+Optional, per request card ("Get help (optional)"). It uses whatever AI provider the user already configured for AI authoring (OpenAI, OpenAI-compatible, or the user's own GitHub Copilot connection). No new provider settings.
+- **Operations:** *Explain with AI* sends only the request text (why, steps, impact, risk) and the optional question; no evidence. *Check what I supplied* is a local, deterministic inspection (which kind of export, which applications, counts and names) and needs no AI or consent. *Ask AI about what I supplied* sends those findings (names and counts, never values); excerpts only if the user ticks "include excerpts".
+- **Consent:** every send is previewed first (`POST /api/authoring/biztalk-assist/preview`, which contacts no provider). The panel shows provider, model and the exact payload. The user chooses Send, "Send and don't ask again this session", or Cancel. The default is to ask each time. "Don't ask again" is held in the wizard's memory only, covers metadata-only sends, is never saved or exported, and resets on a new, resumed or imported session. Sends with excerpts always ask.
+- **Hash-bound send:** `POST /api/authoring/biztalk-assist` rebuilds the payload and returns 409 unless the request carries the SHA-256 of the previewed payload (with provider and model), so only what was shown can be sent. AI turned off or invalid settings also refuse the send; the local check still works.
+- **Anonymization:** payloads are scrubbed before building (secret-bearing attributes and elements, connection-string secrets, tokens, addresses, long unbroken text). Scrubbing is fail-closed: a regex timeout replaces the text with `[REMOVED]`. Excerpts are at most 6,000 characters per item and 24,000 in total, scrub-then-cut, and never include real-output samples, server paths, zips or binary content. Uploads over 1 MB are not inspected. File names only, never full paths.
+- **Limits:** question 1,000 characters, 8 evidence items, 8 MB body; reply is plain text, at most 1,024 tokens, no tools. Untrusted data stays in the user message.
+- **Output:** replies are labeled "AI-generated", are never applied to a flow, and never mark a request satisfied; the importer's analysis still decides.
+- **Copilot:** preview needs no token; sending needs the user's connected Copilot credential and otherwise shows the AI authoring "not connected" message.
+- **Not built:** the real-output comparison (M6) and any UI action that applies AI output.
+- **Result:** `orch62` unchanged (CLEAN 6, NONE 34, 0 blocked). Full suite 2,782 tests, all passing.
+- **Tests:** `BizTalkAssistTests` (26: inspector, scrubber including a stall regression, payload plan, hash binding, limits), `BizTalkAssistEndpointTests` (5 wire tests against a fake provider: preview calls nothing, exact payload sent, missing or stale approval is 409, AI off, malformed requests), `BizTalkAssistPanelUiTests` (13) and 3 wizard UI tests (help on every card, only the request's evidence and no large uploads, don't-ask-again reset).
 
 ### Increment: native Listen and correlation following
 
@@ -875,9 +889,9 @@ Verification: 76 targeted tests and 1,508 service tests passed; solution build a
 
 Dynamic DateTime delays, sub-second timing and the other N4/N5 behavior remain untranslated; no BizTalk equivalence or browser interaction was verified. The full suite was not rerun in this continuation.
 
-## Planned: guided import wizard (backend, origin tracking and UI built; AI not built)
+## Planned: guided import wizard (backend, origin tracking, UI and AI assist built)
 
-Status: steps 1-3 of the build order are built, see "Increment: import wizard backend", "Increment: import origin tracking and update plan" and "Increment: import wizard UI". Step 4 (AI) is not. Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional.
+Status: all four build-order steps are built, see "Increment: import wizard backend", "Increment: import origin tracking and update plan", "Increment: import wizard UI" and "Increment: import wizard AI assist". Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional, uses the provider the user already set up, and asks before every send.
 
 ### Why
 
@@ -941,7 +955,7 @@ A stage opens only when the earlier results make it relevant; every stage can be
 
 ### Optional AI layer
 
-Built on the AI assistance plan (surfaces, redaction, proposal pipeline, audit). Off by default; the wizard is complete without it.
+Built on the AI authoring foundations (provider settings, redaction, per-user Copilot credential). Off by default; the wizard is complete without it. Built as two operations in the "Get help (optional)" panel of every request card (see the AI assist increment for behavior):
 - **Explain this request** in the user's terms and adapt the `howToGet` steps ("which of these tools do you have?").
 - **Ask about this file:** a user-supplied export is summarized by structure (counts, names), not content, unless the user enables more.
 - **Check what I supplied:** a deterministic check first (is this a binding export? which application?), then optional wording.
@@ -952,7 +966,7 @@ Built on the AI assistance plan (surfaces, redaction, proposal pipeline, audit).
 1. **Backend (built):** evidence request model and rule catalog; analysis input with inline evidence and temporary materialization; delta computation; tests per rule (synthetic data, no org types).
 2. **Origin tracking (built):** import-origin hashes written on flow creation; the classification above; update-plan and update endpoints; tests for unchanged, edited and structural cases.
 3. **UI (built):** wizard shell, request cards, browser session storage, upload and paste, export and import session, update-plan view. See "Increment: import wizard UI".
-4. **AI layer** (after AI Phase A foundations).
+4. **AI layer (built):** see "Increment: import wizard AI assist". Reuses the AI authoring provider settings, redaction and per-user Copilot credential.
 
 ### Decisions on the former open questions
 

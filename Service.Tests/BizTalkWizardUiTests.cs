@@ -221,6 +221,80 @@ public sealed class BizTalkWizardUiTests
     }
 
     [Fact]
+    public async Task EveryRequestCardOffersOptionalHelpWithoutAskingAnythingUpFront()
+    {
+        await using var fixture = new Fixture();
+        fixture.Responses.Enqueue(Analysis(null, Bindings, Policies));
+        await fixture.RunAsync(async wizard =>
+        {
+            fixture.Call(wizard, "SetSourcePath", "C:\\x.sln");
+            await fixture.CallAsync(wizard, "AnalyzeAsync");
+            await fixture.RefreshAsync(wizard);
+
+            var html = fixture.Html();
+            Assert.Contains("Get help (optional)", html);
+            Assert.Contains("data-testid=\"assist-panel\"", html);
+            Assert.Contains("Explain with AI", html);
+            Assert.DoesNotContain("assist-consent", html);
+        });
+
+        Assert.Empty(fixture.Posts);
+    }
+
+    [Fact]
+    public async Task AssistGetsOnlyTheEvidenceThatBelongsToTheRequestAndNeverLargeUploads()
+    {
+        await using var fixture = new Fixture();
+        await fixture.RunAsync(async wizard =>
+        {
+            var session = (BizTalkImportSession)fixture.Field(wizard, "_session")!;
+            session.AddText(BizTalkEvidenceKinds.Bindings, "prod bindings", "<BindingInfo/>", TimeProvider.System);
+            session.AddText(BizTalkEvidenceKinds.RulePolicy, "policy", "<brl/>", TimeProvider.System);
+            session.AddPath(BizTalkEvidenceKinds.Bindings, "C:\\Exports\\b.xml", null, TimeProvider.System);
+            session.AddUpload(BizTalkEvidenceKinds.Bindings, "small", [1, 2, 3], TimeProvider.System);
+            session.AddUpload(BizTalkEvidenceKinds.Bindings, "big", new byte[1_000_001], TimeProvider.System);
+
+            var items = (IReadOnlyList<BizTalkAssistEvidenceViewModel>)fixture.Call(wizard, "AssistEvidenceFor", Bindings)!;
+
+            Assert.Equal(4, items.Count);
+            Assert.DoesNotContain(items, item => item.Kind == BizTalkEvidenceKinds.RulePolicy);
+            Assert.Equal("<BindingInfo/>", items.Single(item => item.Origin == BizTalkEvidenceOrigins.Text).Text);
+            Assert.Equal("C:\\Exports\\b.xml", items.Single(item => item.Origin == BizTalkEvidenceOrigins.Path).Name);
+            Assert.Null(items.Single(item => item.Origin == BizTalkEvidenceOrigins.Path).ContentBase64);
+            Assert.NotNull(items.Single(item => item.Name == "small").ContentBase64);
+            Assert.Null(items.Single(item => item.Name == "big").ContentBase64);
+            await Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public async Task StartingOrResumingASessionForgetsTheDontAskAgainChoice()
+    {
+        var store = new MemoryStore();
+        await store.SaveAsync(new BizTalkImportSession { Name = "billing" }, default);
+        await using var fixture = new Fixture(store);
+        await fixture.RunAsync(async wizard =>
+        {
+            var original = (BizTalkAssistConsent)fixture.Field(wizard, "_assistConsent")!;
+            original.SkipMetadataPrompt = true;
+
+            fixture.Call(wizard, "NewSession");
+            var afterNew = (BizTalkAssistConsent)fixture.Field(wizard, "_assistConsent")!;
+            Assert.NotSame(original, afterNew);
+            Assert.False(afterNew.SkipMetadataPrompt);
+
+            afterNew.SkipMetadataPrompt = true;
+            fixture.SetField(wizard, "_selectedSaved", "billing");
+            await fixture.CallAsync(wizard, "LoadSelectedAsync");
+            var afterResume = (BizTalkAssistConsent)fixture.Field(wizard, "_assistConsent")!;
+            Assert.NotSame(afterNew, afterResume);
+            Assert.False(afterResume.SkipMetadataPrompt);
+        });
+
+        Assert.DoesNotContain("SkipMetadataPrompt", string.Join('\n', store.Saved.Values), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task StorageFailureIsShownAndTheWizardKeepsWorking()
     {
         var store = new MemoryStore { FailWith = new InvalidOperationException("quota exceeded") };

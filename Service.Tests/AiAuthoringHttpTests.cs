@@ -144,6 +144,8 @@ public sealed class AiAuthoringHttpTests
         Assert.Contains(("/api/authoring/copilot/models", "POST"), routes);
         Assert.Contains(("/api/authoring/connection/analyze", "POST"), routes);
         Assert.Contains(("/api/authoring/connection", "POST"), routes);
+        Assert.Contains(("/api/authoring/biztalk-assist/preview", "POST"), routes);
+        Assert.Contains(("/api/authoring/biztalk-assist", "POST"), routes);
     }
 
     [Fact]

@@ -61,6 +61,14 @@
         </ul>
     }
 
+    @if (AssistConsent is not null && GetAssistEvidence is not null)
+    {
+        <details class="evidence-assist">
+            <summary>Get help (optional)</summary>
+            <BizTalkAssistPanel Request="Request" GetEvidence="GetAssistEvidence" Consent="AssistConsent" HasEvidence="@(Evidence.Count > 0)" Busy="Busy" />
+        </details>
+    }
+
     @if (AllowAnswer && (Status == BizTalkRequestAnswers.NotAvailable || Status == BizTalkRequestAnswers.Skipped))
     {
         <p class="field-hint">@(Status == BizTalkRequestAnswers.Skipped ? "Skipped for now." : "Marked not available.")@(string.IsNullOrWhiteSpace(Note) ? null : " Note: " + Note)</p>
@@ -151,6 +159,8 @@
     [Parameter] public EventCallback<string> OnRemove { get; set; }
     [Parameter] public EventCallback<BizTalkRequestAnswer> OnAnswer { get; set; }
     [Parameter] public EventCallback OnReopen { get; set; }
+    [Parameter] public BizTalkAssistConsent? AssistConsent { get; set; }
+    [Parameter] public Func<IReadOnlyList<BizTalkAssistEvidenceViewModel>>? GetAssistEvidence { get; set; }
 
     private string _kind = string.Empty;
     private string _origin = BizTalkEvidenceOrigins.Path;
