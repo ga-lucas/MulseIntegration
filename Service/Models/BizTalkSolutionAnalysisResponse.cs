@@ -25,4 +25,13 @@ public sealed record BizTalkSolutionAnalysisResponse(
 
     /// <summary>The effective render-dispatch casesJson used for native generation (explicit choices plus derived ones); null unless derivation was requested.</summary>
     public string? EffectiveMapChoicesJson { get; init; }
+
+    /// <summary>Evidence the analysis still needs, each with why and general steps to get it. Produced by rules over the analysis, not by AI.</summary>
+    public IReadOnlyList<BizTalkEvidenceRequest> EvidenceRequests { get; init; } = [];
+
+    /// <summary>Identifiers and counts to send back as <see cref="AnalyzeBizTalkSolutionRequest.PreviousSummary"/> on the next analysis.</summary>
+    public BizTalkAnalysisSummary Summary { get; init; } = new();
+
+    /// <summary>What changed since the previous summary; null when none was supplied.</summary>
+    public BizTalkAnalysisDelta? Delta { get; init; }
 }

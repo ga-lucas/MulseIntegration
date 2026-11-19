@@ -43,7 +43,8 @@ public static class BizTalkMigrationEndpoints
                     NativeHostConfigurationPath = request.NativeHostConfigurationPath,
                     NativeConfigurationHelperPaths = request.NativeConfigurationHelperPaths,
                     NativeMapChoicesJson = request.NativeMapChoicesJson,
-                    DeriveNativeMapChoices = request.DeriveNativeMapChoices
+                    DeriveNativeMapChoices = request.DeriveNativeMapChoices,
+                    Evidence = request.Evidence
                 }, cancellationToken).ConfigureAwait(false);
 
                 var candidate = analysis.FlowCandidates.FirstOrDefault(flow => string.Equals(flow.SuggestedFlowId, request.SuggestedFlowId, StringComparison.OrdinalIgnoreCase))
@@ -157,7 +158,8 @@ public static class BizTalkMigrationEndpoints
             NativeHostConfigurationPath = request.NativeHostConfigurationPath,
             NativeConfigurationHelperPaths = request.NativeConfigurationHelperPaths,
             NativeMapChoicesJson = request.NativeMapChoicesJson,
-            DeriveNativeMapChoices = request.DeriveNativeMapChoices
+            DeriveNativeMapChoices = request.DeriveNativeMapChoices,
+            Evidence = request.Evidence
         }, cancellationToken).ConfigureAwait(false);
 
         return analysis.FlowCandidates.FirstOrDefault(flow => string.Equals(flow.SuggestedFlowId, request.SuggestedFlowId, StringComparison.OrdinalIgnoreCase))

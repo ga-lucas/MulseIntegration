@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Mulse.Modules;
+using Service.BizTalkImport.Evidence;
 using Service.Models;
 
 namespace Service.BizTalkImport;
@@ -41,6 +42,29 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
     private readonly IReadOnlyList<IBizTalkAssemblyKindClassifier> _assemblyKindClassifiers;
 
     public Task<BizTalkSolutionAnalysisResponse> AnalyzeAsync(AnalyzeBizTalkSolutionRequest request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var notes = new List<string>();
+        var items = request.Evidence ?? [];
+
+        // Uploaded and pasted evidence is read during this call only; its temporary folder is deleted afterwards.
+        using var evidence = BizTalkEvidenceMaterializer.Create(items);
+        var effective = items.Count == 0 && !request.SourcePath.StartsWith("evidence:", StringComparison.OrdinalIgnoreCase)
+            ? request : BizTalkEvidenceApplier.Apply(request, items, evidence.Paths, notes);
+        var analysis = AnalyzeCoreAsync(effective, cancellationToken).GetAwaiter().GetResult();
+
+        var requests = BizTalkEvidenceRules.Build(effective, analysis);
+        var summary = BizTalkEvidenceRules.Summarize(requests, analysis);
+        return Task.FromResult(analysis with
+        {
+            Warnings = [.. analysis.Warnings, .. notes],
+            EvidenceRequests = requests,
+            Summary = summary,
+            Delta = request.PreviousSummary is { } previous ? BizTalkEvidenceRules.Compare(previous, summary) : null
+        });
+    }
+
+    private Task<BizTalkSolutionAnalysisResponse> AnalyzeCoreAsync(AnalyzeBizTalkSolutionRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (request.AdditionalRulePaths is null || request.AdditionalRulePaths.Count > 32

@@ -371,6 +371,18 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 
 
 
+### Increment: import wizard backend
+
+- **API:** `POST /api/biztalk-import/analyze` (and the import and download endpoints, which re-analyze) accept `evidence` (up to 32 items: `id`, `kind`, `origin` Path, Text or Upload, `name`, `path`, `text`, `contentBase64`) and `previousSummary`. The response adds `evidenceRequests`, `summary` and `delta`. The server stays stateless; the client keeps the summary and sends it back.
+- **Evidence kinds read today:** Source, Bindings, RulePolicy, HostConfig, HelperSource. `RealOutput` is only recorded. Evidence is added to the matching path fields (a path field may also say `evidence:<id>`); the request's own paths are kept. A host configuration and helper source are used only together; with only one, neither is used and a warning says so.
+- **Uploads:** a single file is written under its own safe name; a `.zip` is extracted. Limits: 32 items, 64 MB per upload, 16M characters of text, 5,000 zip entries, 128 MB per entry, 512 MB extracted (counted on bytes written, not header sizes). Rejected by name: parent-relative, absolute or drive paths, device names, link entries, nested archives, bad base64, unreadable zips, bad or duplicate ids. XML keeps DTDs prohibited. The temporary folder is deleted when the analysis ends, including after an error. Source paths inside an uploaded tree in the response therefore point at a folder that no longer exists.
+- **Rules (one structured signal each, aggregated per rule so ids stay stable):** `bindings`, `rule-policies`, `policy-versions` (no evidence; chosen in the Environment step), `unresolved-projects`, `map-owners`, `map-stubs` (no evidence; edit the map), `unknown-components`, `real-output` (Possible), `host-config` (Possible). A request disappears only when a later analysis no longer reports its gap.
+- **Weak signals (documented):** the importer reports no structured signal for "a setting came from the host configuration", so `host-config` is raised as Possible whenever native generation has blocked steps and no host configuration was supplied. `rule-policies` reads the policy name from the importer's own diagnostic message, and `unknown-components` reads component names from blocked-node reasons; both formats are covered by tests. Ambiguous map choices are not yet a request.
+- **Delta:** requests cleared, new and still open; open blockers per flow before and after; derived choice status changes. Blockers are blocked native nodes (Blocking diagnostics when there is no native flow).
+- **Not built:** origin tracking and the update plan, the wizard UI and session storage, the AI layer.
+- **Billing result:** `orch59` unchanged (CLEAN 6, NONE 34, 0 blocked).
+- **Tests:** `BizTalkEvidenceWizardTests` (requests, clearing and delta, policy-version choice, zip tree by evidence id, unsafe entries, limits, cleanup, host/helper pairing) and two cases in `NativeSendPipelineChainTests` (unknown component, HL7 real output).
+
 ### Increment: native Listen and correlation following
 
 - **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.
@@ -839,9 +851,9 @@ Verification: 76 targeted tests and 1,508 service tests passed; solution build a
 
 Dynamic DateTime delays, sub-second timing and the other N4/N5 behavior remain untranslated; no BizTalk equivalence or browser interaction was verified. The full suite was not rerun in this continuation.
 
-## Planned: guided import wizard (design, not implemented)
+## Planned: guided import wizard (backend built; origin tracking, UI and AI not built)
 
-Status: design for review. Nothing here is built. Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional.
+Status: step 1 of the build order (the backend) is built, see "Increment: import wizard backend". Steps 2-4 are not. Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional.
 
 ### Why
 
@@ -913,7 +925,7 @@ Built on the AI assistance plan (surfaces, redaction, proposal pipeline, audit).
 
 ### Build order
 
-1. **Backend:** evidence request model and rule catalog; analysis input with inline evidence and temporary materialization; delta computation; tests per rule (synthetic data, no org types).
+1. **Backend (built):** evidence request model and rule catalog; analysis input with inline evidence and temporary materialization; delta computation; tests per rule (synthetic data, no org types).
 2. **Origin tracking:** import-origin hashes written on flow creation; the classification above; update-plan endpoint; tests for unchanged, edited and structural cases.
 3. **UI:** wizard shell replacing the floating panel, the request cards, session storage, upload and paste, export and import session.
 4. **AI layer** (after AI Phase A foundations).

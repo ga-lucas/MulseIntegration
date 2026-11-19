@@ -23,6 +23,8 @@ public sealed class NativeSendPipelineChainTests : IDisposable
         + "<xs:complexType><xs:sequence><xs:element name=\"A\" type=\"xs:string\"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number=\"1\" justification=\"left\" /></xs:appinfo></xs:annotation></xs:element></xs:sequence></xs:complexType></xs:element></xs:schema>";
     private const string FlatChoices = "[{\"value\":\"urn:flat#Out\",\"module\":\"flat-file-schema-render\",\"settings\":{\"schemaText\":\"unused\"}}]";
 
+    private BizTalkSolutionAnalysisResponse Analysis { get; set; } = null!;
+
     private async Task<(BizTalkFlowCandidateResponse Candidate, NativeFlowDefinition Definition)> Import(string pipelineFile, string transport = "FILE", int retry = 0, string? pipelineData = null, string? mapChoices = null)
     {
         Directory.CreateDirectory(_directory);
@@ -49,7 +51,8 @@ public sealed class NativeSendPipelineChainTests : IDisposable
             <PrimaryTransport><Address>{address}</Address><TransportType Name="{transport}"/><RetryCount>{retry}</RetryCount><RetryInterval>5</RetryInterval></PrimaryTransport></SendPort></SendPortCollection></BindingInfo>
             """);
         var request = new AnalyzeBizTalkSolutionRequest { SourcePath = project, GenerateNativeFlow = true, AdditionalBindingPaths = [binding], NativeMapChoicesJson = mapChoices };
-        var candidate = Assert.Single((await new BizTalkImportService().AnalyzeAsync(request, default)).FlowCandidates);
+        Analysis = await new BizTalkImportService().AnalyzeAsync(request, default);
+        var candidate = Assert.Single(Analysis.FlowCandidates);
         return (candidate, NativeFlowDefinition.Read(candidate.DraftFlow.Augments.Single().Settings["flowJson"], allowBlocked: true));
     }
 
@@ -90,6 +93,33 @@ public sealed class NativeSendPipelineChainTests : IDisposable
         Assert.Equal("true", render.Settings["trimTrailingDelimiters"]);
         Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("'hl7-schema-render' node", StringComparison.Ordinal));
         Assert.DoesNotContain(candidate.DraftFlow.Warnings, warning => warning.Contains("'hl7-xml-render' node", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UnknownPipelineComponentAsksForItsSourceAndPossiblyTheHostConfiguration()
+    {
+        var (_, definition) = await Import(Pipeline(Component("Example.Unknown.Component")));
+        Assert.Contains("Example.Unknown.Component", Blockers(definition), StringComparison.Ordinal);
+        var components = Assert.Single(Analysis.EvidenceRequests, request => request.Id == "unknown-components");
+        Assert.Contains("Example.Unknown.Component", components.Impact);
+        Assert.Contains(BizTalkEvidenceKind.Source, components.Accepts);
+        Assert.NotEmpty(components.HowToGet);
+        var host = Assert.Single(Analysis.EvidenceRequests, request => request.Id == "host-config");
+        Assert.Equal("Possible", host.Relevance);
+        Assert.Equal([BizTalkEvidenceKind.HostConfig, BizTalkEvidenceKind.HelperSource], host.Accepts);
+        Assert.DoesNotContain(Analysis.EvidenceRequests, request => request.Id == "bindings");
+    }
+
+    [Fact]
+    public async Task Hl7AssemblerAsksForRealOutputSamplesAndNothingElse()
+    {
+        var (_, definition) = await Import(Pipeline(Component("Microsoft.Solutions.BTAHL7.Pipelines.HL72fAsm", ("TrailingDelimiterAllowed", "false"))));
+        Assert.True(string.IsNullOrEmpty(Blockers(definition)), Blockers(definition));
+        var request = Assert.Single(Analysis.EvidenceRequests);
+        Assert.Equal("real-output", request.Id);
+        Assert.Equal([BizTalkEvidenceKind.RealOutput], request.Accepts);
+        Assert.Equal("Possible", request.Relevance);
+        Assert.Equal(0, Analysis.Summary.OpenBlockersByFlow.Values.Sum());
     }
 
     [Fact]

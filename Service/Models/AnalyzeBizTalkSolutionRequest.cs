@@ -48,4 +48,13 @@ public sealed record AnalyzeBizTalkSolutionRequest
 
     /// <summary>Generate a native control-flow review draft rather than heuristic augment proposals. Unsupported semantics remain explicit blockers.</summary>
     public bool GenerateNativeFlow { get; init; }
+
+    /// <summary>
+    /// Evidence supplied inline (up to 32 items) instead of as server paths. Source, bindings, rule exports, host configuration and helper source are added to the matching
+    /// path fields; pasted and uploaded content exists only for this request. A path field may also name an item as <c>evidence:id</c>.
+    /// </summary>
+    public IReadOnlyList<BizTalkEvidenceItem> Evidence { get; init; } = [];
+
+    /// <summary>The summary returned by the previous analysis in the same import session, so this response can say what changed. Null for the first analysis.</summary>
+    public BizTalkAnalysisSummary? PreviousSummary { get; init; }
 }
