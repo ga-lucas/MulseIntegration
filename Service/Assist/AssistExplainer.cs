@@ -79,7 +79,7 @@ public sealed class AssistExplainer(IModuleCatalog catalog)
 
     private IReadOnlyList<ModuleDescriptor> Modules() => [.. catalog.GetAll().Select(entry => entry.Descriptor)];
 
-    private static ModuleKind? ModuleKindOf(NativeFlowNodeKind kind) => kind switch
+    internal static ModuleKind? ModuleKindOf(NativeFlowNodeKind kind) => kind switch
     {
         NativeFlowNodeKind.Augment => ModuleKind.OrchestrationAugment,
         NativeFlowNodeKind.Render => ModuleKind.Render,
@@ -189,10 +189,7 @@ public sealed class AssistExplainer(IModuleCatalog catalog)
         if (node.SettingExpressions is { } expressions && expressions.Keys.Any(key => string.Equals(key, setting.Key, StringComparison.OrdinalIgnoreCase))) return "calculated at send time";
         if (!node.Settings.TryGetValue(setting.Key, out var value) || string.IsNullOrWhiteSpace(value))
             return setting.DefaultValue is { Length: > 0 } ? "not set (the module's default applies)" : "not set";
-        var trimmed = value.Trim();
-        if (trimmed.StartsWith("{{secret:", StringComparison.OrdinalIgnoreCase)) return "refers to a secret";
-        if (trimmed.StartsWith("{{config:", StringComparison.OrdinalIgnoreCase)) return "refers to a config value";
-        return "set to a literal value";
+        return AssistRedactor.ValueState(value);
     }
 
     private static string DeliverEffect(NativeFlowNode node, string title, ModuleDescriptor? descriptor)

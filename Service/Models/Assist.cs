@@ -56,3 +56,39 @@ public sealed record NodeExplanation(
     IReadOnlyList<AssistSettingState> Settings,
     IReadOnlyList<string> Facts,
     IReadOnlyList<AssistFinding> Findings);
+
+public sealed record RedactedSetting(string Key, string State);
+
+public sealed record RedactedRetry(int Attempts, int IntervalSeconds, bool RetryAmbiguous);
+
+/// <summary>One step of a native flow as an AI request may carry it: no setting values, conditions or expressions.</summary>
+public sealed record RedactedNode(
+    string Id,
+    int Depth,
+    string Kind,
+    string? Label,
+    string? Module,
+    string? ModuleStatus,
+    string? Message,
+    string? Channel,
+    IReadOnlyList<RedactedSetting> Settings,
+    RedactedRetry? Retry,
+    string? BlockReason,
+    bool HasConditions);
+
+/// <summary>A config value or secret a flow refers to. The name only; the value is never read.</summary>
+public sealed record ConfigReference(string Kind, string Name, IReadOnlyList<string> NodeIds);
+
+public sealed record RedactedFlow(bool Durable, IReadOnlyList<RedactedNode> Nodes, IReadOnlyList<ConfigReference> References, IReadOnlyList<string> Notes);
+
+public sealed record AssistRunEventInput(string Stage, string State, string? Detail);
+
+public sealed record AssistRunDeliveryInput(string Stage, string State);
+
+public sealed record AssistRunInput(string State, IReadOnlyList<AssistRunEventInput>? Events, IReadOnlyList<AssistRunDeliveryInput>? Deliveries);
+
+public sealed record RedactedRunEvent(string Stage, string State, string? Detail);
+
+public sealed record RedactedRunDelivery(string Stage, string State);
+
+public sealed record RedactedRun(string State, IReadOnlyList<RedactedRunEvent> Events, IReadOnlyList<RedactedRunDelivery> Deliveries, IReadOnlyList<string> Notes);
