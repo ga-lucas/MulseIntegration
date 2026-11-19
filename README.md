@@ -2136,6 +2136,18 @@ When some flows were imported from another system, the Flows page shows **See wh
 
 It needs no AI provider and changes nothing. It uses only finding codes and counts, never messages, paths or values, and clearing a group does not make a flow correct: imported flows still have to be rebuilt with native steps and saved before they can run. The API is `GET /api/assist/triage`.
 
+## Map review for imported flows
+
+On the Flows page, an imported flow that has maps shows **Check maps**. It opens a checklist for each map the import recorded, maps with blockers first, and within a map blockers, then warnings, then notes:
+
+- **Not read** (blocker): the map could not be opened or its format was not recognised, so nothing is known about it.
+- **Functoid links** (blocker): links that pass through functoids that were not translated, with the functoid type ids and how often each is used. A map with functoids but no such links gets a warning.
+- **Scripts** (blocker): how many script blocks, in which language, and which BizTalk API names they mention. The script text is never copied or shown.
+- **Schemas** (warnings): a source or target schema that was not found or matches more than one file, and a map whose source and target are the same.
+- **No links** (warning), and notes for maps where most links need rework or where direct links and constants can be carried over by a starter transform.
+
+It needs no AI provider and changes nothing. It shows map names, counts, functoid type ids and API names only, never paths, script text or hashes. Functoid type ids are not translated to names, and a map with nothing to report is not shown to be correct: compare its output with output captured from the real system. The API is `GET /api/assist/map-review/{flowId}`.
+
 ## Flow runbook
 
 On the Flows page, **Runbook** opens a quiet panel for one flow. Type a purpose, a contact and any notes (only you know these), then **Generate runbook**. Mulse writes the rest from the stored definition: overview and schedule, inputs, processing (including native steps), outputs, dependencies (modules, and the config values and secrets the flow refers to, with whether each has a stored value), failure behavior (retry per step, and whether a retry could send twice), and the current pre-enable review counts. The result is shown as Markdown you can select and copy into your own documentation.

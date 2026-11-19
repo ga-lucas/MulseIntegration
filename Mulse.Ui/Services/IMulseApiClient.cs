@@ -96,6 +96,9 @@ public interface IMulseApiClient
     Task<ConfigReviewViewModel> GetConfigReviewAsync(CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support the config values review.");
 
+    Task<MapReviewViewModel> GetMapReviewAsync(string flowId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the map review.");
+
     Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support failure patterns.");
 

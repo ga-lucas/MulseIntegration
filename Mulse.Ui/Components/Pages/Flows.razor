@@ -183,6 +183,10 @@
                                         <button class="secondary-button danger-button" @onclick='() => BeginAction(flow, "delete")' disabled="@IsBusy">Delete</button>
                                         <button class="secondary-button" @onclick="() => ShowReviewAsync(flow)" disabled="@(IsBusy)" aria-label="@($"Review {flow.DisplayName}")">Review</button>
                                         <button class="secondary-button" @onclick="() => ShowRunbook(flow)" disabled="@(IsBusy)" aria-label="@($"Runbook for {flow.DisplayName}")">Runbook</button>
+                                        @if (HasMaps(flow))
+                                        {
+                                            <button class="secondary-button" data-testid="map-review-open" @onclick="() => ShowMapReviewAsync(flow)" disabled="@(IsBusy)" aria-label="@($"Check the maps of {flow.DisplayName}")">Check maps</button>
+                                        }
                                         <button class="secondary-button" @onclick="() => EnableOrDisableAsync(flow)" disabled="@(IsBusy || (!flow.Enabled && (flow.Migration is not null || HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 })))" title="@(flow.Migration is not null && !flow.Enabled ? FlowMigrationReportViewModel.ExecutionBlockReason : (!flow.Enabled && (HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 })) ? "Resolve missing modules and config/secret references before enabling this flow" : null)">
                                             @(flow.Enabled ? "Disable" : "Enable")
                                         </button>
@@ -200,6 +204,10 @@
                                 {
                                     <FlowRunbookPanel FlowName="@flow.DisplayName" Runbook="_runbook" Loading="_runbookLoading" Failed="_runbookFailed" Busy="IsBusy"
                                                       OnGenerate="request => GenerateRunbookAsync(flow, request)" OnClose="CloseRunbook" />
+                                }
+                                @if (_mapReviewFlowId == flow.Id)
+                                {
+                                    <MapReviewPanel FlowName="@flow.DisplayName" Review="_mapReview" Loading="_mapReviewLoading" Failed="_mapReviewFailed" OnClose="CloseMapReview" />
                                 }
                                 @if (flow.MissingModules is { Count: > 0 } missingModules)
                                 {

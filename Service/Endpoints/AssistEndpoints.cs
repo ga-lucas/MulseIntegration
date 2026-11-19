@@ -133,6 +133,15 @@ public static class AssistEndpoints
             .WithName("TriageImportedFlowBlockers")
             .WithSummary("Groups the blockers and warnings of imported flows by cause with fixed rules: how many flows each touches, which it alone would unblock, and whether it needs a decision, information, a stub or a module. Codes, counts and flow ids only; never messages, paths or values. Nothing is changed");
 
+        group.MapGet("/map-review/{flowId}", (string flowId, IServiceProvider services, HttpResponse response) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                return TypedResults.Ok(AssistMapReview.Review(services.GetRequiredService<Service.Flows.IFlowDefinitionService>().GetById(flowId)));
+            })
+            .WithName("ReviewImportedFlowMaps")
+            .WithSummary("A checklist for the maps of an imported flow, from the saved migration inventory with fixed rules: maps that could not be read, links through untranslated functoids, script blocks, schemas that were not found, empty or suspicious maps. Names and counts only; never map paths, script text or values. Nothing is changed")
+            .ProducesProblem(StatusCodes.Status404NotFound);
+
         group.MapGet("/config-review", (IServiceProvider services, HttpResponse response) =>
             {
                 response.Headers.CacheControl = "no-store";
