@@ -839,6 +839,91 @@ Verification: 76 targeted tests and 1,508 service tests passed; solution build a
 
 Dynamic DateTime delays, sub-second timing and the other N4/N5 behavior remain untranslated; no BizTalk equivalence or browser interaction was verified. The full suite was not rerun in this continuation.
 
+## Planned: guided import wizard (design, not implemented)
+
+Status: design for review. Nothing here is built. Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional.
+
+### Why
+
+Today the import panel is one form of path fields plus Analyze. The API is stateless, and what the importer still needs is scattered across analysis warnings, derived-choice reports, configuration requirements and blocked nodes. A user who does not know BizTalk cannot tell what to fetch, why, or where it lives on the server. Evidence also arrives over time (a binding export this week, a captured output next week), and each re-analysis starts from nothing.
+
+### Concepts
+
+- **Import session.** A named record of: source paths, the evidence items supplied, the options chosen (native draft, derive map choices, policy targets), skipped or unavailable requests with the user's note, and a summary of the last analysis. The server stays stateless: each analyze call receives the whole session and returns the result.
+- **Evidence item.** `kind`, `name`, `origin` (server path, pasted text, upload), content or path, `addedUtc`. Kinds are the ones the importer already understands: binding export, BRL policy export, host config, configuration helper source, project or solution source, deployed assembly, and (later) real output sample for compare.
+- **Evidence request.** A deterministic finding derived from an analysis result by a rule in code (not by AI):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable, derived from the rule and its subject, so the same gap keeps its identity across re-analyses. |
+| `title` | One line, plain language. |
+| `why` | What it unblocks, with counts: "13 sends use ports whose transport settings are placeholders". |
+| `howToGet` | General steps to retrieve it from a BizTalk server or host, by tool (Administration Console, `BTSTask`, Rule Composer or Rule Engine Deployment Wizard, the host `.config`, GAC folders, Tracking). Written generally, never for one organization. |
+| `accepts` | Which evidence kinds satisfy it, and which input origins are allowed. |
+| `impact` | Flows, nodes or choices affected, as links. |
+| `status` | Open, Supplied, Skipped, NotAvailable (with a note). A skipped request never blocks the import; the importer keeps failing closed. |
+| `risk` | What to avoid sharing (credentials, personal data) and what the importer drops or ignores. |
+
+- **Delta.** After each re-analysis: requests cleared, requests that appeared, blockers cleared or added per flow, and derived choices that changed status. A request is only cleared when the analysis no longer reports the gap, not because the user supplied a file.
+
+### Initial request rules (each maps to behavior the importer already has)
+
+| Rule | Trigger | Typical `howToGet` |
+| --- | --- | --- |
+| Bindings | No binding file found, or ports still carry placeholders. | Administration Console export of bindings, or `BTSTask ExportBindings` (per application). |
+| Rule policies | Rule-call shapes found and no BRL export supplied. | Export from the Business Rule Composer or Rule Engine Deployment Wizard; one file may hold many versions. |
+| Deployed policy version | Several versions present and none selected. | Rule Engine Deployment Wizard or the application's deployed-policy list. The importer never infers it. |
+| Host configuration | Code or maps read app settings the importer cannot resolve. | The host instance `.config` (for example `BTSNTSvc64.exe.config`). |
+| Configuration helper source | A helper type is called for settings. | The source file, or a decompiled copy, of the helper. |
+| Owning project for a map | A map class named by a policy or Transform shape has no analyzed project. | The project or solution that builds that assembly. |
+| Map with a stub | A scripting functoid or helper call was stubbed. | The inline script, or the compiled XSLT from the deployed map (stays local, never committed). |
+| Real output | A send was translated under a stated assumption. | A captured file from the send port's location or tracking (needed for the compare feature, plan item M6). |
+| Unknown component | A pipeline component was blocked by name. | The component's documentation, and its configuration from the send port. |
+
+New rules are added the same way as modules: one class per rule with a unit test using synthetic input.
+
+### Wizard stages
+
+1. **Source.** Choose the solution or project and any additional ones. Shows what was found (counts) and a short explanation of the result.
+2. **Environment.** Bindings and host configuration. Requests from the first two rules appear here.
+3. **Rules and maps.** Policies, deployed version, map projects, helper source. Shows the derived map choices and why each unproven one stays closed.
+4. **Evidence of behavior.** Output samples and other assumption checks. Optional, can be skipped.
+5. **Review and import.** Delta, remaining requests, the flows to create, and the per-piece update plan (see re-entry). Nothing is saved until the user confirms.
+
+A stage opens only when the earlier results make it relevant; every stage can be revisited. A request can be answered from any stage that shows it. A "what is still open" summary is always visible.
+
+### Re-entry
+
+- **Session storage.** Index and options in browser local storage; evidence content in IndexedDB (local storage is too small for exports). Both are per browser and per user, are not shared or backed up, and have an Export and Import session action (a JSON file without evidence content by default, with an explicit choice to include it). A banner states this.
+- **Server stays stateless.** Analyze receives evidence inline or as a path. Uploaded and pasted evidence is written to a request-scoped temporary folder and deleted afterwards. Limits apply: file count, per-file size and total size, with named errors. Evidence content is treated as untrusted data; nothing in it is executed, and XML is read with DTDs prohibited.
+- **Update in place.** An imported flow records an import origin: session name, and for each imported piece (map-choice entries, stored config values, specific node settings) a hash of what the importer wrote. Re-entry classifies each changed piece:
+  - **Unchanged since import:** can be updated in place.
+  - **Edited since import:** never overwritten; shown side by side with a keep or replace choice per piece.
+  - **Structural change** (nodes added, removed or reordered, new blockers): not applied in place; the user is offered a new disabled draft and a diff.
+  - Stored config values follow the existing rule (an existing value is kept) with a per-value replace option.
+  - The flow stays disabled after an update. Saving, enabling and running remain separate actions.
+
+### Optional AI layer
+
+Built on the AI assistance plan (surfaces, redaction, proposal pipeline, audit). Off by default; the wizard is complete without it.
+- **Explain this request** in the user's terms and adapt the `howToGet` steps ("which of these tools do you have?").
+- **Ask about this file:** a user-supplied export is summarized by structure (counts, names), not content, unless the user enables more.
+- **Check what I supplied:** a deterministic check first (is this a binding export? which application?), then optional wording.
+- Never decides that a request is satisfied or that behavior is equivalent; the importer's analysis does. AI output is labeled as generated and is never applied to a flow.
+
+### Build order
+
+1. **Backend:** evidence request model and rule catalog; analysis input with inline evidence and temporary materialization; delta computation; tests per rule (synthetic data, no org types).
+2. **Origin tracking:** import-origin hashes written on flow creation; the classification above; update-plan endpoint; tests for unchanged, edited and structural cases.
+3. **UI:** wizard shell replacing the floating panel, the request cards, session storage, upload and paste, export and import session.
+4. **AI layer** (after AI Phase A foundations).
+
+### Open questions
+
+- Which binding-export variants to accept for upload (a single file, an application export, a zipped folder)?
+- Whether the output-sample stage should wait for the compare feature (M6) or only record the samples.
+- A shared server-side session store, if multiple people migrate one application. Not planned; the browser-local choice can be revisited.
+
 ## Product surfaces
 
 ### Flow Designer
