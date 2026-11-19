@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using Mulse.Ui.Models;
+using Mulse.Ui.Services;
 
 namespace Mulse.Ui.Components.Pages;
 
@@ -21,6 +22,7 @@ public partial class Designer : IHandleEvent
     private EditHistory<DraftSnapshot>? _history;
     private bool _observerOnly;
     private bool _confirmReload;
+    private FlowChangeSummary? _saveSummary;
     private object? _migrationJsonSource;
     private string? _migrationJson;
 
@@ -99,12 +101,25 @@ public partial class Designer : IHandleEvent
         }
 
         var next = CaptureDraft(_history.Current);
-        return _history.Record(next, arg is ChangeEventArgs ? DescribeEdit(_history.Current, next) : null);
+        var recorded = _history.Record(next, arg is ChangeEventArgs ? DescribeEdit(_history.Current, next) : null);
+        if (recorded)
+        {
+            _saveSummary = null;
+        }
+
+        return recorded;
     }
 
-    private void MarkDraftSaved()
+    private void MarkDraftSaved(bool summarize = false)
     {
         RecordChange();
+        _saveSummary = null;
+        if (summarize && _history is { } history && history.Baseline is { } before)
+        {
+            var summary = FlowChangeSummary.Build(before.Header, before.Nodes, history.Current.Header, history.Current.Nodes);
+            _saveSummary = summary.IsEmpty ? null : summary;
+        }
+
         _history?.MarkSaved();
     }
 
@@ -178,6 +193,7 @@ public partial class Designer : IHandleEvent
             _seedSource = SeedSource.ExistingFlow;
             UpdateUnresolvedConfigCount();
             ResetHistory();
+            _saveSummary = null;
             _statusMessage = "Reloaded the saved flow. Unsaved changes and the undo history were discarded.";
         }
         catch (Exception exception)
@@ -277,6 +293,7 @@ public partial class Designer : IHandleEvent
 
         // History replaces the one-step AI undo: the proposal itself is an ordinary history entry.
         _assistantUndoDraft = _assistantAppliedDraft = null;
+        _saveSummary = null;
         UpdateUnresolvedConfigCount();
     }
 

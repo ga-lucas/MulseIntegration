@@ -48,6 +48,20 @@
         <div class="status-banner success designer-banner" role="status">@_statusMessage</div>
     }
 
+    @if (_saveSummary is { } saveSummary)
+    {
+        <details class="field-hint designer-banner" data-testid="save-summary" open="@(saveSummary.Cautions.Count > 0)">
+            <summary>What changed in this save (@saveSummary.Changes.Count)@(saveSummary.Cautions.Count > 0 ? $", {saveSummary.Cautions.Count} to double-check" : "")</summary>
+            @if (saveSummary.Cautions.Count > 0)
+            {
+                <p><strong>Worth a second look</strong></p>
+                <ul data-testid="save-summary-cautions">@foreach (var caution in saveSummary.Cautions) { <li>@caution</li> }</ul>
+            }
+            <ul data-testid="save-summary-changes">@foreach (var change in saveSummary.Changes) { <li>@change</li> }</ul>
+            <p>Setting values are never listed here. Undo restores the draft but does not undo a save.</p>
+        </details>
+    }
+
     @if (!string.IsNullOrWhiteSpace(_errorMessage))
     {
         <div class="status-banner error designer-banner" role="alert">@_errorMessage</div>

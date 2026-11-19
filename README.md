@@ -2120,6 +2120,16 @@ blockers remove the enable choice. If the review cannot be loaded the panel says
 and you decide. The review is advisory: it never enables a flow by itself, and imported flows still fail closed.
 The API is `GET /api/assist/review/{flowId}`.
 
+## Change summary on save
+
+After you save an existing flow in the Designer, a collapsed "What changed in this save" note lists the differences
+from the previously saved version in plain words: flow name, enabled state, trigger, retry, and for each step what
+was added, removed, renamed or reconfigured. It is built in code from the designer's own history, with no AI and no
+extra prompt. Setting values are never listed, only which settings were added, removed or changed. Moving nodes on the
+canvas is ignored. Risky changes (enabling the flow, switching to an automatic trigger, a new delivery step, removing
+a retry, confirmation or undo step, changing a step's module) open the note with a short "Worth a second look" list.
+The note disappears on your next edit. It is advisory only and never blocks a save.
+
 ## Working without AI
 
 AI assistance is optional and off by default. With nothing set up, importing, editing, saving, reviewing, running

@@ -738,9 +738,11 @@ public partial class Designer : IAsyncDisposable
         _isSaving = true;
         _statusMessage = null;
         _errorMessage = null;
+        _saveSummary = null;
 
         try
         {
+            var wasExisting = IsExistingFlow;
             var flowId = IsExistingFlow ? FlowId! : _flowId.Trim();
             if (string.IsNullOrWhiteSpace(flowId))
             {
@@ -870,7 +872,7 @@ public partial class Designer : IAsyncDisposable
             _migration = saved.Migration;
             _authoringCategory = saved.Category;
             _assistantUndoDraft = _assistantAppliedDraft = null;
-            MarkDraftSaved();
+            MarkDraftSaved(summarize: wasExisting);
             await RefreshConfigUsagesAsync();
         }
         catch (Exception exception)

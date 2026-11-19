@@ -434,6 +434,42 @@ public sealed class DesignerEditHistoryTests
     }
 
     [Fact]
+    public async Task Saving_ShowsAQuietSummaryOfWhatChanged_ThatNeverShowsSettingValues_AndClearsOnTheNextEdit()
+    {
+        await RenderDesigner(async (designer, rendered, handler) =>
+        {
+            Assert.DoesNotContain("data-testid=\"save-summary\"", rendered.ToHtmlString());
+            await Raise(designer, () => Set(designer, "_flowName", "Renamed orders"));
+            await Raise(designer, () => Set(designer, "_triggerMode", "OnDemand"));
+            handler.Flow = Saved("Renamed orders");
+
+            await Raise(designer, () => (Task)Invoke(designer, "SaveAsync")!);
+
+            var html = rendered.ToHtmlString();
+            Assert.Contains("data-testid=\"save-summary\"", html);
+            Assert.Contains("Flow name changed from &#x27;Orders&#x27; to &#x27;Renamed orders&#x27;.", html);
+            Assert.Contains("Trigger changed from Interval to OnDemand.", html);
+            Assert.DoesNotContain("private-path", html);
+            Assert.DoesNotContain("example.test", html);
+
+            await Raise(designer, () => Set(designer, "_flowName", "Another"));
+            Assert.DoesNotContain("data-testid=\"save-summary\"", rendered.ToHtmlString());
+        });
+    }
+
+    [Fact]
+    public async Task Saving_WithNothingChanged_ShowsNoSummary()
+    {
+        await RenderDesigner(async (designer, rendered, handler) =>
+        {
+            await Raise(designer, () => (Task)Invoke(designer, "SaveAsync")!);
+
+            Assert.Equal(1, handler.Mutations);
+            Assert.DoesNotContain("data-testid=\"save-summary\"", rendered.ToHtmlString());
+        });
+    }
+
+    [Fact]
     public async Task HistoryNeverEnablesAnImportedFlowOrSaves()
     {
         await RenderDesigner(async (designer, _, handler) =>
