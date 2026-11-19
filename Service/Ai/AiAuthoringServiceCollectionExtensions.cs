@@ -19,6 +19,16 @@ public static class AiAuthoringServiceCollectionExtensions
         services.AddSingleton(provider => new AiAuthoringSettingsService(
             provider.GetRequiredService<IOptions<AiAuthoringOptions>>(), provider.GetRequiredService<IAiAuthoringSettingsStore>(), environment));
         services.AddSingleton<ICopilotAuthoringRuntime, CopilotAuthoringRuntime>();
+        services.AddHttpContextAccessor();
+        services.AddSingleton<IAiActivityLog>(provider =>
+        {
+            var configured = provider.GetRequiredService<IOptions<AiAuthoringOptions>>().Value.ActivityDirectory;
+            var directory = string.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(environment.ContentRootPath, "Data", "ai-activity")
+                : Path.GetFullPath(configured, environment.ContentRootPath);
+            return new FileAiActivityLog(directory, provider.GetService<TimeProvider>() ?? TimeProvider.System,
+                provider.GetService<IHttpContextAccessor>(), provider.GetRequiredService<ILogger<FileAiActivityLog>>());
+        });
         services.AddSingleton<IAiChatClientFactory, AiAuthoringChatClientFactory>();
         services.AddSingleton<AiAuthoringService>();
         return services;

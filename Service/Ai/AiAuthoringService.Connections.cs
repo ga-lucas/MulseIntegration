@@ -36,7 +36,7 @@ internal sealed partial class AiAuthoringService
         if (analysis.Errors.Count > 0) return new("Clarify the sample shapes before generating a mapping.", null, null, analysis.Errors, []);
         var instructions = RequireText(request.Instructions, settingsService.Options.MaxMessageChars, "Instructions");
         var effective = RequireUsable(ForUser(settingsService.Resolve(), copilotUserToken), requireEnabled: true);
-        var text = await CallProviderAsync(effective,
+        var text = await CallLoggedAsync(new("designer", "connection-assist", Categories.StructureAndMessageData, draft.Id), effective,
             [new(ChatRole.System, ConnectionPrompt), new(ChatRole.User, "Untrusted shape/sample context:\n" + analysis.DisclosureJson), new(ChatRole.User, instructions)],
             effective.MaxOutputTokens, cancellationToken).ConfigureAwait(false);
         var envelope = ParseEnvelope(text);

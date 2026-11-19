@@ -59,6 +59,16 @@ public static class AssistEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
 
+        group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                var log = services.GetService<Service.Ai.IAiActivityLog>();
+                return TypedResults.Ok(log is null ? [] : log.List(flowId, take ?? 50));
+            })
+            .WithName("GetAiActivity")
+            .WithSummary("The record of AI requests, newest first: when, which surface, provider, model, data categories, and a hash and length of what was sent. Never the text sent or received")
+            .ProducesProblem(StatusCodes.Status400BadRequest);
+
         return app;
     }
 }

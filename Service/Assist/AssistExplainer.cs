@@ -28,7 +28,7 @@ public sealed class AssistExplainer(IModuleCatalog catalog)
         if (all.Count > 0 && !all.Any(node => node.Kind == NativeFlowNodeKind.Deliver))
             findings.Add(new("Info", "The flow has no Deliver step, so nothing is sent to a destination.", null));
 
-        return new(flow.Durable, all.Count, counts, steps, effects, findings, Disclaimer, MissingOf(all, modules));
+        return new(flow.Durable, all.Count, counts, steps, effects, findings, Disclaimer, MissingOf(all, modules), AssistRedactor.References(flow.Nodes));
     }
 
     private static List<AssistMissingModule> MissingOf(IEnumerable<NativeFlowNode> nodes, IReadOnlyList<ModuleDescriptor> modules)

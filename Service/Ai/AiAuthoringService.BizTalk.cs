@@ -44,7 +44,8 @@ internal sealed partial class AiAuthoringService
         if (!string.Equals(request.DisclosureSha256, plan.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new AiAuthoringException(StatusCodes.Status409Conflict, "What would be sent no longer matches what you approved. Review it again before sending.");
 
-        var text = await CallProviderAsync(effective,
+        var text = await CallLoggedAsync(new("biztalk-wizard", plan.Operation == "explain" ? "explain-request" : "review-evidence",
+                plan.IncludesContent ? Categories.StructureAndSourceExpressions : Categories.Structure), effective,
             [new(ChatRole.System, BizTalkAssistPrompt), new(ChatRole.User, plan.Payload)],
             Math.Min(effective.MaxOutputTokens, MaxAssistReplyTokens), cancellationToken).ConfigureAwait(false);
         return new(Truncate(text.Trim()), plan.Findings, effective.Provider, effective.Model);

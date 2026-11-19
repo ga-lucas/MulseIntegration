@@ -97,7 +97,7 @@ public static partial class AssistRedactor
         return References(NativeFlowDefinition.Read(flowJson, allowBlocked: true).Nodes);
     }
 
-    private static IReadOnlyList<ConfigReference> References(List<NativeFlowNode> roots)
+    internal static IReadOnlyList<ConfigReference> References(List<NativeFlowNode> roots)
     {
         var found = new SortedDictionary<(string Kind, string Name), SortedSet<string>>(Comparer<(string Kind, string Name)>.Create(
             (left, right) => left.Kind != right.Kind ? string.CompareOrdinal(left.Kind, right.Kind) : string.CompareOrdinal(left.Name, right.Name)));

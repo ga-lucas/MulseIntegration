@@ -71,6 +71,31 @@
             <p>Conversations are limited to the open assistant session, not saved in flow execution history. Provider retention policies still apply. Credentials/settings are separate from workspace backups; preserve the Service's authoring settings and data-protection keys, plus the UI's GitHub connections and its data-protection keys, when moving the installation.</p>
             <p>The Blazor AI components are an experimental preview. Responses appear after backend validation, not as partially editable streamed JSON.</p>
         </Panel>
+        <Panel Title="Recent AI requests" Description="A record of what was sent, when, by whom and to which model. It stores only the size and a fingerprint of each request, never the text sent, the reply, values or secrets.">
+            <div class="action-row">
+                <label>Flow id (optional) <input @bind="_activityFlow" maxlength="128" data-testid="activity-flow" /></label>
+                <button class="secondary-button" type="button" @onclick="LoadActivityAsync" disabled="@_activityLoading" data-testid="activity-load">@(_activity is null ? "Show recent requests" : "Refresh")</button>
+            </div>
+            @if (_activityError is not null) { <p class="status-banner error" role="alert" data-testid="activity-error">@_activityError</p> }
+            @if (_activity is { Count: 0 }) { <p class="field-hint" data-testid="activity-empty">No AI requests have been recorded.</p> }
+            else if (_activity is not null)
+            {
+                <table class="compare-differences" data-testid="activity-list">
+                    <thead><tr><th>When</th><th>Who</th><th>Where</th><th>Model</th><th>Data categories</th><th>Size</th><th>Result</th></tr></thead>
+                    <tbody>
+                    @foreach (var entry in _activity)
+                    {
+                        <tr @key="entry.Id" title="@entry.PayloadSha256">
+                            <td>@entry.At.ToString("u")</td><td>@(entry.Actor ?? "-")</td><td>@entry.Surface / @entry.Action@(entry.FlowId is null ? "" : " (" + entry.FlowId + ")")</td>
+                            <td>@entry.Provider / @entry.Model</td><td>@string.Join(", ", entry.Categories)</td><td>@entry.PayloadChars chars</td>
+                            <td>@entry.Outcome@(entry.ProposalProduced is null ? "" : entry.ProposalProduced == true ? $", proposal ({entry.ProposalErrors ?? 0} error(s))" : ", no proposal")</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+                <p class="field-hint">Newest first, up to 50. The log does not show whether a proposal was later applied.</p>
+            }
+        </Panel>
     }
 </div>
 
@@ -94,6 +119,19 @@
     }
 
     protected override Task OnInitializedAsync() => LoadAsync();
+
+    private string _activityFlow = "";
+    private bool _activityLoading;
+    private string? _activityError;
+    private IReadOnlyList<AiActivityEntryViewModel>? _activity;
+
+    private async Task LoadActivityAsync()
+    {
+        _activityLoading = true; _activityError = null;
+        try { _activity = await ApiClient.GetAiActivityAsync(_activityFlow, 50, default); }
+        catch (Exception exception) when (!_disposed) { _activityError = $"Unable to load the AI activity: {exception.Message}"; }
+        finally { _activityLoading = false; }
+    }
 
     private async Task LoadAsync()
     {

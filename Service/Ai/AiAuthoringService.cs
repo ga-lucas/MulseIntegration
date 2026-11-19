@@ -10,7 +10,8 @@ internal sealed partial class AiAuthoringService(
     AiAuthoringSettingsService settingsService,
     IModuleCatalog moduleCatalog,
     IAiChatClientFactory clientFactory,
-    ILogger<AiAuthoringService> logger)
+    ILogger<AiAuthoringService> logger,
+    IAiActivityLog? activityLog = null)
 {
     private const int MaxContextChars = 150_000;
     private const int MaxResponseChars = 400_000;
@@ -67,7 +68,18 @@ internal sealed partial class AiAuthoringService(
         chatMessages.Insert(0, new ChatMessage(ChatRole.System, SystemPrompt));
         chatMessages.Add(new ChatMessage(ChatRole.User, message));
 
-        var text2 = await CallProviderAsync(effective, chatMessages, effective.MaxOutputTokens, cancellationToken).ConfigureAwait(false);
+        AiAuthoringChatResponse? outcome = null;
+        _ = await CallLoggedAsync(new("designer", "draft", Categories.StructureAndSettingValues, draft.Id), effective, chatMessages,
+            effective.MaxOutputTokens, cancellationToken, text =>
+            {
+                outcome = ChatOutcome(text, draft, redacted, catalog);
+                return (outcome.ProposalJson is not null, outcome.ValidationErrors.Count);
+            }).ConfigureAwait(false);
+        return outcome!;
+    }
+
+    private static AiAuthoringChatResponse ChatOutcome(string text2, AiFlowDoc draft, AiRedactedDraft redacted, ModuleDescriptor[] catalog)
+    {
         var envelope = ParseEnvelope(text2);
         if (envelope.Error is not null) return new AiAuthoringChatResponse("The assistant returned a response that could not be used.", null, [envelope.Error]);
         if (envelope.Proposal is null) return new AiAuthoringChatResponse(envelope.Reply, null, []);
@@ -80,7 +92,7 @@ internal sealed partial class AiAuthoringService(
     {
         var effective = RequireUsable(ForUser(settingsService.Resolve(), copilotUserToken), requireEnabled: false);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Reply with the single word OK.") };
-        _ = await CallProviderAsync(effective, messages, Math.Min(effective.MaxOutputTokens, 256), cancellationToken).ConfigureAwait(false);
+        _ = await CallLoggedAsync(new("ai-settings", "test-connection", Categories.None), effective, messages, Math.Min(effective.MaxOutputTokens, 256), cancellationToken).ConfigureAwait(false);
         return new AiAuthoringTestResponse($"Connected to {effective.Provider} model '{effective.Model}'.");
     }
 

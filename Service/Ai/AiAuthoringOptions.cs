@@ -42,6 +42,9 @@ public sealed class AiAuthoringOptions
 
     /// <summary>Directory for the encrypted override file and its data-protection keys. Defaults to <c>Data\ai-authoring</c> under the content root, outside workspace backups.</summary>
     public string? SettingsDirectory { get; set; }
+
+    /// <summary>Directory for the append-only AI activity log. Defaults to <c>Data\ai-activity</c> under the content root.</summary>
+    public string? ActivityDirectory { get; set; }
 }
 
 internal sealed record AiAuthoringEffectiveSettings(bool Enabled, string Provider, string Model, Uri? Endpoint, int MaxOutputTokens, string? ApiKey, bool EndpointMalformed = false)
