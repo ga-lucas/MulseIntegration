@@ -54,6 +54,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddMulsePlatform(builder.Configuration, builder.Environment.ContentRootPath);
 builder.Services.AddAiAuthoring(builder.Configuration, builder.Environment);
 builder.Services.AddComparisonScenarios(builder.Configuration, builder.Environment);
+builder.Services.AddAssist();
 
 var app = builder.Build();
 
@@ -81,6 +82,7 @@ app.MapHistoryEndpoints();
 app.MapProcessingEndpoints();
 app.MapHttpInboundEndpoints();
 app.MapAiAuthoringEndpoints();
+app.MapAssistEndpoints();
 
 app.Run();
 
