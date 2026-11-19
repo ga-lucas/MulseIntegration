@@ -249,6 +249,188 @@ public sealed class BizTalkWizardUiTests
         Assert.Empty(fixture.Store.Saved);
     }
 
+    private static readonly BizTalkFlowCandidateViewModel BillingCandidate = new(
+        "billing-send", "Core.Billing", "Sends billing.", "Fetch guidance", "Parse guidance", [], [], [], [], [],
+        new BizTalkDraftFlowViewModel("billing-send", false, new BizTalkDraftTriggerViewModel("Interval", null, false), [], [], [], [], [], [], null));
+
+    private static FlowViewModel Flow(string id) => new(id, false, "Interval", null, false, [], [], [], [], [], [], [], [], [], [], []);
+
+    private static BizTalkUpdatePlanViewModel InPlacePlan(string flowId) => new(flowId, "InPlace", "The flow can be updated piece by piece.", null,
+        [new("augment/1", "Augment", "Rule policy", "UpdateInPlace", true, true)], new Dictionary<string, int>(), []);
+
+    private static async Task ReachReviewWithACandidateAsync(Fixture fixture, BizTalkImportWizard wizard)
+    {
+        fixture.Responses.Enqueue(Analysis(null, Bindings) with { FlowCandidates = [BillingCandidate] });
+        fixture.Call(wizard, "SetSourcePath", "C:\\x.sln");
+        await fixture.CallAsync(wizard, "AnalyzeAsync");
+        fixture.Call(wizard, "GoTo", BizTalkWizardStage.Review);
+        await fixture.RefreshAsync(wizard);
+    }
+
+    [Fact]
+    public async Task SavingACandidateAsANewFlowSendsTheSameInputsAndRemembersTheFlow()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/biztalk-import/flows"] = Flow("billing-copy");
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+            fixture.Call(wizard, "AddEvidence", new BizTalkEvidenceAdd(BizTalkEvidenceKinds.Bindings, BizTalkEvidenceOrigins.Text, "prod bindings", null, "<BindingInfo/>", null));
+            await fixture.CallAsync(wizard, "AnalyzeAsync");
+            fixture.Call(wizard, "GoTo", BizTalkWizardStage.Review);
+            fixture.SetField(wizard, "_newFlowId", " billing-copy ");
+
+            await fixture.CallAsync(wizard, "SaveNewAsync", BillingCandidate);
+            await fixture.RefreshAsync(wizard);
+
+            var post = Assert.Single(fixture.Posts);
+            Assert.Equal("/api/biztalk-import/flows", post.Path);
+            Assert.Contains("\"suggestedFlowId\":\"billing-send\"", post.Body);
+            Assert.Contains("\"newFlowId\":\"billing-copy\"", post.Body);
+            Assert.Contains("BindingInfo", post.Body);
+
+            Assert.Equal("billing-copy", ((BizTalkImportSession)fixture.Field(wizard, "_session")!).ImportedFlowId);
+            Assert.Equal("billing-copy", fixture.Field(wizard, "_updateFlowId"));
+            Assert.Contains("Saved &#x27;billing-copy&#x27; as a disabled flow", fixture.Html());
+            Assert.Equal("billing-copy", BizTalkImportSession.Import(fixture.Store.Saved["import"]).ImportedFlowId);
+        });
+    }
+
+    [Fact]
+    public async Task SavingWithoutANewIdUsesTheSuggestedIdAndSendsNoOverride()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/biztalk-import/flows"] = Flow("billing-send");
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+            await fixture.CallAsync(wizard, "SaveNewAsync", BillingCandidate);
+            Assert.DoesNotContain("newFlowId", Assert.Single(fixture.Posts).Body);
+        });
+    }
+
+    [Fact]
+    public async Task ARefusedSaveIsExplainedAndRemembersNothing()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/biztalk-import/flows"] = HttpStatusCode.Conflict;
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+            await fixture.CallAsync(wizard, "SaveNewAsync", BillingCandidate);
+            await fixture.RefreshAsync(wizard);
+
+            Assert.Contains("Unable to save the flow", fixture.Html());
+            Assert.Null(((BizTalkImportSession)fixture.Field(wizard, "_session")!).ImportedFlowId);
+            Assert.DoesNotContain("as a disabled flow", fixture.Html());
+            Assert.Contains("Save as new disabled flow", fixture.Html());
+        });
+    }
+
+    [Fact]
+    public async Task UpdatingAnImportedFlowShowsThePlanThenReplacesOnlyTheChosenPieces()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/biztalk-import/flows"] = Flow("billing-copy");
+        fixture.Replies["/api/biztalk-import/flows/billing-copy/update-plan"] = InPlacePlan("billing-copy");
+        fixture.Replies["/api/biztalk-import/flows/billing-copy/update"] = new BizTalkUpdateResultViewModel("InPlace", Flow("billing-copy"), ["augment/1"], ["Nothing was deleted."]);
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+            await fixture.CallAsync(wizard, "SaveNewAsync", BillingCandidate);
+
+            await fixture.CallAsync(wizard, "PlanUpdateAsync", BillingCandidate);
+            await fixture.RefreshAsync(wizard);
+            Assert.Equal("/api/biztalk-import/flows/billing-copy/update-plan", fixture.Posts[1].Path);
+            Assert.Contains("Replace 1 selected piece(s)", fixture.Html());
+            Assert.Equal(2, fixture.Posts.Count);
+
+            await fixture.CallAsync(wizard, "ApplyUpdateAsync", (object)new[] { "augment/1" });
+            await fixture.RefreshAsync(wizard);
+
+            var update = fixture.Posts[2];
+            Assert.Equal("/api/biztalk-import/flows/billing-copy/update", update.Path);
+            Assert.Contains("\"replacePieces\":[\"augment/1\"]", update.Body);
+            Assert.Contains("\"suggestedFlowId\":\"billing-send\"", update.Body);
+            var html = fixture.Html();
+            Assert.Contains("Updated &#x27;billing-copy&#x27;: replaced 1 piece(s). Nothing was deleted.", html);
+            Assert.DoesNotContain("Replace 1 selected piece(s)", html);
+        });
+    }
+
+    [Fact]
+    public async Task UpdatePlanTargetsTheTypedFlowIdEscapedOtherwiseTheSuggestedOne()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/biztalk-import/flows/billing-send/update-plan"] = InPlacePlan("billing-send");
+        fixture.Replies["/api/biztalk-import/flows/other%20flow/update-plan"] = InPlacePlan("other flow");
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+
+            await fixture.CallAsync(wizard, "PlanUpdateAsync", BillingCandidate);
+            Assert.Equal("/api/biztalk-import/flows/billing-send/update-plan", fixture.Posts[0].Path);
+
+            fixture.SetField(wizard, "_updateFlowId", " other flow ");
+            await fixture.CallAsync(wizard, "PlanUpdateAsync", BillingCandidate);
+            Assert.Equal("/api/biztalk-import/flows/other%20flow/update-plan", fixture.Posts[1].Path);
+        });
+    }
+
+    [Fact]
+    public async Task ARefusedPlanShowsTheErrorAndNoPlan()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/biztalk-import/flows/billing-send/update-plan"] = HttpStatusCode.NotFound;
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+            await fixture.CallAsync(wizard, "PlanUpdateAsync", BillingCandidate);
+            await fixture.RefreshAsync(wizard);
+            Assert.Contains("Unable to plan the update", fixture.Html());
+            Assert.DoesNotContain("selected piece(s)", fixture.Html());
+        });
+    }
+
+    [Fact]
+    public async Task ApplyingWithoutAPlanAndClosingAPlanSendNothing()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/biztalk-import/flows/billing-send/update-plan"] = InPlacePlan("billing-send");
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+            await fixture.CallAsync(wizard, "ApplyUpdateAsync", (object)new[] { "augment/1" });
+            Assert.Empty(fixture.Posts);
+
+            await fixture.CallAsync(wizard, "PlanUpdateAsync", BillingCandidate);
+            fixture.Call(wizard, "ClosePlan");
+            await fixture.RefreshAsync(wizard);
+            Assert.DoesNotContain("selected piece(s)", fixture.Html());
+            await fixture.CallAsync(wizard, "ApplyUpdateAsync", (object)new[] { "augment/1" });
+            Assert.Single(fixture.Posts);
+        });
+    }
+
+    [Fact]
+    public async Task ImportActionsAreDisabledWhileTheAnalysisIsOutOfDate()
+    {
+        await using var fixture = new Fixture();
+        await fixture.RunAsync(async wizard =>
+        {
+            await ReachReviewWithACandidateAsync(fixture, wizard);
+            Assert.DoesNotMatch(@"<button[^>]*disabled[^>]*>Save as new disabled flow", fixture.Html());
+
+            fixture.Call(wizard, "AddEvidence", new BizTalkEvidenceAdd(BizTalkEvidenceKinds.Bindings, BizTalkEvidenceOrigins.Text, "prod bindings", null, "<BindingInfo/>", null));
+            await fixture.RefreshAsync(wizard);
+
+            var html = fixture.Html();
+            Assert.Matches(@"<button[^>]*disabled[^>]*>Save as new disabled flow", html);
+            Assert.Matches(@"<button[^>]*disabled[^>]*>Update an existing flow", html);
+            Assert.Matches(@"<button[^>]*disabled[^>]*>Load onto canvas", html);
+        });
+    }
+
     [Fact]
     public async Task UpdatePlanSelectsOnlyWhatTheServiceSuggestsAndNeverOfferedEditsByDefault()
     {
@@ -354,6 +536,12 @@ public sealed class BizTalkWizardUiTests
         public Queue<BizTalkSolutionAnalysisViewModel> Responses { get; } = new();
         public List<string> Bodies { get; } = [];
 
+        /// <summary>Every non-analyze request the wizard made.</summary>
+        public List<(string Path, string Body)> Posts { get; } = [];
+
+        /// <summary>Canned answers by absolute path: a view model to return as JSON, or an HttpStatusCode to fail with.</summary>
+        public Dictionary<string, object> Replies { get; } = new(StringComparer.Ordinal);
+
         public string Html() => _html!();
 
         public Task RunAsync(Func<BizTalkImportWizard, Task> test) => _renderer.Dispatcher.InvokeAsync(async () =>
@@ -396,9 +584,19 @@ public sealed class BizTalkWizardUiTests
         {
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
-                if (request.RequestUri!.AbsolutePath != "/api/biztalk-import/analyze") return new HttpResponseMessage(HttpStatusCode.NotFound);
-                owner.Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(owner.Responses.Dequeue(), options: Web) };
+                var path = request.RequestUri!.AbsolutePath;
+                var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (path == "/api/biztalk-import/analyze")
+                {
+                    owner.Bodies.Add(body);
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(owner.Responses.Dequeue(), options: Web) };
+                }
+
+                owner.Posts.Add(new(path, body));
+                if (!owner.Replies.TryGetValue(path, out var reply)) return new HttpResponseMessage(HttpStatusCode.NotFound);
+                return reply is HttpStatusCode status
+                    ? new HttpResponseMessage(status) { Content = new StringContent("The server refused it.") }
+                    : new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(reply, reply.GetType(), options: Web) };
             }
         }
     }
