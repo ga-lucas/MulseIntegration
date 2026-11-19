@@ -7,7 +7,8 @@ public sealed record AiAuthoringSettingsResponse(
     string Model,
     string? Endpoint,
     bool CredentialConfigured,
-    int MaxOutputTokens);
+    int MaxOutputTokens,
+    string? Notice = null);
 
 /// <summary>Replaces the stored AI authoring overrides. <see cref="ApiKey"/> is write-only; omit it to keep the stored key.</summary>
 public sealed record AiAuthoringSettingsRequest(

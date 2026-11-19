@@ -220,8 +220,14 @@ public sealed class AiAuthoringSettingsTests
             var exception = Assert.Throws<AiAuthoringException>(() => fresh.Resolve());
             Assert.Equal(503, exception.StatusCode);
             Assert.DoesNotContain("deploy-secret", exception.Message, StringComparison.Ordinal);
-            Assert.Throws<AiAuthoringException>(() => fresh.Get());
-            Assert.Throws<AiAuthoringException>(() => fresh.Update(Request(apiKey: "k2")));
+            var shown = fresh.Get();
+            Assert.False(shown.Enabled);
+            Assert.Equal(AiAuthoringSettingsService.UnreadableNotice, shown.Notice);
+            Assert.DoesNotContain("deploy-secret", shown.Notice, StringComparison.Ordinal);
+            var repaired = fresh.Update(Request(apiKey: "k2"));
+            Assert.True(repaired.Enabled);
+            Assert.Null(repaired.Notice);
+            Assert.Null(fresh.Get().Notice);
         }
         finally
         {

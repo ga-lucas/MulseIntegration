@@ -27,9 +27,9 @@ internal sealed partial class AiAuthoringService
     /// <summary>Everything the run wording request would send. Contacts no provider and needs no credential.</summary>
     public RunWordingDisclosure PreviewRunWording(AssistRunSource source, RunWordingRequest request)
     {
-        var settings = settingsService.Resolve();
+        var (settings, notice) = settingsService.ResolveOrOff();
         var plan = BuildRunWordingPlan(source, request, settings);
-        var unavailable = !settings.Enabled ? "AI assistance is turned off. Set it up under Configuration > AI assistance to use it here." : settingsService.Validate(settings);
+        var unavailable = notice ?? (!settings.Enabled ? "AI assistance is turned off. Set it up under Configuration > AI assistance to use it here." : settingsService.Validate(settings));
         return new(unavailable is null, unavailable, settings.Provider, settings.Model, plan.Payload, plan.Sha256, plan.IncludesErrorText, plan.Notes);
     }
 

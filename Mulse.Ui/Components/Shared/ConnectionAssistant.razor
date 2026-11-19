@@ -74,7 +74,8 @@
         }
         <details><summary>Exact shape/example context to share with the provider</summary><pre>@_analysis.DisclosureJson</pre></details>
         <p>Your instructions above are also sent. The draft's settings, sample names, execution histories and stored secret values are not attached. Current support: direct field copies and object/repeating-array templates only; conversions and business logic may require manual mapping or a custom plugin.</p>
-        <button type="button" class="run-button" disabled="@(_busy || _analysis.Errors.Count > 0 || string.IsNullOrWhiteSpace(_instructions))" @onclick="GenerateAsync">@(_busy ? "Working..." : "Share reviewed context and propose mapping")</button>
+        <button type="button" class="run-button" disabled="@(_busy || _aiOff || _analysis.Errors.Count > 0 || string.IsNullOrWhiteSpace(_instructions))" @onclick="GenerateAsync">@(_busy ? "Working..." : "Share reviewed context and propose mapping")</button>
+        @if (_aiOff) { <p class="field-hint" role="status" data-testid="connection-ai-off">AI assistance is not set up, so only the local analysis is available. Nothing was sent anywhere. Optional: set it up under <a href="/ai-assistance">Configuration > AI assistance</a>.</p> }
     }
     @if (_result is not null)
     {
@@ -107,7 +108,7 @@
     private string _sourceId = "", _instructions = "";
     private int _routeIndex = -1;
     private string? _error, _status;
-    private bool _busy, _approved, _disposed;
+    private bool _busy, _approved, _disposed, _aiOff;
     private ConnectionAnalysisViewModel? _analysis;
     private ConnectionAssistanceRequestViewModel? _reviewed;
     private ConnectionAssistanceResponseViewModel? _result;
@@ -153,10 +154,17 @@
             var analysis = await ApiClient.AnalyzeConnectionAsync(request, _lifetime.Token);
             if (_disposed) return;
             _reviewed = request; _analysis = analysis;
+            _aiOff = await IsAiOffAsync();
         }
         catch (OperationCanceledException) when (_disposed) { }
         catch (Exception exception) { _error = exception.Message; }
         finally { _busy = false; }
+    }
+
+    private async Task<bool> IsAiOffAsync()
+    {
+        try { return !(await ApiClient.GetAiAuthoringSettingsAsync(_lifetime.Token)).Enabled; }
+        catch (Exception exception) when (exception is not OperationCanceledException) { return false; }
     }
 
     private async Task GenerateAsync()

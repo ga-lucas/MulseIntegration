@@ -55,13 +55,13 @@ public sealed class ConnectionAssistanceUiTests
             Set(sample, "ShareExpected", true);
             await InvokeAsync(component, "AnalyzeAsync");
             await component.SetParametersAsync(ParameterView.Empty);
-            Assert.Equal(["/api/authoring/connection/analyze"], handler.Paths);
+            Assert.Equal(["/api/authoring/connection/analyze", "/api/authoring/settings"], handler.Paths);
             Assert.Contains("Exact shape/example context", rendered.ToHtmlString());
             Assert.Null(Field(component, "_result"));
 
             await InvokeAsync(component, "GenerateAsync");
             await component.SetParametersAsync(ParameterView.Empty);
-            Assert.Equal(["/api/authoring/connection/analyze", "/api/authoring/connection"], handler.Paths);
+            Assert.Equal(["/api/authoring/connection/analyze", "/api/authoring/settings", "/api/authoring/connection"], handler.Paths);
             Assert.Equal(handler.AnalysisRequest, handler.GenerationRequest);
             var sent = JsonSerializer.Deserialize<ConnectionAssistanceRequestViewModel>(handler.GenerationRequest!, JsonSerializerOptions.Web)!;
             Assert.False(sent.Samples[0].ShareInputValues);
@@ -94,7 +94,7 @@ public sealed class ConnectionAssistanceUiTests
             await InvokeAsync(component, "AnalyzeAsync");
             current = Draft.Replace("orders", "changed");
             await InvokeAsync(component, "GenerateAsync");
-            Assert.Equal(["/api/authoring/connection/analyze"], handler.Paths);
+            Assert.Equal(["/api/authoring/connection/analyze", "/api/authoring/settings"], handler.Paths);
             Assert.Contains("changed", (string)Field(component, "_error")!);
             current = Draft;
             await InvokeAsync(component, "GenerateAsync");
@@ -121,7 +121,7 @@ public sealed class ConnectionAssistanceUiTests
             Assert.Equal(2, ((IList)Field(component, "_samples")!).Count);
             Assert.Null(Field(component, "_analysis"));
             await InvokeAsync(component, "GenerateAsync");
-            Assert.Equal(["/api/authoring/connection/analyze"], handler.Paths);
+            Assert.Equal(["/api/authoring/connection/analyze", "/api/authoring/settings"], handler.Paths);
             component.Dispose();
             Assert.Empty((IList)Field(component, "_samples")!);
             Assert.Null(Field(component, "_reviewed"));
@@ -238,6 +238,8 @@ public sealed class ConnectionAssistanceUiTests
                 return new(HttpStatusCode.OK) { Content = JsonContent.Create(new ConnectionAssistanceResponseViewModel("Copy the field", "{}", Draft, [],
                     [new("Scenario 1", Matches, "[{\"invoice\":1}]", Matches ? null : "Different output")])) };
             }
+            if (path == "/api/authoring/settings")
+                return new(HttpStatusCode.OK) { Content = JsonContent.Create(new AiAuthoringSettingsViewModel(true, "OpenAI", "m", "", true, 2048)) };
             throw new InvalidOperationException("Unexpected API request: " + path);
         }
     }

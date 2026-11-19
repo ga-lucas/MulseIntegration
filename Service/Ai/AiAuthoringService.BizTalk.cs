@@ -31,9 +31,9 @@ internal sealed partial class AiAuthoringService
     /// <summary>Everything the assist would send and everything found locally. Contacts no provider and needs no credential.</summary>
     public BizTalkAssistDisclosure PreviewBizTalkAssist(BizTalkAssistRequest request)
     {
-        var settings = settingsService.Resolve();
+        var (settings, notice) = settingsService.ResolveOrOff();
         var plan = BuildBizTalkAssistPlan(request, settings);
-        var unavailable = !settings.Enabled ? "AI assistance is turned off. Set it up under Configuration > AI assistance to use it here." : settingsService.Validate(settings);
+        var unavailable = notice ?? (!settings.Enabled ? "AI assistance is turned off. Set it up under Configuration > AI assistance to use it here." : settingsService.Validate(settings));
         return new(unavailable is null, unavailable, settings.Provider, settings.Model, plan.Payload, plan.Sha256, plan.IncludesContent, plan.Findings, plan.Notes);
     }
 

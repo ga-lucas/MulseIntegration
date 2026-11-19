@@ -9,9 +9,23 @@ internal sealed class AiAuthoringSettingsService(IOptions<AiAuthoringOptions> op
 
     public AiAuthoringSettingsResponse Get()
     {
-        var effective = Resolve();
+        var (effective, notice) = ResolveOrOff();
         return new AiAuthoringSettingsResponse(effective.Enabled, effective.Provider, effective.Model, effective.Endpoint?.AbsoluteUri,
-            effective.CredentialConfigured, effective.MaxOutputTokens);
+            effective.CredentialConfigured, effective.MaxOutputTokens, notice);
+    }
+
+    internal const string UnreadableNotice = "The saved AI settings could not be read, so AI assistance is off. Everything else in Mulse still works. Saving new settings here replaces the unreadable ones.";
+
+    /// <summary>For surfaces that must keep working without AI: unreadable saved settings count as "AI is off" instead of failing the request.</summary>
+    internal (AiAuthoringEffectiveSettings Settings, string? Notice) ResolveOrOff()
+    {
+        try { return (Resolve(), null); }
+        catch (AiAuthoringException exception) when (exception.StatusCode == StatusCodes.Status503ServiceUnavailable)
+        {
+            var deployment = options.Value;
+            return (new AiAuthoringEffectiveSettings(false, AiAuthoringProviders.Canonicalize(deployment.Provider) ?? deployment.Provider ?? "", (deployment.Model ?? "").Trim(), null,
+                Math.Clamp(deployment.MaxOutputTokens, 256, 16384), null), UnreadableNotice);
+        }
     }
 
     public AiAuthoringSettingsResponse Update(AiAuthoringSettingsRequest request)
@@ -31,7 +45,10 @@ internal sealed class AiAuthoringSettingsService(IOptions<AiAuthoringOptions> op
         if (apiKey is not null && (apiKey.Length is 0 or > 512 || apiKey.Any(character => char.IsControl(character) || char.IsWhiteSpace(character))))
             throw new ArgumentException("API key must be 1-512 characters without whitespace.");
 
-        var existing = store.Load();
+        // Unreadable saved settings are replaced rather than blocking the repair.
+        AiAuthoringOverrides? existing;
+        try { existing = store.Load(); }
+        catch (AiAuthoringException exception) when (exception.StatusCode == StatusCodes.Status503ServiceUnavailable) { existing = null; }
         // A stored key is only kept for the same provider and endpoint; otherwise it must be re-entered so it is never sent to a new destination.
         var sameBinding = existing is not null && existing.Provider == provider && Normalize(provider, existing.Endpoint) == Normalize(provider, endpoint?.AbsoluteUri);
         var storedKey = request.ClearApiKey || provider == AiAuthoringProviders.GitHubCopilot ? null : apiKey ?? (sameBinding ? existing!.ApiKey : null);

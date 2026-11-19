@@ -2120,6 +2120,15 @@ blockers remove the enable choice. If the review cannot be loaded the panel says
 and you decide. The review is advisory: it never enables a flow by itself, and imported flows still fail closed.
 The API is `GET /api/assist/review/{flowId}`.
 
+## Working without AI
+
+AI assistance is optional and off by default. With nothing set up, importing, editing, saving, reviewing, running
+and enabling flows all work, as do the glossary, flow explanations, run explanations, failure patterns, digest and
+compare results: they are built without a model. Surfaces that can use a model show a short "AI is not set up"
+hint (or an inert preview) and never send anything. If the saved AI settings file cannot be read (for example after
+moving machines), AI turns itself off, the AI page shows a one-line notice, and saving new settings there replaces
+the unreadable file. Nothing else is affected.
+
 ## AI flow authoring
 
 The Designer's **AI assistant** uses Microsoft's experimental native Blazor AI components (`ChatPage` and

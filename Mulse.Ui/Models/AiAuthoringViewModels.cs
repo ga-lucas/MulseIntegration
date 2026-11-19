@@ -1,9 +1,9 @@
 namespace Mulse.Ui.Models;
 
 public sealed record AiAuthoringSettingsViewModel(
-    bool Enabled, string Provider, string Model, string Endpoint, bool CredentialConfigured, int MaxOutputTokens);
+    bool Enabled, string Provider, string Model, string Endpoint, bool CredentialConfigured, int MaxOutputTokens, string? Notice = null);
 
-public sealed record UpdateAiAuthoringSettingsViewModel(
+    public sealed record UpdateAiAuthoringSettingsViewModel(
     bool Enabled, string Provider, string Model, string Endpoint, int MaxOutputTokens,
     string? ApiKey = null, bool ClearApiKey = false);
 

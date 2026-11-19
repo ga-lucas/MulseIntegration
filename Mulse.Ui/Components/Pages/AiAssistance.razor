@@ -9,6 +9,7 @@
         <p class="lede">Configure the backend model used by the flow designer's assistant. Assistance is optional and disabled by default.</p></div>
     </header>
     <StatusBanner Error="@_error" Success="@_success" />
+    @if (_notice is not null) { <p class="field-hint" role="status" data-testid="ai-settings-notice">@_notice</p> }
     @if (_loading)
     {
         <p role="status">Loading AI settings...</p>
@@ -122,6 +123,7 @@
 
     private string _activityFlow = "";
     private bool _activityLoading;
+    private string? _notice;
     private string? _activityError;
     private IReadOnlyList<AiActivityEntryViewModel>? _activity;
 
@@ -144,6 +146,7 @@
     private void SetSettings(AiAuthoringSettingsViewModel settings)
     {
         _settingsLoaded = true;
+        _notice = settings.Notice;
         _enabled = settings.Enabled; _provider = settings.Provider; _model = settings.Model;
         _endpoint = IsCopilot ? "" : string.IsNullOrWhiteSpace(settings.Endpoint) ? "https://api.openai.com/v1" : settings.Endpoint;
         _maxOutputTokens = settings.MaxOutputTokens;
