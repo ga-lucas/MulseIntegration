@@ -10,6 +10,7 @@ public static class AssistEndpoints
     {
         services.AddSingleton<AssistExplainer>();
         services.AddSingleton<AssistModuleAuthoring>();
+        services.AddSingleton<AssistFlowReviewer>();
         return services;
     }
 
@@ -100,6 +101,17 @@ public static class AssistEndpoints
             .WithName("GetOperationalDigest")
             .WithSummary("A deterministic digest of a period (1 to 168 hours, default 24): runs by state, success rate, held runs, flows that ran slower than usual and interval flows that stopped running. Reads states, times and trigger settings only; never offers a retry")
             .ProducesProblem(StatusCodes.Status409Conflict);
+
+        group.MapGet("/review/{flowId}", (string flowId, IServiceProvider services, HttpResponse response) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                var flows = services.GetRequiredService<Service.Flows.IFlowDefinitionService>();
+                var store = services.GetRequiredService<IRuntimeConfigurationStore>();
+                return TypedResults.Ok(services.GetRequiredService<AssistFlowReviewer>().Review(flows.GetById(flowId), store.GetState().ConfigValues));
+            })
+            .WithName("ReviewFlowBeforeEnabling")
+            .WithSummary("Rules applied to a stored flow before it is enabled: unverified imports, missing modules, unresolved references, typed-in credentials, placeholders, a source that is also a destination, missing retries and sources that are never marked as read. Names and counts only; never setting values")
+            .ProducesProblem(StatusCodes.Status404NotFound);
 
         group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
             {

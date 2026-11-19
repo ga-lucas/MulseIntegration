@@ -84,6 +84,9 @@ public interface IMulseApiClient
     Task<OperationalDigestViewModel> GetOperationalDigestAsync(int hours, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support the operational digest.");
 
+    Task<FlowReviewViewModel> GetFlowReviewAsync(string flowId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the pre-enable review.");
+
     Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support failure patterns.");
 

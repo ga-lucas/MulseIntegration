@@ -20,7 +20,7 @@ public partial class Flows
     private string _newFlowId = string.Empty;
     private string _newCategory = string.Empty;
 
-    private bool IsBusy => _isManagingFlow || _isRunningFlow || _isTogglingFlowEnabled;
+    private bool IsBusy => _isManagingFlow || _isRunningFlow || _isTogglingFlowEnabled || _reviewLoading;
     private string ActionTitle => _flowAction switch
     {
         "duplicate" => "Duplicate flow",

@@ -2101,6 +2101,25 @@ Connected nodes remain; fetch/parse references are detached, and incomplete sour
 repaired before saving. Use the Properties panel's **Remove route** or **Remove source (with its fetches)**
 when you intentionally want grouped removal. Deletions affect the draft until you **Save flow**.
 
+## Pre-enable flow review
+
+On the **Flows** page every flow card has a **Review** button, and clicking **Enable** on a disabled flow
+shows the same review first. The review applies fixed rules to the stored flow (no AI provider is needed,
+and nothing is sent anywhere) and lists findings as **Blockers**, **Warnings** and **Notes**:
+
+- Blockers: the flow was imported and has not been reviewed, a module it uses is not installed, or it refers
+  to a config value or secret that has no stored value.
+- Warnings: a password-like setting typed in plain text, a placeholder left in a setting, a source that is also a
+  destination, a delivery with no retry, a flow with no delivery, and native control-flow steps that need a person's check.
+- Notes: unlimited retry and a source that is never cleaned up.
+
+Each finding names where to look and how to fix it. Findings carry names and counts only, never setting values.
+The review also lists what it did **not** check (for example whether the mappings do what the business needs).
+A clean review enables the flow straight away; with findings you choose **Enable anyway** or **Cancel**, and
+blockers remove the enable choice. If the review cannot be loaded the panel says so, nothing was checked,
+and you decide. The review is advisory: it never enables a flow by itself, and imported flows still fail closed.
+The API is `GET /api/assist/review/{flowId}`.
+
 ## AI flow authoring
 
 The Designer's **AI assistant** uses Microsoft's experimental native Blazor AI components (`ChatPage` and

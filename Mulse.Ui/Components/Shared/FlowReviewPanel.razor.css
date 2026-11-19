@@ -1,0 +1,15 @@
+.review-panel {
+    margin: 0;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-card);
+}
+
+.review-items { display: grid; gap: .75rem; padding-inline-start: 1.25rem; }
+.review-item { display: grid; gap: .25rem; }
+.review-item p { margin: 0; }
+.review-where { margin: 0; padding-inline-start: 1.1rem; color: var(--text-muted); font-size: .9rem; }
+.review-fix { font-size: .95rem; }
+.review-disclaimer { color: var(--text-muted); font-size: .9rem; }
+.review-item .status-pill { justify-self: start; }
+.review-item .status-pill.blocker { background: var(--error-bg); color: var(--error-text); }

@@ -520,6 +520,12 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<OperationalDigestViewModel>(response, cancellationToken, "operational digest").ConfigureAwait(false);
     }
 
+    public async Task<FlowReviewViewModel> GetFlowReviewAsync(string flowId, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/assist/review/" + Uri.EscapeDataString(flowId), cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowReviewViewModel>(response, cancellationToken, "flow review").ConfigureAwait(false);
+    }
+
     public async Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
     {
         using var response = await httpClient.GetAsync($"/api/assist/explain/failures?take={Math.Clamp(take, 1, 200)}", cancellationToken).ConfigureAwait(false);

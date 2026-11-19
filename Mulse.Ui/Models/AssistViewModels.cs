@@ -26,6 +26,9 @@ public sealed record RunExplanationViewModel(string ExecutionId, string FlowId, 
 public sealed record FailurePatternViewModel(string Category, string Stage, int Runs, double Share, List<string> FlowIds, int FlowCount,
     Dictionary<string, int> States, string MostRecentExecutionId, long MostRecentUtcTicks, string WhatToCheck, string SuggestedChange);
 public sealed record FailurePatternReportViewModel(int RunsConsidered, int RunsGrouped, List<FailurePatternViewModel> Patterns, string? Headline, List<string> Notes);
+public sealed record ReviewItemViewModel(string Code, string Severity, string Title, string Detail, List<string> Where, string Fix);
+public sealed record FlowReviewViewModel(string FlowId, string DisplayName, bool Enabled, int Blockers, int Warnings, int Notes, List<ReviewItemViewModel> Items,
+    List<string> Checked, List<string> NotChecked, string Disclaimer);
 public sealed record DigestHeldRunViewModel(string ExecutionId, string FlowId, long StartedUtcTicks);
 public sealed record DigestSlowFlowViewModel(string FlowId, string DisplayName, int CompletedRuns, double TypicalSeconds, double LatestSeconds);
 public sealed record DigestStoppedFlowViewModel(string FlowId, string DisplayName, double IntervalSeconds, long? LastRunUtcTicks, string Reason);

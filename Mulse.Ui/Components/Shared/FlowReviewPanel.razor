@@ -1,0 +1,77 @@
+@using Mulse.Ui.Models
+
+<section class="review-panel" data-testid="flow-review" aria-label="@($"Review of {Review?.DisplayName ?? "flow"}")">
+    <h3>@(EnableMode ? "Review before enabling" : "Flow review")@(Review is null ? null : $": {Review.DisplayName}")</h3>
+
+    @if (Loading)
+    {
+        <p role="status">Checking the flow...</p>
+    }
+    else if (Review is null)
+    {
+        <p class="status-banner error compact" role="alert" data-testid="review-unavailable">The review is not available right now, so nothing was checked.@(EnableMode ? " You can still enable the flow yourself, or cancel and try again." : null)</p>
+    }
+    else
+    {
+        <p role="status" data-testid="review-summary">
+            @if (Review.Items.Count == 0)
+            {
+                <text>Nothing to report. This does not show that the flow is correct.</text>
+            }
+            else
+            {
+                <text>@Review.Blockers blocker(s), @Review.Warnings warning(s), @Review.Notes note(s).</text>
+            }
+        </p>
+
+        @if (Review.Items.Count > 0)
+        {
+            <ol class="review-items">
+                @foreach (var item in Review.Items)
+                {
+                    <li class="review-item" data-code="@item.Code">
+                        <span class="status-pill @(item.Severity == "Blocker" ? "blocker" : item.Severity == "Warning" ? "warning" : null)">@item.Severity</span>
+                        <strong>@item.Title</strong>
+                        <p>@item.Detail</p>
+                        @if (item.Where.Count > 0)
+                        {
+                            <ul class="review-where" aria-label="Where">
+                                @foreach (var place in item.Where)
+                                {
+                                    <li>@place</li>
+                                }
+                            </ul>
+                        }
+                        <p class="review-fix"><strong>To fix:</strong> @item.Fix</p>
+                    </li>
+                }
+            </ol>
+        }
+
+        <details>
+            <summary>What was checked, and what was not</summary>
+            <h4>Checked</h4>
+            <ul>@foreach (var line in Review.Checked) { <li>@line</li> }</ul>
+            <h4>Not checked</h4>
+            <ul>@foreach (var line in Review.NotChecked) { <li>@line</li> }</ul>
+        </details>
+        <p class="review-disclaimer">@Review.Disclaimer</p>
+    }
+
+    <div class="flow-card-actions">
+        @if (EnableMode && !Loading && (Review is null || Review.Blockers == 0))
+        {
+            <button type="button" class="run-button" data-testid="review-enable" @onclick="OnEnable" disabled="@Busy">@(Review is null || Review.Items.Count > 0 ? "Enable anyway" : "Enable flow")</button>
+        }
+        <button type="button" class="secondary-button" data-testid="review-close" @onclick="OnClose" disabled="@Busy">@(EnableMode ? "Cancel" : "Close")</button>
+    </div>
+</section>
+
+@code {
+    [Parameter] public FlowReviewViewModel? Review { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool EnableMode { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback OnEnable { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}
