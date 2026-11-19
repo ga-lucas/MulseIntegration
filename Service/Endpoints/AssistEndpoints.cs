@@ -133,6 +133,18 @@ public static class AssistEndpoints
             .WithName("TriageImportedFlowBlockers")
             .WithSummary("Groups the blockers and warnings of imported flows by cause with fixed rules: how many flows each touches, which it alone would unblock, and whether it needs a decision, information, a stub or a module. Codes, counts and flow ids only; never messages, paths or values. Nothing is changed");
 
+        group.MapGet("/config-review", (IServiceProvider services, HttpResponse response) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                var flows = services.GetRequiredService<Service.Flows.IFlowDefinitionService>();
+                var resolver = services.GetRequiredService<Service.ConfigValues.IConfigValueResolver>();
+                var store = services.GetRequiredService<IRuntimeConfigurationStore>();
+                return TypedResults.Ok(AssistConfigReview.Analyze(store.GetState().ConfigValues, resolver.FindReferenceUsages(flows.GetAll())));
+            })
+            .WithName("ReviewConfigValues")
+            .WithSummary("Compares the stored config values and secrets with what the saved flows refer to: missing names (with similar stored names), unused values, names that differ only by case or separators, repeated and empty values. Names, counts and flow ids only; never values. Nothing is changed")
+            .WithTags("Configuration");
+
         group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
             {
                 response.Headers.CacheControl = "no-store";

@@ -2142,6 +2142,18 @@ On the Flows page, **Runbook** opens a quiet panel for one flow. Type a purpose,
 
 It needs no AI provider and saves nothing. It lists names, module ids and counts only, never setting values, config values or secrets. It describes what the definition says, not that the flow is correct. The API is `POST /api/assist/runbook/{flowId}` with an optional `{ purpose, contact, notes }` body.
 
+## Config values check
+
+On the Config values page, **Check for problems** looks across all saved flows and the stored values and lists what it finds, blockers first:
+
+- **Missing** (blocker): a flow refers to a name that has no stored value. Up to three similar stored names are suggested (same name apart from case or separators, or a near typo), preferring ones nothing uses.
+- **Empty value**: a stored value is blank (a warning when a flow uses it).
+- **Similar names**: stored names that differ only by case or separators.
+- **Same value**: different names hold identical values. The value is never shown.
+- **Unused**: stored but not referenced by any saved flow.
+
+It needs no AI provider and changes nothing. It shows names, flow ids and counts only, never config values or secrets. Unused is advisory: a value may be used by something outside saved flows. The API is `GET /api/assist/config-review`.
+
 ## Working without AI
 
 AI assistance is optional and off by default. With nothing set up, importing, editing, saving, reviewing, running

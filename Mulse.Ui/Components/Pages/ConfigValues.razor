@@ -94,6 +94,64 @@
             }
         </Panel>
 
+        <Panel Title="Check for problems" Description="Compares the stored names with what saved flows refer to: missing names, values nothing uses, names that look like the same setting, and repeated or empty values. Values are never shown or changed by this check.">
+            @if (!_reviewOpen)
+            {
+                <button type="button" class="secondary-button" data-testid="config-review-open" @onclick="ShowReviewAsync">Check the stored values</button>
+            }
+            else if (_reviewLoading)
+            {
+                <p role="status">Checking...</p>
+            }
+            else if (_reviewFailed || _review is null)
+            {
+                <p class="field-hint" role="status" data-testid="config-review-unavailable">The check is not available right now. The tables on this page are still correct.</p>
+            }
+            else
+            {
+                <p role="status" data-testid="config-review-summary">
+                    @if (_review.Items.Count == 0)
+                    {
+                        <text>Nothing to report for @_review.StoredValues stored value(s) and @_review.ReferencedNames referenced name(s).</text>
+                    }
+                    else
+                    {
+                        <text>@_review.Missing missing, @_review.Unused unused, @_review.Items.Count finding(s) in all, for @_review.StoredValues stored value(s).</text>
+                    }
+                </p>
+                @if (_review.Items.Count > 0)
+                {
+                    <ol class="review-items">
+                        @foreach (var item in _review.Items)
+                        {
+                            <li class="review-item" data-code="@item.Code">
+                                <span class="status-pill @(item.Severity == "Blocker" ? "blocker" : item.Severity == "Warning" ? "warning" : null)">@item.Severity</span>
+                                <strong>@item.Title</strong>
+                                <p>@item.Detail</p>
+                                @if (item.Related.Count > 0)
+                                {
+                                    <p>Similar names: @string.Join(", ", item.Related)</p>
+                                }
+                                @if (item.FlowIds.Count > 0)
+                                {
+                                    <p>Flows: @string.Join(", ", item.FlowIds)</p>
+                                }
+                                <p class="review-fix"><strong>To do:</strong> @item.Fix</p>
+                            </li>
+                        }
+                    </ol>
+                }
+                <details>
+                    <summary>About this check</summary>
+                    <ul>@foreach (var note in _review.Notes) { <li>@note</li> }</ul>
+                </details>
+            }
+            @if (_reviewOpen)
+            {
+                <div class="action-row"><button type="button" class="secondary-button" data-testid="config-review-close" @onclick="CloseReview">Close</button></div>
+            }
+        </Panel>
+
         <Panel Title="Stored values" Description="Every config/secret value currently on file. Values are persisted with the rest of the runtime state and benefit from the same optional at-rest encryption.">
             @if (_configValues.Count == 0)
             {
@@ -184,6 +242,38 @@
     private RuntimeEncryptionViewModel? _encryption;
     private string? _statusMessage;
     private string? _errorMessage;
+    private bool _reviewOpen;
+    private bool _reviewLoading;
+    private bool _reviewFailed;
+    private ConfigReviewViewModel? _review;
+
+    private async Task ShowReviewAsync()
+    {
+        _reviewOpen = true;
+        _reviewLoading = true;
+        _reviewFailed = false;
+        _review = null;
+        try
+        {
+            _review = await ApiClient.GetConfigReviewAsync(CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            _reviewFailed = true;
+        }
+        finally
+        {
+            _reviewLoading = false;
+        }
+    }
+
+    private void CloseReview()
+    {
+        _reviewOpen = false;
+        _review = null;
+        _reviewLoading = false;
+        _reviewFailed = false;
+    }
 
     private async Task RequestEncryptionChangeAsync()
     {

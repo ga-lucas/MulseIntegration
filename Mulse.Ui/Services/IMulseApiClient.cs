@@ -93,6 +93,9 @@ public interface IMulseApiClient
     Task<BlockerTriageViewModel> GetBlockerTriageAsync(CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support blocker triage.");
 
+    Task<ConfigReviewViewModel> GetConfigReviewAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the config values review.");
+
     Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support failure patterns.");
 

@@ -35,6 +35,8 @@ public sealed record FlowRunbookViewModel(string FlowId, string Title, List<Runb
 public sealed record BlockerGroupViewModel(string Code, string Tag, string Severity, string Title, string WhatItMeans, string WhatToDo, int Flows, int Occurrences, int ClearsFlowsAlone, List<string> FlowIds);
 public sealed record BlockerTagViewModel(string Tag, string Label, int Groups, int Flows);
 public sealed record BlockerTriageViewModel(int ImportedFlows, int FlowsWithBlockers, List<BlockerGroupViewModel> Groups, List<BlockerTagViewModel> Tags, string? Headline, List<string> Notes);
+public sealed record ConfigReviewItemViewModel(string Code, string Severity, string Reference, string Title, string Detail, List<string> Related, List<string> FlowIds, string Fix);
+public sealed record ConfigReviewViewModel(int StoredValues, int ReferencedNames, int Missing, int Unused, List<ConfigReviewItemViewModel> Items, List<string> Notes);
 public sealed record DigestHeldRunViewModel(string ExecutionId, string FlowId, long StartedUtcTicks);
 public sealed record DigestSlowFlowViewModel(string FlowId, string DisplayName, int CompletedRuns, double TypicalSeconds, double LatestSeconds);
 public sealed record DigestStoppedFlowViewModel(string FlowId, string DisplayName, double IntervalSeconds, long? LastRunUtcTicks, string Reason);
