@@ -47,7 +47,7 @@ public sealed class MainLayoutTests
             Assert.Contains("aria-label=\"Toggle dark mode\"", collapsed);
             Assert.Contains("href=\"#main-content\"", collapsed);
             Assert.Matches("<a[^>]*href=\"/modules\"[^>]*class=\"active\"", collapsed);
-            foreach (var destination in new[] { ("/", "Dashboard"), ("/config-values", "Config values"), ("/modules", "Modules"), ("/module-packages", "Module Packages"), ("/ai-assistance", "Provider settings"), ("/github-copilot", "My GitHub connection"), ("/backup-restore", "Backup &amp; Restore") })
+            foreach (var destination in new[] { ("/", "Dashboard"), ("/flows", "Flows"), ("/config-values", "Config values"), ("/modules", "Modules"), ("/module-packages", "Module Packages"), ("/ai-assistance", "Provider settings"), ("/github-copilot", "My GitHub connection"), ("/backup-restore", "Backup &amp; Restore") })
             {
                 Assert.Contains($"href=\"{destination.Item1}\"", collapsed);
                 Assert.Contains($"aria-label=\"{destination.Item2}\"", collapsed);

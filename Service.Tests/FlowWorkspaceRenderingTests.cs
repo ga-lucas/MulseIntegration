@@ -14,7 +14,7 @@ public sealed class FlowWorkspaceRenderingTests
     [Fact]
     public async Task Dashboard_RendersFiltersAndAllFlowsWithoutPaginationOrModuleAdministration()
     {
-        var html = await RenderAsync<Home>();
+        var html = await RenderAsync<Mulse.Ui.Components.Pages.Flows>();
         Assert.Contains("Search flows", html);
         Assert.Contains("All categories", html);
         Assert.Contains("Uncategorized", html);
@@ -55,7 +55,7 @@ public sealed class FlowWorkspaceRenderingTests
     [InlineData(true, true)]
     public async Task Dashboard_RunRequiresEnabledFlowAndAvailableDependencies(bool enabled, bool missingModules)
     {
-        var html = await RenderAsync<Home>(missingModules: missingModules, flowsEnabled: enabled);
+        var html = await RenderAsync<Mulse.Ui.Components.Pages.Flows>(missingModules: missingModules, flowsEnabled: enabled);
         var buttons = System.Text.RegularExpressions.Regex.Matches(html, "<button[^>]*>\\s*Run flow\\s*</button>");
         Assert.Equal(12, buttons.Count);
         foreach (System.Text.RegularExpressions.Match button in buttons)
@@ -69,7 +69,7 @@ public sealed class FlowWorkspaceRenderingTests
     [Fact]
     public async Task ImportedFlows_ShowReportsAndDisableEnableRunControls()
     {
-        var dashboard = await RenderAsync<Home>(migration: true);
+        var dashboard = await RenderAsync<Mulse.Ui.Components.Pages.Flows>(migration: true);
         Assert.Contains("verified translation support", dashboard);
         Assert.Contains("execution blocked", dashboard);
         Assert.Matches("<button[^>]*disabled[^>]*>\\s*Enable", dashboard);
@@ -259,7 +259,7 @@ public sealed class FlowWorkspaceRenderingTests
     [Fact]
     public async Task Dashboard_ShowsMissingDependenciesAndBlocksEnableAndRun()
     {
-        var html = await RenderAsync<Home>(missingModules: true);
+        var html = await RenderAsync<Mulse.Ui.Components.Pages.Flows>(missingModules: true);
         Assert.Contains("Unknown or unloaded modules", html);
         Assert.Contains("Fetch: missing-plugin", html);
         Assert.Contains("href=\"/module-packages\"", html);

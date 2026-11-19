@@ -67,7 +67,7 @@ happens at this boundary, not during Fetch. Notification retries do not resend d
 |---|---|
 | `Mulse.Modules` | Core abstractions (`IFetchModule`, optional `IFetchOutcomeModule`, `IParseModule`, `IOrchestrationAugmentModule`, `IRenderModule`, `IDeliverModule`), the typed module SDK, the decision-rule engine, and the built-in module set. |
 | `Service` | The ASP.NET Core API/runtime: flow execution engine (`FlowRuntime`), module catalog/plugin loader, flow CRUD + run endpoints, config/secret value store, BizTalk import service, and the hot-reloadable module system. |
-| `Mulse.Ui` | Blazor Server dashboard, visual flow designer with sample-file drops and path-based BizTalk import, config values/encryption, module/package administration, and workspace backup/restore. |
+| `Mulse.Ui` | Blazor Server dashboard (health and run statistics), flows page, visual flow designer with sample-file drops and path-based BizTalk import, config values/encryption, module/package administration, and workspace backup/restore. |
 | `Mulse.CompatibilityPack` | Additional built-in XML/XSD, flat-file and envelope parsing; XSLT/SOAP rendering; metadata promotion, route selection, SMTP, document repository, file watcher and HTTP inbound/reply modules. |
 | `Mulse.Hl7` | Hot-loadable plugin providing HL7 parse/render modules. |
 | `Mulse.Dbms.SqlServer` | Hot-loadable plugin providing SQL Server lookup (fetch) and execute (deliver) modules. |
@@ -153,11 +153,11 @@ compatible. Modules execute with the Service process's permissions; loading is n
 
 | Mode | Behavior |
 |---|---|
-| `OnDemand` | Runs when an enabled flow is invoked from the dashboard or `POST /api/flows/{flowId}/run`. |
+| `OnDemand` | Runs when an enabled flow is invoked from the Flows page or `POST /api/flows/{flowId}/run`. |
 | `Interval` | Polls on a positive `trigger.interval` such as `00:05:00`; scheduler checks every five seconds. `runOnStartup` controls the initial interval run, not all trigger modes. |
 | `Push` | Registers the first fetch node implementing `IPushTriggeredFetchModule`; other fetches still execute normally. Registrations reconcile about every five seconds. |
 
-Manual Run also works for enabled Interval/Push flows. It does not enable a disabled flow; the dashboard's
+Manual Run also works for enabled Interval/Push flows. It does not enable a disabled flow; the Flows page's
 **Run flow** button is unavailable until the flow is enabled. Execution is
 serialized per flow inside one Service instance; this is not a cross-process lock. Interval scheduling
 is in-memory and recalculated after restart rather than a durable calendar scheduler.
@@ -295,7 +295,7 @@ Pending batches block processing-definition edits, deletion, bulk deletion, work
 to the config/secret references used by their flow. Enable/category changes and unrelated configuration remain
 available. Avoid config or plugin-code changes during execution; this is not transactional snapshot isolation.
 
-**Pending batches / orchestration checkpoints**, on each dashboard card and existing-flow designer, refreshes
+**Pending batches / orchestration checkpoints**, on each flow card and existing-flow designer, refreshes
 safe counts, correlation, instance, update time and collecting/released status. The backing read-only endpoint
 is `GET /api/flows/{flowId}/checkpoints`; it excludes bodies, filenames, receipt contents and source credentials.
 A released checkpoint blocks new fetches while delivery/source-notification retries resume existing work. If
@@ -1014,7 +1014,7 @@ translations, and no artifact is marked fully translated. **Every flow carrying 
 blocked from enable/run**, regardless of submitted statuses or diagnostic counts. Creating or updating
 an enabled import, enabling an import, or running it returns HTTP 409; scheduled processing, push
 registration, and processing retries are blocked too. Saved provenance cannot be replaced through a
-flow update (409); omitting it preserves the saved report. Dashboard and designer controls explain the
+flow update (409); omitting it preserves the saved report. Flows page and designer controls explain the
 block. There is no manual approval override.
 
 Apply a candidate to the canvas, review its transport paths/credentials, mappings, retry/compensation
@@ -1470,7 +1470,7 @@ a durable HTTP/flow-link inbox and a delivery intent/outcome journal. Provider-s
 #### Execution and message history
 
 Open **Workspace > History** to inspect retained executions, stage events, inbox messages and delivery
-outcomes. Each dashboard flow card and saved-flow designer also has a **History** button that opens
+outcomes. Each flow card and saved-flow designer also has a **History** button that opens
 `/history/{flowId}` with that flow's execution filter already applied. Inbox messages remain workspace-wide,
 as indicated on the history page. Payloads are fetched/decrypted only after **Inspect payload**; metadata/detail lists do not
 include message bodies. The management API remains authenticated, and history responses use `no-store`.
@@ -1709,7 +1709,7 @@ the **Service machine**, not the browser machine. Prefer explicit absolute paths
 or the database to refresh examples without backing up/reconciling pending work.
 
 A fresh workspace includes `sample-file-pipeline` and `sample-multi-source-join-pipeline`, both on-demand.
-For a basic smoke test, open the first sample in the dashboard, inspect its source/output paths, and
+For a basic smoke test, open the first sample on the Flows page, inspect its source/output paths, and
 choose **Run**. With the shipped data it reads `Service\SampleData\Inbox\customer-order.json`, parses JSON,
 adds an envelope, logs the output and writes to `Service\SampleData\Outbox`. Existing workspaces may not
 contain these seed flows. The sample leaves input in place, so running it again produces another output;
@@ -1740,9 +1740,9 @@ those separately before letting a flow modify source data.
 
 ## UI workspace
 
-The admin UI menu links to the dashboard and groups **Config values**, **Modules**, **Module Packages**,
+The admin UI menu links to the **Dashboard** (a summary of flow health and recent run outcomes, based on the last 200 runs in UTC, with a needs-attention list), **Flows**, and **History**, and groups **Config values**, **Modules**, **Module Packages**,
 and **Backup & Restore** under Configuration. Open the flow designer using create/configure links from
-the dashboard rather than a menu entry. **Configuration > AI assistance** is a single expandable menu group
+the Flows page rather than a menu entry. **Configuration > AI assistance** is a single expandable menu group
 containing **Provider settings** and **My GitHub connection**; it opens automatically on either AI page.
 `/modules` hosts the searchable module catalog with kind and source-package filters.
 Each module links to its owning package and shows its source kind and assembly path. `/module-packages`
@@ -1752,7 +1752,7 @@ execute code to enumerate module details; load one explicitly to inspect its mod
 
 ### Authoring a flow
 
-1. Choose **Create flow** from the dashboard, give it a stable ID and optional display name, and keep it
+1. Choose **Create flow** from the dashboard or Flows page, give it a stable ID and optional display name, and keep it
    disabled while authoring. IDs are technical references; names are for people.
 2. Click or drag **Source** for a linked fetch/parse pair, or add fetch/parse nodes separately. Choose
    modules and configure real input locations. Click an output handle then an input handle, or drag
@@ -1767,7 +1767,7 @@ execute code to enumerate module details; load one explicitly to inspect its mod
    one delivery route; "zero deliveries" in lifecycle semantics means none applicable at execution time.
 5. Choose **Create flow** or **Save flow** in the bottom bar. There is no automatic save. Resolve missing
    config/secret references on **Config values**, load dependencies, review settings, then enable and
-   manually run from the dashboard before switching to automatic triggers.
+   manually run from the Flows page before switching to automatic triggers.
 
 Sample analysis and canvas editing do not connect to live sources. **Run** does: even a logging-only
 output can still execute configured fetch/augment behavior or source cleanup. Use safe test data and
@@ -1803,14 +1803,14 @@ other node properties preserves the saved compensation.
 
 | Task | UI entry point |
 |---|---|
-| Flow CRUD, categories, copies, enable/disable and manual run | Dashboard cards, their title/configure links, and Flow overview. |
+| Flow CRUD, categories, copies, enable/disable and manual run | Flows page cards, their title/configure links, and Flow overview. |
 | Source graph, lookup dependencies, stage modules and settings | Toolbox, canvas handles and node Properties. |
 | Parsed/XML field maps and transforms | Mapping Designer; click/drag fields and connections, choose transforms and edit their arguments. |
 | Joins, decisions, metadata, durable batching/state and renderer dispatch | Specialized node Properties editors and descriptor-driven settings. |
 | Ordered renderer pipelines and outbound ODX adapters | Ordered renderer pipeline / Durable ODX program Properties: stage add/remove/reorder, named send selection, module settings and response capture. |
 | Native synchronous sequences, branches and bounded loops | Native control flow Properties: nested node editor, condition builder, module selection/settings and iteration limits. |
 | Flow/step retry and best-effort delivery compensation | Flow overview and node Properties. |
-| Checkpoint inspection and confirmed early batch release | Dashboard > Pending batches / orchestration checkpoints. |
+| Checkpoint inspection and confirmed early batch release | Flows page > Pending batches / orchestration checkpoints. |
 | Config/secrets, encryption, module catalog and hot reload | Configuration pages; refresh modules in an open Designer afterward. |
 | Encrypted backup, restore preview and confirmed bulk deletion | Backup & Restore. |
 
@@ -1916,7 +1916,7 @@ flow list shows the ID as well. Names survive duplication, enable/disable, categ
 Search flows by name, ID, category, module, or source-node ID. Combine saved user-defined categories with
 status, trigger, module, and unresolved-configuration filters, sort by ID, and browse ten flows per page.
 Use **Categorize** to assign or clear a category; categories are saved in runtime state and retained
-when enabling a flow or saving it in the designer. Each dashboard flow has a stronger boundary and
+when enabling a flow or saving it in the designer. Each flow on the Flows page has a stronger boundary and
 status stripe, a separate header/action area, metadata, labeled Augment/Render/Deliver tiles, and a
 checkpoint footer in both light and dark themes. Status remains written in text, not color alone.
 
@@ -1954,7 +1954,7 @@ Assembly paths refer to the API server, so move DLLs separately and update paths
 Restore requires typing `RESTORE WORKSPACE`.
 
 **Delete all flows** requires typing `DELETE ALL FLOWS`. It deletes all definitions, pending retries,
-and checkpoints, regardless of dashboard filters, while retaining config values and packages.
+and checkpoints, regardless of Flows page filters, while retaining config values and packages.
 Neither deletion nor restoration cancels in-progress runs or reverses completed deliveries; stop
 running workloads first when replacing a workspace. These controls manage the current workspace;
 multiple isolated workspaces are not yet implemented.

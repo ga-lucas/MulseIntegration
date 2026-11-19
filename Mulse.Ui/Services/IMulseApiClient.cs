@@ -17,6 +17,10 @@ public interface IMulseApiClient
     Task<IReadOnlyList<HistoryExecutionViewModel>> GetHistoryExecutionsAsync(string? flowId, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support execution history.");
 
+    /// <summary>The most recent executions of every flow, newest first. <paramref name="take"/> is between 1 and 200.</summary>
+    Task<IReadOnlyList<HistoryExecutionViewModel>> GetRecentExecutionsAsync(int take, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support execution history.");
+
     Task<HistoryExecutionDetailViewModel> GetHistoryExecutionAsync(string executionId, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support execution history.");
 

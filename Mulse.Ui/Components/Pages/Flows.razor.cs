@@ -4,7 +4,7 @@ using Mulse.Ui.Models;
 
 namespace Mulse.Ui.Components.Pages;
 
-public partial class Home
+public partial class Flows
 {
     private ElementReference _actionEditor;
     private bool _focusAction;

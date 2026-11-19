@@ -1,4 +1,5 @@
-﻿@page "/"
+@page "/"
+@using System.Globalization
 @inject IMulseApiClient ApiClient
 
 <PageTitle>Dashboard | Mulse</PageTitle>
@@ -6,266 +7,187 @@
 <div class="page-shell">
     <header class="page-hero">
         <div>
-            <p class="eyebrow">Workspace overview</p>
+            <p class="eyebrow">Overview</p>
             <h1>Dashboard</h1>
-            <p class="lede">Find and organize your integration flows, manage copies, and review configuration gaps. <a href="/modules">Manage runtime modules</a>.</p>
+            <p class="lede">How your integration flows are doing right now. Open <a href="/flows">Flows</a> to configure, enable or run them, or <a href="/history">History</a> for every run.</p>
         </div>
-        <a class="run-button" href="/designer">+ Create flow</a>
+        <div class="home-actions">
+            <a class="secondary-button" href="/flows">View flows</a>
+            <a class="run-button" href="/designer">+ Create flow</a>
+        </div>
     </header>
 
-    <StatusBanner Error="@_errorMessage" Success="@_lastRunMessage" />
+    <StatusBanner Error="@_errorMessage" />
 
     @if (_isLoading)
     {
-        <p class="loading-state" role="status">Loading your workspace...</p>
+        <p class="loading-state" role="status">Loading your dashboard...</p>
     }
-    else
+    else if (_summary is not null)
     {
+        var summary = _summary;
         <dl class="overview-grid" aria-label="Workspace summary">
-            <div class="overview-stat"><dt>Configured flows</dt><dd>@_flows.Count</dd></div>
-            <div class="overview-stat"><dt>Enabled flows</dt><dd>@_flows.Count(flow => flow.Enabled)</dd></div>
-            <div class="overview-stat"><dt>Available modules</dt><dd>@_modules.Count</dd></div>
-            <div class="overview-stat"><dt>Unresolved usages</dt><dd>@_configUsages.Count(usage => !usage.IsResolved)</dd></div>
+            <div class="overview-stat"><dt>Flows</dt><dd>@summary.FlowCount</dd></div>
+            <div class="overview-stat"><dt>Enabled</dt><dd>@summary.EnabledCount</dd></div>
+            <div class="overview-stat"><dt>Disabled</dt><dd>@summary.DisabledCount</dd></div>
+            <div class="overview-stat"><dt>Need setup</dt><dd>@summary.FlowsByHealth[FlowHealth.NeedsSetup]</dd></div>
+            <div class="overview-stat"><dt>Modules</dt><dd>@summary.ModuleCount</dd></div>
+            <div class="overview-stat"><dt>Success rate</dt><dd>@(summary.SuccessRate is { } rate ? rate.ToString("P0", CultureInfo.InvariantCulture) : "n/a")</dd></div>
         </dl>
 
-        <section class="dashboard-grid">
-            <Panel Title="Your flows" Description="Configure, enable, and run your integration pipelines.">
-                <HeaderActions>
-                    <a class="secondary-button" href="/backup-restore">Backup / restore / delete all</a>
-                    <a class="run-button" href="/designer">New flow</a>
-                </HeaderActions>
-                <ChildContent>
-                <div class="flow-filters">
-                    <label>Search flows
-                        <input type="search" @bind="_search" @bind:event="oninput" placeholder="Flow name, ID, category, module, or source" />
-                    </label>
-                    <label>Category
-                        <select @bind="_categoryFilter">
-                            <option value="">All categories</option>
-                            <option value="none">Uncategorized</option>
-                            @foreach (var category in Categories)
-                            {
-                                <option value="@($"category:{category}")">@category</option>
-                            }
-                        </select>
-                    </label>
-                    <label>Status
-                        <select @bind="_statusFilter">
-                            <option value="">All statuses</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option>
-                        </select>
-                    </label>
-                    <label>Trigger
-                        <select @bind="_triggerFilter">
-                            <option value="">All triggers</option>
-                            @foreach (var trigger in _flows.Select(flow => flow.TriggerMode).Distinct().Order())
-                            {
-                                <option value="@trigger">@trigger</option>
-                            }
-                        </select>
-                    </label>
-                    <label>Module
-                        <select @bind="_moduleFilter">
-                            <option value="">All modules</option>
-                            @foreach (var module in _flows.SelectMany(FlowListFilter.Modules).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
-                            {
-                                <option value="@module">@module</option>
-                            }
-                        </select>
-                    </label>
-                    <label>Sort by flow ID
-                        <select @bind="_descending"><option value="false">A to Z</option><option value="true">Z to A</option></select>
-                    </label>
-                    <label class="checkbox-label"><input type="checkbox" @bind="_unresolvedOnly" /> Unresolved configuration only</label>
-                    <button class="secondary-button" @onclick="ClearFilters">Clear filters</button>
-                </div>
-                <p role="status">@FilteredFlows.Count of @_flows.Count flow(s) match</p>
+        @if (summary.FlowCount == 0)
+        {
+            <p class="empty-state">No flows yet. <a href="/designer">Create a flow</a> or <a href="/biztalk-import">import one from BizTalk</a>.</p>
+        }
 
-                @if (_managedFlow is { } managed)
-                {
-                    <section class="flow-action-editor" @ref="_actionEditor" tabindex="-1" aria-labelledby="flow-action-title">
-                        <h3 id="flow-action-title">@ActionTitle: @managed.Id</h3>
-                        <form @onsubmit="SaveActionAsync" @onsubmit:preventDefault>
-                            @if (_flowAction == "duplicate")
-                            {
-                                <label>New flow ID <input @bind="_newFlowId" required /></label>
-                                <p>The copy starts disabled. Settings, category, and configuration references are copied; run history and pending retries are not.</p>
-                            }
-                            else if (_flowAction == "category")
-                            {
-                                <label>Category <input @bind="_newCategory" list="flow-categories" placeholder="Enter a category, or leave empty to clear" /></label>
-                                <datalist id="flow-categories">
-                                    @foreach (var category in Categories)
-                                    {
-                                        <option value="@category"></option>
-                                    }
-                                </datalist>
-                            }
-                            else
-                            {
-                                <p>Delete this flow permanently? Its saved definition, pending retries, and orchestration checkpoints will be removed. This does not undo deliveries or cancel a run already in progress.</p>
-                            }
-                            <div class="flow-card-actions">
-                                <button type="submit" class="@(_flowAction == "delete" ? "secondary-button danger-button" : "run-button")" disabled="@IsBusy">@(_isManagingFlow ? "Saving..." : ActionTitle)</button>
-                                <button type="button" class="secondary-button" @onclick="CancelAction" disabled="@IsBusy">Cancel</button>
-                            </div>
-                        </form>
-                    </section>
-                }
+        @if (!summary.HasRunData)
+        {
+            <p class="empty-state" role="status">Run history is not available, so run statistics are hidden. @_historyNote</p>
+        }
 
-                @if (_flows.Count == 0)
-                {
-                    <div class="empty-state">
-                        <h3>Your first integration starts here</h3>
-                        <p>Create a flow from scratch, import sample data, or bring in a BizTalk solution.</p>
-                        <a class="secondary-button" href="/designer">Open flow designer</a>
+        <section class="home-grid">
+            <Panel Title="Flow health" Description="Each flow is counted once, by its most recent run and its setup.">
+                <div class="home-donut-layout">
+                    <div class="home-donut" role="img" aria-label="@HealthLabel(summary)" style="@DonutStyle(summary)">
+                        <span class="home-donut-total">@summary.FlowCount<small>flows</small></span>
                     </div>
-                }
-                else if (FilteredFlows.Count == 0)
+                    <ul class="home-legend">
+                        @foreach (var health in HealthOrder)
+                        {
+                            var count = summary.FlowsByHealth[health];
+                            if (count == 0 && health == FlowHealth.Other) { continue; }
+                            <li><span class="home-swatch" style="background:@HealthColor(health)" aria-hidden="true"></span>@DashboardSummary.Describe(health) <strong>@count</strong></li>
+                        }
+                    </ul>
+                </div>
+            </Panel>
+
+            @if (summary.HasRunData)
+            {
+                <Panel Title="Run outcomes" Description="@RunScope(summary)">
+                    @if (summary.RunCount == 0)
+                    {
+                        <p class="empty-state">No runs recorded yet.</p>
+                    }
+                    else
+                    {
+                        <div class="home-bar" role="img" aria-label="@OutcomeLabel(summary)">
+                            @foreach (var (label, count, color) in OutcomeSegments(summary))
+                            {
+                                if (count > 0)
+                                {
+                                    <span style="flex:@count;background:@color" title="@label: @count"></span>
+                                }
+                            }
+                        </div>
+                        <ul class="home-legend">
+                            @foreach (var (label, count, color) in OutcomeSegments(summary))
+                            {
+                                <li><span class="home-swatch" style="background:@color" aria-hidden="true"></span>@label <strong>@count</strong></li>
+                            }
+                        </ul>
+                    }
+                </Panel>
+
+                <Panel Title="Last 7 days" Description="Runs started per day (UTC), from the same window.">
+                    @{
+                        var max = Math.Max(1, summary.Last7Days.Max(day => day.Total));
+                    }
+                    <div class="home-columns" role="img" aria-label="@TrendLabel(summary)">
+                        @foreach (var day in summary.Last7Days)
+                        {
+                            <div class="home-column">
+                                <div class="home-column-bar" style="height:@Percent(day.Total, max)" title="@day.Date.ToString("MMM d", CultureInfo.InvariantCulture): @day.Completed completed, @day.Failed failed, @day.Other other">
+                                    @if (day.Other > 0) { <span style="flex:@day.Other;background:var(--text-muted)"></span> }
+                                    @if (day.Failed > 0) { <span style="flex:@day.Failed;background:var(--error-text)"></span> }
+                                    @if (day.Completed > 0) { <span style="flex:@day.Completed;background:var(--success-text)"></span> }
+                                </div>
+                                <span class="home-column-label">@day.Date.ToString("ddd", CultureInfo.InvariantCulture)</span>
+                                <span class="home-column-count">@day.Total</span>
+                            </div>
+                        }
+                    </div>
+                </Panel>
+            }
+
+            <Panel Title="Needs attention" Description="Failing, held or not yet set up.">
+                @if (summary.Attention.Count == 0)
                 {
-                    <div class="empty-state"><h3>No matching flows</h3><p>Change your search or filters to find more flows.</p></div>
+                    <p class="empty-state">Nothing needs attention.</p>
                 }
                 else
                 {
-                    <div class="flow-list">
-                        @foreach (var flow in FilteredFlows)
+                    <ul class="home-list">
+                        @foreach (var item in summary.Attention)
                         {
-                            <section class="flow-card dashboard-flow @(flow.Enabled ? "is-enabled" : "is-disabled")" @key="flow.Id" aria-label="@($"Flow {flow.DisplayName}")">
-                                <div class="flow-card-header">
-                                    <div>
-                                        <div class="flow-title">
-                                            <h3><a href="@($"/designer/{Uri.EscapeDataString(flow.Id)}")">@flow.DisplayName</a></h3>
-                                            <span class="status-pill @(flow.Enabled ? "enabled" : null)">@(flow.Enabled ? "Enabled" : "Disabled")</span>
-                                            <span class="status-pill">@(flow.Category ?? "Uncategorized")</span>
-                                        </div>
-                                        <p><strong>Flow ID:</strong> @flow.Id</p>
-                                        <details>
-                                        <summary>@flow.Parses.Count parse node(s) fed by @flow.Fetches.Count fetch node(s)</summary>
-                                        <ul class="source-list">
-                                            @foreach (var parse in flow.Parses)
-                                            {
-                                                var parseFetches = parse.FetchNodeIds
-                                                    .Select(fetchId => flow.Fetches.FirstOrDefault(fetch => string.Equals(fetch.Id, fetchId, StringComparison.OrdinalIgnoreCase)))
-                                                    .OfType<FlowFetchNodeViewModel>()
-                                                    .ToArray();
-                                                var parseInputs = parseFetches.SelectMany(static fetch => fetch.InputParseIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                                                <li>
-                                                    <strong>@parse.Id</strong>: @string.Join(" + ", parseFetches.Select(static fetch => $"{fetch.Fetch.Module} ({fetch.Id})")) &rarr; @parse.Parse.Module
-                                                    @if (parseFetches.Length > 1)
-                                                    {
-                                                        <span class="source-inputs">(combines @parseFetches.Length fetches)</span>
-                                                    }
-                                                    @if (parseInputs.Length > 0)
-                                                    {
-                                                        <span class="source-inputs">(input from @string.Join(", ", parseInputs))</span>
-                                                    }
-                                                </li>
-                                            }
-                                        </ul>
-                                        </details>
-                                    </div>
-                                    <div class="flow-card-actions">
-                                        <a class="secondary-button" href="@($"/designer/{Uri.EscapeDataString(flow.Id)}")">Configure</a>
-                                        <a class="secondary-button" href="@($"/history/{Uri.EscapeDataString(flow.Id)}")" aria-label="@($"History for {flow.DisplayName}")">History</a>
-                                        <button class="secondary-button" @onclick='() => BeginAction(flow, "category")' disabled="@IsBusy">Categorize</button>
-                                        <button class="secondary-button" @onclick='() => BeginAction(flow, "duplicate")' disabled="@IsBusy">Duplicate</button>
-                                        <button class="secondary-button danger-button" @onclick='() => BeginAction(flow, "delete")' disabled="@IsBusy">Delete</button>
-                                        <button class="secondary-button" @onclick="() => ToggleFlowEnabledAsync(flow)" disabled="@(IsBusy || (!flow.Enabled && (flow.Migration is not null || HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 })))" title="@(flow.Migration is not null && !flow.Enabled ? FlowMigrationReportViewModel.ExecutionBlockReason : (!flow.Enabled && (HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 })) ? "Resolve missing modules and config/secret references before enabling this flow" : null)">
-                                            @(flow.Enabled ? "Disable" : "Enable")
-                                        </button>
-                                        <button class="run-button" @onclick="() => RunFlowAsync(flow.Id)" disabled="@(IsBusy || !flow.Enabled || flow.Migration is not null || HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 })" title="@(flow.Migration is not null ? FlowMigrationReportViewModel.ExecutionBlockReason : (HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 }) ? "Resolve missing modules and config/secret references before running this flow" : !flow.Enabled ? "Enable this flow before running it" : null)">
-                                            Run flow
-                                        </button>
-                                    </div>
-                                </div>
-                                @if (flow.MissingModules is { Count: > 0 } missingModules)
-                                {
-                                    <StatusBanner Compact="true">
-                                        <ErrorContent>
-                                            Unknown or unloaded modules: @string.Join(", ", missingModules).
-                                            <a href="/module-packages">Load the required packages</a> or correct module references before enabling or running this flow.
-                                        </ErrorContent>
-                                    </StatusBanner>
-                                }
-                                @if (flow.Migration is { } migration)
-                                {
-                                    <p class="status-banner error compact">@FlowMigrationReportViewModel.ExecutionBlockReason</p>
-                                    <MigrationReport Report="migration" />
-                                }
-                                @{ var unresolvedCount = CountUnresolvedConfig(flow.Id); }
-                                @if (unresolvedCount > 0)
-                                {
-                                    <StatusBanner Compact="true">
-                                        <ErrorContent>
-                                            @unresolvedCount unresolved config/secret reference(s). <a href="/config-values">Resolve on the Config values page</a> before enabling or running this flow.
-                                        </ErrorContent>
-                                    </StatusBanner>
-                                }
-                                <dl class="flow-metadata">
-                                    <div>
-                                        <dt>Enabled</dt>
-                                        <dd>@(flow.Enabled ? "Yes" : "No")</dd>
-                                    </div>
-                                    <div>
-                                        <dt>Trigger</dt>
-                                        <dd>@flow.TriggerMode</dd>
-                                    </div>
-                                    <div>
-                                        <dt>Interval</dt>
-                                        <dd>@(flow.Interval?.ToString() ?? "n/a")</dd>
-                                    </div>
-                                    <div>
-                                        <dt>Deliveries</dt>
-                                        <dd>@(flow.Deliveries.Count == 0 ? "None" : flow.Deliveries.Count.ToString())</dd>
-                                    </div>
-                                </dl>
-                                <div class="flow-stage-summary" aria-label="Pipeline stages">
-                                    <section class="flow-stage stage-augment"><h4>Augment</h4><p>@FormatModules(flow.AugmentModules)</p></section>
-                                    <section class="flow-stage stage-render"><h4>Render</h4><p>@FormatModules(flow.RenderModules)</p></section>
-                                    <section class="flow-stage stage-deliver"><h4>Deliver</h4><p>@FormatModules(flow.DeliverModules)</p></section>
-                                </div>
-                                <div class="flow-operations">
-                                    <FlowCheckpoints @key="flow.Id" FlowId="@flow.Id" AllowRelease="@(flow.Enabled && flow.Migration is null)" />
-                                </div>
-                            </section>
+                            <li><a href="@item.Href">@item.DisplayName</a><span>@item.Reason</span></li>
                         }
-                    </div>
+                    </ul>
+                    @if (summary.AttentionTotal > summary.Attention.Count)
+                    {
+                        <p class="home-more">and @(summary.AttentionTotal - summary.Attention.Count) more. <a href="/flows">See all flows</a>.</p>
+                    }
                 }
-                </ChildContent>
             </Panel>
 
+            @if (summary.HasRunData)
+            {
+                <Panel Title="Recent runs" Description="The latest executions across all flows.">
+                    @if (summary.RecentRuns.Count == 0)
+                    {
+                        <p class="empty-state">No runs recorded yet.</p>
+                    }
+                    else
+                    {
+                        <ul class="home-list">
+                            @foreach (var run in summary.RecentRuns)
+                            {
+                                <li>
+                                    <a href="@("/history/" + Uri.EscapeDataString(run.FlowId))">@run.FlowId</a>
+                                    <span><span class="status-pill @StateClass(run.State)">@run.State</span> @(run.StartedUtc is { } started ? started.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) : "")</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </Panel>
+            }
         </section>
     }
 </div>
 
 @code {
-    private IReadOnlyList<FlowViewModel> _flows = [];
-    private IReadOnlyList<ModuleViewModel> _modules = [];
-    private IReadOnlyList<ConfigReferenceUsageViewModel> _configUsages = [];
+    private const int HistoryWindow = 200;
+    private static readonly FlowHealth[] HealthOrder =
+        [FlowHealth.Healthy, FlowHealth.Failing, FlowHealth.NeedsAttention, FlowHealth.NeedsSetup, FlowHealth.NotRunRecently, FlowHealth.Other];
+
+    private DashboardSummary? _summary;
     private bool _isLoading = true;
-    private bool _isRunningFlow;
-    private bool _isTogglingFlowEnabled;
-    private bool _isManagingFlow;
     private string? _errorMessage;
-    private string? _lastRunMessage;
+    private string? _historyNote;
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _isLoading = true;
-
         try
         {
-            _flows = await ApiClient.GetFlowsAsync(CancellationToken.None);
-            _modules = await ApiClient.GetModulesAsync(CancellationToken.None);
-            _configUsages = await ApiClient.GetConfigValueUsagesAsync(CancellationToken.None);
+            var flows = await ApiClient.GetFlowsAsync(CancellationToken.None);
+            var modules = await ApiClient.GetModulesAsync(CancellationToken.None);
+            var usages = await ApiClient.GetConfigValueUsagesAsync(CancellationToken.None);
+
+            IReadOnlyList<HistoryExecutionViewModel>? executions = null;
+            try
+            {
+                executions = await ApiClient.GetRecentExecutionsAsync(HistoryWindow, CancellationToken.None);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _historyNote = exception.Message;
+            }
+
+            _summary = DashboardSummary.Build(flows, modules, usages, executions, DateTime.UtcNow);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _errorMessage = $"Unable to load orchestration metadata: {exception.Message}";
+            _errorMessage = $"Unable to load the dashboard: {exception.Message}";
         }
         finally
         {
@@ -273,61 +195,64 @@
         }
     }
 
-    private async Task RunFlowAsync(string flowId)
-    {
-        _isRunningFlow = true;
-        _errorMessage = null;
-        _lastRunMessage = null;
+    private static string RunScope(DashboardSummary summary)
+        => $"Based on the last {summary.RunCount} run(s) (up to {HistoryWindow}). Not an all-time figure.";
 
-        try
+    private static string HealthColor(FlowHealth health) => health switch
+    {
+        FlowHealth.Healthy => "var(--success-text)",
+        FlowHealth.Failing => "var(--error-text)",
+        FlowHealth.NeedsAttention => "var(--warning-text)",
+        FlowHealth.NeedsSetup => "var(--accent)",
+        FlowHealth.NotRunRecently => "var(--text-muted)",
+        _ => "var(--border-subtle)"
+    };
+
+    private static string DonutStyle(DashboardSummary summary)
+    {
+        if (summary.FlowCount == 0) { return "background:var(--border-subtle)"; }
+        var stops = new List<string>();
+        var start = 0d;
+        foreach (var health in HealthOrder)
         {
-            var result = await ApiClient.RunFlowAsync(flowId, CancellationToken.None);
-            _lastRunMessage = $"{result.Outcome}: {result.FlowId} with {result.PayloadCount} payload(s) across {result.DeliverModules.Count} deliver action(s).";
-            if (!string.IsNullOrWhiteSpace(result.Detail))
-            {
-                _lastRunMessage += $" {result.Detail}";
-            }
+            var count = summary.FlowsByHealth[health];
+            if (count == 0) { continue; }
+            var end = start + 100d * count / summary.FlowCount;
+            stops.Add(FormattableString.Invariant($"{HealthColor(health)} {start:0.##}% {end:0.##}%"));
+            start = end;
         }
-        catch (Exception exception)
-        {
-            _errorMessage = $"Unable to run flow '{flowId}': {exception.Message}";
-        }
-        finally
-        {
-            _isRunningFlow = false;
-            await LoadAsync();
-        }
+        return "background:conic-gradient(" + string.Join(", ", stops) + ")";
     }
 
-    private async Task ToggleFlowEnabledAsync(FlowViewModel flow)
-    {
-        _isTogglingFlowEnabled = true;
-        _errorMessage = null;
-        _lastRunMessage = null;
+    private static string HealthLabel(DashboardSummary summary)
+        => "Flow health: " + string.Join(", ", HealthOrder.Where(h => summary.FlowsByHealth[h] > 0).Select(h => $"{summary.FlowsByHealth[h]} {DashboardSummary.Describe(h).ToLowerInvariant()}"));
 
-        try
-        {
-            var updated = await ApiClient.SetFlowEnabledAsync(flow.Id, !flow.Enabled, CancellationToken.None);
-            _lastRunMessage = $"Flow '{updated.Id}' is now {(updated.Enabled ? "enabled" : "disabled")}.";
-        }
-        catch (Exception exception)
-        {
-            _errorMessage = $"Unable to update flow '{flow.Id}': {exception.Message}";
-        }
-        finally
-        {
-            _isTogglingFlowEnabled = false;
-            await LoadAsync();
-        }
+    private static (string Label, int Count, string Color)[] OutcomeSegments(DashboardSummary summary)
+    {
+        var other = summary.RunCount - summary.Completed - summary.Failed - summary.InProgress - summary.Held;
+        return
+        [
+            ("Completed", summary.Completed, "var(--success-text)"),
+            ("Failed", summary.Failed, "var(--error-text)"),
+            ("In progress", summary.InProgress, "var(--accent)"),
+            ("Held", summary.Held, "var(--warning-text)"),
+            ("Other", other, "var(--text-muted)")
+        ];
     }
 
-    private static string FormatModules(IReadOnlyList<string> modules)
+    private static string OutcomeLabel(DashboardSummary summary)
+        => "Run outcomes: " + string.Join(", ", OutcomeSegments(summary).Where(s => s.Count > 0).Select(s => $"{s.Count} {s.Label.ToLowerInvariant()}"));
+
+    private static string TrendLabel(DashboardSummary summary)
+        => "Runs per day: " + string.Join(", ", summary.Last7Days.Select(d => $"{d.Date.ToString("MMM d", CultureInfo.InvariantCulture)} {d.Total}"));
+
+    private static string Percent(int value, int max)
+        => value == 0 ? "2px" : (100d * value / max).ToString("0.##", CultureInfo.InvariantCulture) + "%";
+
+    private static string StateClass(string state) => state switch
     {
-        return modules.Count == 0 ? "None" : string.Join(", ", modules);
-    }
-
-    private int CountUnresolvedConfig(string flowId)
-        => _configUsages.Count(usage => !usage.IsResolved && string.Equals(usage.FlowId, flowId, StringComparison.OrdinalIgnoreCase));
-
-    private bool HasUnresolvedConfig(string flowId) => CountUnresolvedConfig(flowId) > 0;
+        "Completed" => "enabled",
+        "Failed" or "Held" or "Retrying" => "warning",
+        _ => string.Empty
+    };
 }

@@ -40,6 +40,14 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<HistoryExecutionViewModel[]>(response, cancellationToken, "execution history").ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<HistoryExecutionViewModel>> GetRecentExecutionsAsync(int take, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(take, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(take, 200);
+        using var response = await httpClient.GetAsync($"/api/history/executions?take={take}", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<HistoryExecutionViewModel[]>(response, cancellationToken, "execution history").ConfigureAwait(false);
+    }
+
     public async Task<HistoryExecutionDetailViewModel> GetHistoryExecutionAsync(string executionId, CancellationToken cancellationToken)
     {
         using var response = await httpClient.GetAsync($"/api/history/executions/{Uri.EscapeDataString(executionId)}", cancellationToken).ConfigureAwait(false);
