@@ -170,6 +170,7 @@
                                         <button class="secondary-button" @onclick='() => BeginAction(flow, "duplicate")' disabled="@IsBusy">Duplicate</button>
                                         <button class="secondary-button danger-button" @onclick='() => BeginAction(flow, "delete")' disabled="@IsBusy">Delete</button>
                                         <button class="secondary-button" @onclick="() => ShowReviewAsync(flow)" disabled="@(IsBusy)" aria-label="@($"Review {flow.DisplayName}")">Review</button>
+                                        <button class="secondary-button" @onclick="() => ShowRunbook(flow)" disabled="@(IsBusy)" aria-label="@($"Runbook for {flow.DisplayName}")">Runbook</button>
                                         <button class="secondary-button" @onclick="() => EnableOrDisableAsync(flow)" disabled="@(IsBusy || (!flow.Enabled && (flow.Migration is not null || HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 })))" title="@(flow.Migration is not null && !flow.Enabled ? FlowMigrationReportViewModel.ExecutionBlockReason : (!flow.Enabled && (HasUnresolvedConfig(flow.Id) || flow.MissingModules is { Count: > 0 })) ? "Resolve missing modules and config/secret references before enabling this flow" : null)">
                                             @(flow.Enabled ? "Disable" : "Enable")
                                         </button>
@@ -182,6 +183,11 @@
                                 {
                                     <FlowReviewPanel Review="_review" Loading="_reviewLoading" EnableMode="_reviewForEnable" Busy="IsBusy"
                                                      OnEnable="() => EnableAfterReviewAsync(flow)" OnClose="CloseReview" />
+                                }
+                                @if (_runbookFlowId == flow.Id)
+                                {
+                                    <FlowRunbookPanel FlowName="@flow.DisplayName" Runbook="_runbook" Loading="_runbookLoading" Failed="_runbookFailed" Busy="IsBusy"
+                                                      OnGenerate="request => GenerateRunbookAsync(flow, request)" OnClose="CloseRunbook" />
                                 }
                                 @if (flow.MissingModules is { Count: > 0 } missingModules)
                                 {

@@ -1,0 +1,52 @@
+@using Mulse.Ui.Models
+
+<section class="review-panel" data-testid="flow-runbook" aria-label="@($"Runbook for {FlowName}")">
+    <h3>Runbook: @FlowName</h3>
+    <p class="field-hint">Written from the flow definition. It lists names and numbers only, never setting values or secrets. Add what only you know, then generate it.</p>
+
+    <label>Purpose
+        <textarea class="text-input" rows="2" maxlength="600" data-testid="runbook-purpose" @bind="Purpose" @bind:event="oninput"></textarea>
+    </label>
+    <label>Contact
+        <input class="text-input" maxlength="300" data-testid="runbook-contact" @bind="Contact" @bind:event="oninput" />
+    </label>
+    <label>Notes
+        <textarea class="text-input" rows="3" maxlength="3000" data-testid="runbook-notes" @bind="Notes" @bind:event="oninput"></textarea>
+    </label>
+
+    <div class="flow-card-actions">
+        <button type="button" class="run-button" data-testid="runbook-generate" @onclick="Generate" disabled="@(Loading || Busy)">Generate runbook</button>
+        <button type="button" class="secondary-button" data-testid="runbook-close" @onclick="OnClose" disabled="@Busy">Close</button>
+    </div>
+
+    @if (Loading)
+    {
+        <p role="status">Writing the runbook...</p>
+    }
+    else if (Failed)
+    {
+        <p class="field-hint" role="status" data-testid="runbook-unavailable">The runbook is not available right now. Nothing was changed; try again in a moment.</p>
+    }
+    else if (Runbook is not null)
+    {
+        <p role="status" data-testid="runbook-ready">Runbook ready. Select the text below to copy it.</p>
+        <textarea class="text-input" rows="16" readonly data-testid="runbook-markdown" aria-label="Runbook in Markdown">@Runbook.Markdown</textarea>
+        <p class="review-disclaimer">@Runbook.Disclaimer</p>
+    }
+</section>
+
+@code {
+    [Parameter] public string FlowName { get; set; } = "";
+    [Parameter] public FlowRunbookViewModel? Runbook { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool Failed { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<RunbookRequestViewModel> OnGenerate { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string? Purpose { get; set; }
+    private string? Contact { get; set; }
+    private string? Notes { get; set; }
+
+    private Task Generate() => OnGenerate.InvokeAsync(new RunbookRequestViewModel(Purpose, Contact, Notes));
+}

@@ -2130,6 +2130,12 @@ canvas is ignored. Risky changes (enabling the flow, switching to an automatic t
 a retry, confirmation or undo step, changing a step's module) open the note with a short "Worth a second look" list.
 The note disappears on your next edit. It is advisory only and never blocks a save.
 
+## Flow runbook
+
+On the Flows page, **Runbook** opens a quiet panel for one flow. Type a purpose, a contact and any notes (only you know these), then **Generate runbook**. Mulse writes the rest from the stored definition: overview and schedule, inputs, processing (including native steps), outputs, dependencies (modules, and the config values and secrets the flow refers to, with whether each has a stored value), failure behavior (retry per step, and whether a retry could send twice), and the current pre-enable review counts. The result is shown as Markdown you can select and copy into your own documentation.
+
+It needs no AI provider and saves nothing. It lists names, module ids and counts only, never setting values, config values or secrets. It describes what the definition says, not that the flow is correct. The API is `POST /api/assist/runbook/{flowId}` with an optional `{ purpose, contact, notes }` body.
+
 ## Working without AI
 
 AI assistance is optional and off by default. With nothing set up, importing, editing, saving, reviewing, running

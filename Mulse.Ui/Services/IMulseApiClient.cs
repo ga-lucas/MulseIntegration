@@ -87,6 +87,9 @@ public interface IMulseApiClient
     Task<FlowReviewViewModel> GetFlowReviewAsync(string flowId, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support the pre-enable review.");
 
+    Task<FlowRunbookViewModel> BuildFlowRunbookAsync(string flowId, RunbookRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support flow runbooks.");
+
     Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support failure patterns.");
 

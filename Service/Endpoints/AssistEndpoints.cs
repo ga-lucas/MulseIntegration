@@ -11,6 +11,7 @@ public static class AssistEndpoints
         services.AddSingleton<AssistExplainer>();
         services.AddSingleton<AssistModuleAuthoring>();
         services.AddSingleton<AssistFlowReviewer>();
+        services.AddSingleton<AssistFlowRunbook>();
         return services;
     }
 
@@ -111,6 +112,17 @@ public static class AssistEndpoints
             })
             .WithName("ReviewFlowBeforeEnabling")
             .WithSummary("Rules applied to a stored flow before it is enabled: unverified imports, missing modules, unresolved references, typed-in credentials, placeholders, a source that is also a destination, missing retries and sources that are never marked as read. Names and counts only; never setting values")
+            .ProducesProblem(StatusCodes.Status404NotFound);
+
+        group.MapPost("/runbook/{flowId}", (string flowId, RunbookRequest? request, IServiceProvider services, HttpResponse response) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                var flows = services.GetRequiredService<Service.Flows.IFlowDefinitionService>();
+                var store = services.GetRequiredService<IRuntimeConfigurationStore>();
+                return TypedResults.Ok(services.GetRequiredService<AssistFlowRunbook>().Build(flows.GetById(flowId), store.GetState().ConfigValues, request, DateTimeOffset.UtcNow));
+            })
+            .WithName("BuildFlowRunbook")
+            .WithSummary("A runbook for a stored flow, written from its definition: schedule, inputs, processing, outputs, dependencies, failure behavior and review state, as sections and as Markdown. Purpose, contact and notes are text the caller supplies. Names and numbers only; never setting values, config values or secrets. Nothing is saved")
             .ProducesProblem(StatusCodes.Status404NotFound);
 
         group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
