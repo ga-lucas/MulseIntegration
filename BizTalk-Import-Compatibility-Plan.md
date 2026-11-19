@@ -918,10 +918,13 @@ Built on the AI assistance plan (surfaces, redaction, proposal pipeline, audit).
 3. **UI:** wizard shell replacing the floating panel, the request cards, session storage, upload and paste, export and import session.
 4. **AI layer** (after AI Phase A foundations).
 
+### Decisions on the former open questions
+
+- **Upload forms (user decision: whatever is most appropriate; zip when several files or folders are expected).** A single export (bindings, a BRL policy file, a host `.config`, a helper `.cs`) uploads as that one file. Anything that is naturally several files or a folder tree (a project or solution, a folder of binding exports, schema folders) uploads as one `.zip`. The server extracts a zip into the request-scoped temporary folder with limits (entry count, per-entry and total uncompressed size), rejects entries that escape the folder (zip-slip), absolute paths, links and nested archives, and deletes the folder afterwards.
+- **Real output stage (recommended, pending the user's reply).** Until the compare feature (M6) exists, the stage only records samples: a pair of the input and the real output for a named send, kept in the session with the strictest disclosure rules. The importer does not read them yet. When M6 is built they become its comparison scenarios, so no evidence is collected twice.
+
 ### Open questions
 
-- Which binding-export variants to accept for upload (a single file, an application export, a zipped folder)?
-- Whether the output-sample stage should wait for the compare feature (M6) or only record the samples.
 - A shared server-side session store, if multiple people migrate one application. Not planned; the browser-local choice can be revisited.
 
 ## Product surfaces
