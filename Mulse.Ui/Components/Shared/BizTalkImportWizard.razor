@@ -189,7 +189,8 @@
                     <summary>Add a real input and output sample</summary>
                     @RequestCard(BehaviorRequest)
                 </details>
-                <p class="field-hint">Samples are kept with the session. Comparing them against native output is not built yet, so adding one does not unblock anything on its own.</p>
+                <p class="field-hint">Samples are kept with the session. Adding one does not unblock anything on its own; use it to compare the migrated flow's output with the real output.</p>
+                <BizTalkRealSampleHandOff Evidence="_session.Evidence" Content="_session.Content" SuggestedName="@($"{_session.Name} samples")" />
                 @AnalyzeRow()
             </section>
             break;
@@ -230,7 +231,7 @@
 
     private static readonly BizTalkEvidenceRequestViewModel BehaviorRequest = new("behavior-extra", "behavior-extra", "A real input and output sample",
         "A recorded pair of what BizTalk received and sent is the strongest check of the migrated flow.",
-        ["Use the Administration Console or BizTalk tracking to save a real input message and the output it produced.", "Zip several pairs together."],
+        ["Use the Administration Console or BizTalk tracking to save a real input message and the output it produced.", "Name each pair name.in.xml and name.out.xml (or use folders called in and out) and zip several pairs together."],
         [BizTalkEvidenceKinds.RealOutput], "Optional.", [], "Samples can contain personal or patient data. Anonymise them first.");
 
     [Parameter] public IReadOnlyList<ModuleViewModel> Modules { get; set; } = [];

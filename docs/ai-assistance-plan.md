@@ -108,8 +108,8 @@ Scenarios built from history (T2) and BizTalk comparison pairs (M6) can be saved
 - A saved scenario is marked **contains real data**, shows who saved it and when, and can be deleted at any time.
 - It is stored in workspace storage, separate from the flow definition, so exporting or copying a flow does not carry it.
 - It is never sent to a model unless the user enables the message-data category for that request and sees the payload preview. Synthetic copies (values replaced, shape kept) can be saved without the marker and used freely.
-- It is included in Backup & Restore only if the user chooses to include scenarios in the backup, and the backup page says so.
-- Retention is configurable per workspace (keep until deleted, or expire after N days). Expired scenarios are deleted, not archived.
+- It is **not** included in Backup & Restore or flow exports (implemented decision for comparison scenarios; the encrypted store stays on the service machine).
+- Retention is chosen per scenario (keep until deleted, or expire after 1 to 365 days). Expired scenarios are deleted, not archived.
 - Results (pass or fail and the classified differences) are kept with the scenario; the data itself is not copied into the audit trail.
 
 ### Operate

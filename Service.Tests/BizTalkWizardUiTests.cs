@@ -92,7 +92,8 @@ public sealed class BizTalkWizardUiTests
             await fixture.RefreshAsync(wizard);
             html = fixture.Html();
             Assert.Contains("Samples can hold patient data.", html);
-            Assert.Contains("Comparing them against native output is not built yet", html);
+            Assert.Contains("Adding one does not unblock anything on its own", html);
+                        Assert.Contains("real-sample-handoff", html);
         });
         Assert.Single(fixture.Bodies);
         Assert.Contains("\"sourcePath\":\"C:\\\\x.sln\"", fixture.Bodies[0]);
