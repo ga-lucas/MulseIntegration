@@ -129,6 +129,60 @@
             }
         }
     }
+    <h4>Saved scenarios</h4>
+    <p class="field-hint">Keep the samples above to run again after you change the definition. Scenarios are stored encrypted on the Mulse server, apart from flows, exports and backups, and are never sent to AI. The definition itself is not saved. A scenario can contain real data, so choose how long to keep it and delete it when you no longer need it. Running a saved scenario uses the input, mocks and samples as they were saved; Load copies its samples here to edit, and uses the test setup above.</p>
+    <label class="field-label">Scenario name <input class="mapping-input" @bind="_scenarioName" maxlength="80" data-testid="scenario-name" /></label>
+    <label class="field-label">Keep for
+        <select @bind="_scenarioRetention" data-testid="scenario-retention">
+            <option value="">Until I delete it</option>
+            <option value="1">1 day</option>
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">365 days</option>
+        </select>
+    </label>
+    <label class="field-label"><input type="checkbox" @bind="_scenarioRealData" data-testid="scenario-real-data" /> These samples contain real data</label>
+    <label class="field-label">Saved by (used when the server does not know who you are) <input class="mapping-input" @bind="_scenarioSavedBy" maxlength="80" data-testid="scenario-saved-by" /></label>
+    <button type="button" class="secondary-button" disabled="@(_scenarioBusy || _samples.Count == 0)" @onclick="SaveScenarioAsync" data-testid="scenario-save">Save as scenario</button>
+    <button type="button" class="secondary-button" disabled="@_scenarioBusy" @onclick="RefreshScenariosAsync" data-testid="scenario-refresh">Show saved scenarios</button>
+    @if (_scenarioError is not null) { <p class="status-banner error" role="alert" data-testid="scenario-error">@_scenarioError</p> }
+    @if (_scenarioNotice is not null) { <p class="field-hint" role="status" data-testid="scenario-notice">@_scenarioNotice</p> }
+    @if (_scenarios is not null)
+    {
+        @if (_scenarios.Count == 0) { <p class="field-hint" data-testid="scenario-empty">No scenarios are saved.</p> }
+        else
+        {
+            <table class="compare-differences" data-testid="scenario-list">
+                <thead><tr><th>Scenario</th><th>Samples</th><th>Saved</th><th>Expires</th><th>Last run</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var scenario in _scenarios)
+                {
+                    <tr @key="scenario.Id">
+                        <td>@scenario.Name @if (scenario.ContainsRealData) { <strong title="Contains real data">(real data)</strong> }</td>
+                        <td>@scenario.SampleCount</td>
+                        <td>@scenario.SavedBy, @Stamp(scenario.SavedAtUtc)</td>
+                        <td>@(scenario.ExpiresAtUtc is { } expires ? Stamp(expires) : "Until deleted")</td>
+                        <td>@(scenario.LastRunStatement ?? "Not run yet")</td>
+                        <td>
+                            <button type="button" class="secondary-button" disabled="@_scenarioBusy" @onclick="() => RunScenarioAsync(scenario)" data-testid="scenario-run">Run</button>
+                            <button type="button" class="secondary-button" disabled="@_scenarioBusy" @onclick="() => LoadScenarioAsync(scenario)" data-testid="scenario-load">Load</button>
+                            @if (_confirmDeleteId == scenario.Id)
+                            {
+                                <button type="button" class="secondary-button" disabled="@_scenarioBusy" @onclick="() => DeleteScenarioAsync(scenario)" data-testid="scenario-delete-confirm">Confirm delete</button>
+                                <button type="button" class="secondary-button" @onclick="() => _confirmDeleteId = null">Keep</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="secondary-button" disabled="@_scenarioBusy" @onclick="() => _confirmDeleteId = scenario.Id" data-testid="scenario-delete">Delete</button>
+                            }
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        }
+    }
 </details>
 
 @code {
@@ -147,6 +201,10 @@
     private NativeFlowCompareResponseViewModel? _comparison;
     private string? _compareError;
     private bool _comparing;
+    private string _scenarioName = "", _scenarioRetention = "", _scenarioSavedBy = "";
+    private bool _scenarioRealData = true, _scenarioBusy;
+    private string? _scenarioError, _scenarioNotice, _confirmDeleteId;
+    private IReadOnlyList<ComparisonScenarioSummaryViewModel>? _scenarios;
     protected override void OnParametersSet()
     {
         if (_definition == Value) return;
@@ -182,19 +240,8 @@
     {
         _comparison = null; _compareError = null;
         if (Services.GetService(typeof(IMulseApiClient)) is not IMulseApiClient api) { _compareError = "The comparison API is unavailable."; return; }
-        if (_samples.Count == 0) { _compareError = "Add at least one real-output sample."; return; }
-        if (_samples.Any(sample => string.IsNullOrWhiteSpace(sample.Name)) || _samples.Select(sample => sample.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != _samples.Count)
-        { _compareError = "Sample names must be nonempty and unique."; return; }
-        if (_samples.Any(sample => string.IsNullOrEmpty(sample.Expected))) { _compareError = "Every sample needs the expected real output."; return; }
-        if (!ValidMetadata(_metadata) || _mocks.Any(mock => mock.Enabled && (mock.Kind != "Deliver" || mock.HasOutput) && mock.UseCustomMetadata && !ValidMetadata(mock.Metadata)))
-        { _compareError = "Input and mock output metadata keys must be nonempty and unique."; return; }
-        var metadata = _metadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
-        var mocks = _mocks.Where(mock => mock.Enabled).Select(mock => new NativeFlowTestMockViewModel(mock.Kind, mock.Module,
-            mock.Kind == "Deliver" && !mock.HasOutput ? null : new(mock.Name, mock.Content, mock.ContentType,
-                mock.UseCustomMetadata ? mock.Metadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal) : metadata))).ToList();
-        var pairs = _samples.Select(sample => new NativeFlowComparePairViewModel(sample.Name.Trim(), sample.Expected,
-            new(_name, string.IsNullOrEmpty(sample.Input) ? _content : sample.Input, _contentType, metadata), mocks,
-            string.IsNullOrEmpty(sample.Delivery) ? null : sample.Delivery)).ToList();
+        var pairs = BuildPairs(out var problem);
+        if (pairs is null) { _compareError = problem; return; }
         var revision = _comparisonRevision; _comparing = true;
         try
         {
@@ -205,6 +252,77 @@
         { if (revision == _comparisonRevision) _compareError = exception.Message; }
         finally { _comparing = false; }
     }
+    private List<NativeFlowComparePairViewModel>? BuildPairs(out string? problem)
+    {
+        problem = null;
+        if (_samples.Count == 0) { problem = "Add at least one real-output sample."; return null; }
+        if (_samples.Any(sample => string.IsNullOrWhiteSpace(sample.Name)) || _samples.Select(sample => sample.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != _samples.Count)
+        { problem = "Sample names must be nonempty and unique."; return null; }
+        if (_samples.Any(sample => string.IsNullOrEmpty(sample.Expected))) { problem = "Every sample needs the expected real output."; return null; }
+        if (!ValidMetadata(_metadata) || _mocks.Any(mock => mock.Enabled && (mock.Kind != "Deliver" || mock.HasOutput) && mock.UseCustomMetadata && !ValidMetadata(mock.Metadata)))
+        { problem = "Input and mock output metadata keys must be nonempty and unique."; return null; }
+        var metadata = _metadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+        var mocks = _mocks.Where(mock => mock.Enabled).Select(mock => new NativeFlowTestMockViewModel(mock.Kind, mock.Module,
+            mock.Kind == "Deliver" && !mock.HasOutput ? null : new(mock.Name, mock.Content, mock.ContentType,
+                mock.UseCustomMetadata ? mock.Metadata.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal) : metadata))).ToList();
+        return _samples.Select(sample => new NativeFlowComparePairViewModel(sample.Name.Trim(), sample.Expected,
+            new(_name, string.IsNullOrEmpty(sample.Input) ? _content : sample.Input, _contentType, metadata), mocks,
+            string.IsNullOrEmpty(sample.Delivery) ? null : sample.Delivery)).ToList();
+    }
+    private static string Stamp(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture);
+    private IMulseApiClient? ScenarioApi()
+    {
+        if (Services.GetService(typeof(IMulseApiClient)) is IMulseApiClient api) return api;
+        _scenarioError = "The scenario API is unavailable.";
+        return null;
+    }
+    private async Task ScenarioActionAsync(Func<IMulseApiClient, Task> action)
+    {
+        _scenarioError = null; _scenarioNotice = null;
+        if (ScenarioApi() is not { } api) return;
+        _scenarioBusy = true;
+        try { await action(api); }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or NotSupportedException)
+        { _scenarioError = exception.Message; }
+        finally { _scenarioBusy = false; }
+    }
+    private Task RefreshScenariosAsync() => ScenarioActionAsync(async api => _scenarios = await api.ListComparisonScenariosAsync(default));
+    private Task SaveScenarioAsync() => ScenarioActionAsync(async api =>
+    {
+        var pairs = BuildPairs(out var problem);
+        if (pairs is null) { _scenarioError = problem; return; }
+        int? retention = int.TryParse(_scenarioRetention, out var days) ? days : null;
+        var saved = await api.SaveComparisonScenarioAsync(new(_scenarioName.Trim(), pairs, _advanceWaits, _scenarioRealData, retention,
+            string.IsNullOrWhiteSpace(_scenarioSavedBy) ? null : _scenarioSavedBy.Trim()), default);
+        _scenarios = await api.ListComparisonScenariosAsync(default);
+        _scenarioNotice = $"Saved '{saved.Name}'. {(saved.ExpiresAtUtc is { } expires ? $"It will be deleted after {Stamp(expires)}." : "It is kept until you delete it.")}";
+    });
+    private Task RunScenarioAsync(ComparisonScenarioSummaryViewModel scenario) => ScenarioActionAsync(async api =>
+    {
+        if (string.IsNullOrWhiteSpace(Value)) { _scenarioError = "There is no native definition to run the scenario against."; return; }
+        _comparison = null; _compareError = null; _comparisonRevision++;
+        _comparison = await api.RunComparisonScenarioAsync(scenario.Id, Value, default);
+        _scenarios = await api.ListComparisonScenariosAsync(default);
+        _scenarioNotice = $"Ran '{scenario.Name}'. The results are shown above; only the verdicts, difference classes and paths are kept, never the values.";
+    });
+    private Task LoadScenarioAsync(ComparisonScenarioSummaryViewModel scenario) => ScenarioActionAsync(async api =>
+    {
+        var loaded = await api.GetComparisonScenarioAsync(scenario.Id, default);
+        _samples.Clear();
+        foreach (var pair in loaded.Pairs)
+            _samples.Add(new() { Name = pair.Name, Input = pair.Input?.Content ?? "", Delivery = pair.DeliverModule ?? "", Expected = pair.Expected });
+        _advanceWaits = loaded.AdvanceWaits;
+        _scenarioName = loaded.Name; _scenarioRealData = loaded.ContainsRealData;
+        ClearComparison();
+        _scenarioNotice = $"Loaded the samples of '{loaded.Name}'. Saving under the same name replaces it.";
+    });
+    private Task DeleteScenarioAsync(ComparisonScenarioSummaryViewModel scenario) => ScenarioActionAsync(async api =>
+    {
+        _confirmDeleteId = null;
+        await api.DeleteComparisonScenarioAsync(scenario.Id, default);
+        _scenarios = await api.ListComparisonScenariosAsync(default);
+        _scenarioNotice = $"Deleted '{scenario.Name}'.";
+    });
     private void AddMetadata() { _metadata.Add(new()); Invalidate(); }
     private void RemoveMetadata(MetadataEntry entry) { _metadata.Remove(entry); Invalidate(); }
     private void AddMock() { _mocks.Add(new() { Manual = true, Kind = "Render" }); Invalidate(); }

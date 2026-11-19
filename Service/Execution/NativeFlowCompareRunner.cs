@@ -7,18 +7,24 @@ public static class NativeFlowCompareRunner
 {
     public const int MaxPairs = 20;
 
-    public static async Task<NativeFlowCompareResponse> RunAsync(NativeFlowCompareRequest request, CancellationToken cancellationToken)
+    /// <summary>Checks the samples alone, so they can be validated when saved without a flow.</summary>
+    public static void ValidatePairs(IReadOnlyList<NativeFlowComparePair>? pairs)
     {
-        if (request?.Pairs is not { Count: > 0 and <= MaxPairs })
+        if (pairs is not { Count: > 0 and <= MaxPairs })
             throw new ArgumentException($"Supply between 1 and {MaxPairs} samples to compare.");
-        if (request.Pairs.Any(pair => pair is null || string.IsNullOrWhiteSpace(pair.Name) || pair.Name.Length > 128 || pair.Expected is null
+        if (pairs.Any(pair => pair is null || string.IsNullOrWhiteSpace(pair.Name) || pair.Name.Length > 128 || pair.Expected is null
             || pair.PayloadIndex is < 0 or > 63 || pair.DeliverModule is { Length: > 256 }))
             throw new ArgumentException("Each sample needs a name (up to 128 characters), the expected output and a valid payload index.");
-        if (request.Pairs.Select(pair => pair.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != request.Pairs.Count)
+        if (pairs.Select(pair => pair.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != pairs.Count)
             throw new ArgumentException("Sample names must be unique.");
-        if (request.Pairs.Any(pair => pair.Actual is null && pair.Input is null))
+        if (pairs.Any(pair => pair.Actual is null && pair.Input is null))
             throw new ArgumentException("Each sample needs either Mulse's output (Actual) or an input to run.");
-        if (request.Pairs.Any(pair => pair.Actual is null) && string.IsNullOrWhiteSpace(request.FlowJson))
+    }
+
+    public static async Task<NativeFlowCompareResponse> RunAsync(NativeFlowCompareRequest request, CancellationToken cancellationToken)
+    {
+        ValidatePairs(request?.Pairs);
+        if (request!.Pairs.Any(pair => pair.Actual is null) && string.IsNullOrWhiteSpace(request.FlowJson))
             throw new ArgumentException("A native definition is required to run a sample.");
 
         var results = new List<NativeFlowComparePairResult>();

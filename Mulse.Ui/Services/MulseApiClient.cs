@@ -130,6 +130,42 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<NativeFlowCompareResponseViewModel>(response, cancellationToken, "comparison result").ConfigureAwait(false);
     }
 
+    private const string ScenarioRoot = "/api/flow-designer/native/compare/scenarios";
+
+    public async Task<IReadOnlyList<ComparisonScenarioSummaryViewModel>> ListComparisonScenariosAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync(ScenarioRoot, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<List<ComparisonScenarioSummaryViewModel>>(response, cancellationToken, "scenario list").ConfigureAwait(false);
+    }
+
+    public async Task<ComparisonScenarioViewModel> GetComparisonScenarioAsync(string id, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync($"{ScenarioRoot}/{Uri.EscapeDataString(id)}", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ComparisonScenarioViewModel>(response, cancellationToken, "scenario").ConfigureAwait(false);
+    }
+
+    public async Task<ComparisonScenarioSummaryViewModel> SaveComparisonScenarioAsync(SaveComparisonScenarioRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync(ScenarioRoot, request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ComparisonScenarioSummaryViewModel>(response, cancellationToken, "saved scenario").ConfigureAwait(false);
+    }
+
+    public async Task DeleteComparisonScenarioAsync(string id, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.DeleteAsync($"{ScenarioRoot}/{Uri.EscapeDataString(id)}", cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException(problem?.Detail ?? problem?.Title ?? $"The API returned status code {(int)response.StatusCode}.");
+        }
+    }
+
+    public async Task<NativeFlowCompareResponseViewModel> RunComparisonScenarioAsync(string id, string flowJson, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"{ScenarioRoot}/{Uri.EscapeDataString(id)}/run", new { FlowJson = flowJson }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<NativeFlowCompareResponseViewModel>(response, cancellationToken, "comparison result").ConfigureAwait(false);
+    }
+
     public async Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken)
     {
         using var response = await httpClient.PostAsJsonAsync("/api/flow-designer/xml-mapping/schemas", request, cancellationToken).ConfigureAwait(false);

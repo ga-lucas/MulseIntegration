@@ -53,6 +53,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddMulsePlatform(builder.Configuration, builder.Environment.ContentRootPath);
 builder.Services.AddAiAuthoring(builder.Configuration, builder.Environment);
+builder.Services.AddComparisonScenarios(builder.Configuration, builder.Environment);
 
 var app = builder.Build();
 
@@ -71,6 +72,7 @@ app.MapModuleEndpoints();
 app.MapFlowEndpoints();
 app.MapWorkspaceEndpoints();
 app.MapDesignerEndpoints();
+app.MapComparisonScenarioEndpoints();
 app.MapBizTalkMigrationEndpoints();
 app.MapConfigValueEndpoints();
 app.MapEncryptionEndpoints();

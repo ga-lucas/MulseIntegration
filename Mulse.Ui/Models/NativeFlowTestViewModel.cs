@@ -13,3 +13,9 @@ public sealed record NativeFlowCompareRequestViewModel(string FlowJson, List<Nat
 public sealed record NativeFlowComparePairResultViewModel(string Name, string Verdict, string Source, List<OutputDifferenceViewModel> Differences, bool Truncated, string? Error);
 public sealed record NativeFlowCompareSummaryViewModel(int Total, int Identical, int FormattingOnly, int Different, int NotCompared, string Statement);
 public sealed record NativeFlowCompareResponseViewModel(List<NativeFlowComparePairResultViewModel> Results, NativeFlowCompareSummaryViewModel Summary);
+
+public sealed record ComparisonScenarioSummaryViewModel(string Id, string Name, int SampleCount, bool AdvanceWaits, bool ContainsRealData, string SavedBy,
+    DateTimeOffset SavedAtUtc, DateTimeOffset? ExpiresAtUtc, DateTimeOffset? LastRunAtUtc, string? LastRunStatement);
+public sealed record ComparisonScenarioViewModel(string Id, string Name, List<NativeFlowComparePairViewModel> Pairs, bool AdvanceWaits, bool ContainsRealData, string SavedBy,
+    DateTimeOffset SavedAtUtc, DateTimeOffset? ExpiresAtUtc);
+public sealed record SaveComparisonScenarioRequestViewModel(string Name, List<NativeFlowComparePairViewModel> Pairs, bool AdvanceWaits, bool ContainsRealData, int? RetentionDays, string? SavedBy);
