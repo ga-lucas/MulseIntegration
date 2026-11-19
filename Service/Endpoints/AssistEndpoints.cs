@@ -83,6 +83,24 @@ public static class AssistEndpoints
             .WithSummary("Recent failed, held and retrying runs grouped by likely cause and stage across flows, with the one change that would clear the most. Never repeats error text or message content, and never offers a retry")
             .ProducesProblem(StatusCodes.Status409Conflict);
 
+        group.MapGet("/digest", async (int? hours, IServiceProvider services, HttpResponse response, CancellationToken cancellationToken) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                var journal = services.GetService<Service.Execution.FlowJournal>()
+                    ?? throw new InvalidOperationException("Execution history requires a database storage engine, so there is nothing to summarise.");
+                const int FetchLimit = 200;
+                var span = Math.Clamp(hours ?? 24, 1, 168);
+                var rows = await journal.ListAsync(null, FetchLimit, cancellationToken).ConfigureAwait(false);
+                var flows = services.GetService<Service.Flows.IFlowDefinitionService>()?.GetAll() ?? [];
+                return TypedResults.Ok(AssistOperationalDigest.Build(
+                    [.. rows.Select(row => new DigestRun(row.ExecutionId, row.FlowId, row.State, row.StartedUtcTicks, row.UpdatedUtcTicks))],
+                    [.. flows.Select(flow => new DigestFlow(flow.Id, string.IsNullOrWhiteSpace(flow.Name) ? flow.Id : flow.Name!, flow.Enabled, flow.Trigger.Mode.ToString(), flow.Trigger.Interval))],
+                    DateTimeOffset.UtcNow, span, FetchLimit));
+            })
+            .WithName("GetOperationalDigest")
+            .WithSummary("A deterministic digest of a period (1 to 168 hours, default 24): runs by state, success rate, held runs, flows that ran slower than usual and interval flows that stopped running. Reads states, times and trigger settings only; never offers a retry")
+            .ProducesProblem(StatusCodes.Status409Conflict);
+
         group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
             {
                 response.Headers.CacheControl = "no-store";

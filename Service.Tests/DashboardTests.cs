@@ -143,6 +143,33 @@ public sealed class DashboardTests
     }
 
     [Fact]
+    public async Task Page_ShowsTheDigestWithHeldSlowAndStoppedFlows()
+    {
+        var html = await RenderAsync(historyAvailable: true);
+
+        Assert.Contains(">Digest<", html);
+        Assert.Contains("2 run(s) started in the last 24 hour(s)", html);
+        Assert.Contains("Held (needs a person)", html);
+        Assert.Contains("Run held-1", html);
+        Assert.Contains("Slower than usual", html);
+        Assert.Contains("Latest run 40s, usually 10s (4 completed runs)", html);
+        Assert.Contains("May have stopped running", html);
+        Assert.Contains("href=\"/designer/poller\"", html);
+        Assert.Contains("Digest period", html);
+        Assert.Contains("never retries or resends", html);
+    }
+
+    [Fact]
+    public async Task Page_KeepsWorkingWhenTheDigestCannotBeLoaded()
+    {
+        var html = await RenderAsync(historyAvailable: true, digestFail: true);
+
+        Assert.Contains("The digest is not available", html);
+        Assert.Contains("Digest service down", html);
+        Assert.Contains("Run outcomes", html);
+    }
+
+    [Fact]
     public async Task Page_ShowsFailurePatternsWithoutRepeatingAnything()
     {
         var html = await RenderAsync(historyAvailable: true);
@@ -184,6 +211,7 @@ public sealed class DashboardTests
         Assert.DoesNotContain("Run outcomes", html);
         Assert.DoesNotContain("Recent runs", html);
         Assert.DoesNotContain("Failure patterns", html);
+        Assert.DoesNotContain(">Digest<", html);
         Assert.Contains("n/a", html);
     }
 
@@ -195,9 +223,9 @@ public sealed class DashboardTests
         Assert.Contains("Nothing needs attention", html);
     }
 
-    private static async Task<string> RenderAsync(bool historyAvailable, bool empty = false, bool patternsFail = false, bool onlyCompleted = false)
+    private static async Task<string> RenderAsync(bool historyAvailable, bool empty = false, bool patternsFail = false, bool onlyCompleted = false, bool digestFail = false)
     {
-        using var httpClient = new HttpClient(new Handler(historyAvailable, empty, patternsFail, onlyCompleted)) { BaseAddress = new Uri("http://localhost") };
+        using var httpClient = new HttpClient(new Handler(historyAvailable, empty, patternsFail, onlyCompleted, digestFail)) { BaseAddress = new Uri("http://localhost") };
         await using var services = new ServiceCollection().AddLogging()
             .AddSingleton<NavigationManager>(new TestNavigationManager())
             .AddSingleton<IMulseApiClient>(new MulseApiClient(httpClient)).BuildServiceProvider();
@@ -210,11 +238,26 @@ public sealed class DashboardTests
         public TestNavigationManager() => Initialize("http://localhost/", "http://localhost/");
     }
 
-    private sealed class Handler(bool historyAvailable, bool empty, bool patternsFail, bool onlyCompleted) : HttpMessageHandler
+    private sealed class Handler(bool historyAvailable, bool empty, bool patternsFail, bool onlyCompleted, bool digestFail) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/assist/digest")
+            {
+                if (digestFail)
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+                    {
+                        Content = JsonContent.Create(new Microsoft.AspNetCore.Mvc.ProblemDetails { Detail = "Digest service down" })
+                    });
+                Assert.Equal("?hours=24", request.RequestUri.Query);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new OperationalDigestViewModel(0, 1, 24, 2, new() { ["Completed"] = 1, ["Failed"] = 1 }, 0.5, 2,
+                        [new("held-1", "flow-a", 1)], 1, [new("flow-a", "Flow A", 4, 10, 40)], [new("poller", "Poller", 300, null, "No run was found.")],
+                        ["2 run(s) started in the last 24 hour(s) across 2 flow(s): 1 completed, 1 failed."], ["This digest never retries or resends anything."]))
+                });
+            }
             if (path == "/api/assist/explain/failures")
             {
                 Assert.False(onlyCompleted, "Failure patterns must not be requested when no run failed.");

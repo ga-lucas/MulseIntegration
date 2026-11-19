@@ -81,6 +81,9 @@ public interface IMulseApiClient
     Task<ModulePromptViewModel> BuildModulePromptAsync(string flowJson, string moduleId, string? description, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support module prompts.");
 
+    Task<OperationalDigestViewModel> GetOperationalDigestAsync(int hours, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the operational digest.");
+
     Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support failure patterns.");
 

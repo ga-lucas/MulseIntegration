@@ -46,6 +46,63 @@
         }
 
         <section class="home-grid">
+            @if (summary.HasRunData)
+            {
+                <Panel Title="Digest" Description="A short account of the period. Facts are read from stored runs and flow settings.">
+                    <label class="home-period">Period
+                        <select value="@_digestHours" @onchange="ChangeDigestHoursAsync" aria-label="Digest period">
+                            <option value="24">Last 24 hours</option>
+                            <option value="72">Last 3 days</option>
+                            <option value="168">Last 7 days</option>
+                        </select>
+                    </label>
+                    @if (_digestNote is not null)
+                    {
+                        <p class="empty-state" role="status">The digest is not available. @_digestNote</p>
+                    }
+                    else if (_digest is not null)
+                    {
+                        <ul class="home-facts">
+                            @foreach (var fact in _digest.Facts)
+                            {
+                                <li>@fact</li>
+                            }
+                        </ul>
+                        @if (_digest.HeldRuns.Count > 0)
+                        {
+                            <h3 class="home-subhead">Held (needs a person)</h3>
+                            <ul class="home-list">
+                                @foreach (var held in _digest.HeldRuns)
+                                {
+                                    <li><a href="@("/history/" + Uri.EscapeDataString(held.FlowId))">@held.FlowId</a><span>Run @held.ExecutionId</span></li>
+                                }
+                            </ul>
+                        }
+                        @if (_digest.SlowFlows.Count > 0)
+                        {
+                            <h3 class="home-subhead">Slower than usual</h3>
+                            <ul class="home-list">
+                                @foreach (var slow in _digest.SlowFlows)
+                                {
+                                    <li><a href="@("/history/" + Uri.EscapeDataString(slow.FlowId))">@slow.DisplayName</a><span>Latest run @slow.LatestSeconds.ToString("0.#", CultureInfo.InvariantCulture)s, usually @slow.TypicalSeconds.ToString("0.#", CultureInfo.InvariantCulture)s (@slow.CompletedRuns completed runs)</span></li>
+                                }
+                            </ul>
+                        }
+                        @if (_digest.StoppedFlows.Count > 0)
+                        {
+                            <h3 class="home-subhead">May have stopped running</h3>
+                            <ul class="home-list">
+                                @foreach (var stopped in _digest.StoppedFlows)
+                                {
+                                    <li><a href="@("/designer/" + Uri.EscapeDataString(stopped.FlowId))">@stopped.DisplayName</a><span>@stopped.Reason</span></li>
+                                }
+                            </ul>
+                        }
+                        <p class="home-more">@string.Join(" ", _digest.Notes)</p>
+                    }
+                </Panel>
+            }
+
             <Panel Title="Flow health" Description="Each flow is counted once, by its most recent run and its setup.">
                 <div class="home-donut-layout">
                     <div class="home-donut" role="img" aria-label="@HealthLabel(summary)" style="@DonutStyle(summary)">
@@ -203,6 +260,32 @@
     private string? _historyNote;
     private FailurePatternReportViewModel? _patterns;
     private string? _patternsNote;
+    private OperationalDigestViewModel? _digest;
+    private string? _digestNote;
+    private int _digestHours = 24;
+
+    private async Task ChangeDigestHoursAsync(ChangeEventArgs args)
+    {
+        if (int.TryParse(Convert.ToString(args.Value, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture, out var hours) && hours is 24 or 72 or 168)
+        {
+            _digestHours = hours;
+            await LoadDigestAsync();
+        }
+    }
+
+    private async Task LoadDigestAsync()
+    {
+        _digestNote = null;
+        try
+        {
+            _digest = await ApiClient.GetOperationalDigestAsync(_digestHours, CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _digest = null;
+            _digestNote = exception.Message;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -223,6 +306,8 @@
             }
 
             _summary = DashboardSummary.Build(flows, modules, usages, executions, DateTime.UtcNow);
+
+            if (_summary.HasRunData) { await LoadDigestAsync(); }
 
             if (_summary.HasRunData && _summary.Failed + _summary.Held + _summary.RunsByState.GetValueOrDefault("Retrying") > 0)
             {

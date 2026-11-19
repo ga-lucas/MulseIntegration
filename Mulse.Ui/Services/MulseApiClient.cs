@@ -514,6 +514,12 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<CompareExplainResponseViewModel>(response, cancellationToken, "explanation").ConfigureAwait(false);
     }
 
+    public async Task<OperationalDigestViewModel> GetOperationalDigestAsync(int hours, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync($"/api/assist/digest?hours={Math.Clamp(hours, 1, 168)}", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<OperationalDigestViewModel>(response, cancellationToken, "operational digest").ConfigureAwait(false);
+    }
+
     public async Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
     {
         using var response = await httpClient.GetAsync($"/api/assist/explain/failures?take={Math.Clamp(take, 1, 200)}", cancellationToken).ConfigureAwait(false);
