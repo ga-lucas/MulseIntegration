@@ -54,7 +54,7 @@
                         else
                         {
                             <label>@setting.Label @(setting.IsRequired ? "*" : "")</label>
-                            <ReferenceInput @key="(choice.Module, setting.Key)" Label="@setting.Label" InputKind="@setting.InputKind" Options="setting.Options" References="References" DefaultValue="@setting.DefaultValue"
+                            <ReferenceInput @key="(choice.Module, setting.Key)" SettingKey="@setting.Key" Label="@setting.Label" InputKind="@setting.InputKind" Options="setting.Options" References="References" DefaultValue="@setting.DefaultValue"
                                 Value="@choice.Settings.GetValueOrDefault(setting.Key, setting.DefaultValue ?? "")" ValueChanged="value => SetSetting(choice, setting.Key, value)" />
                             <p class="field-hint">@setting.Description</p>
                         }

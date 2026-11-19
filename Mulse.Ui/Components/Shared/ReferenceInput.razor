@@ -60,6 +60,10 @@
         }
     }
     @if (_referenceError is not null) { <p role="alert">@_referenceError</p> }
+    @if (!IsChoice)
+    {
+        <SettingCheckHint SettingKey="@SettingKey" Value="@Value" InputKind="@InputKind" References="References" ValueChanged="ValueChanged" />
+    }
     <div class="reference-suggestions" data-reference-popup hidden></div>
 </div>
 
@@ -70,6 +74,7 @@
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string InputKind { get; set; } = "Text";
     [Parameter] public string? DefaultValue { get; set; }
+    [Parameter] public string? SettingKey { get; set; }
     [Parameter] public IReadOnlyList<ModuleSettingOptionViewModel> Options { get; set; } = [];
     [Parameter] public IReadOnlyList<string> References { get; set; } = [];
     private bool IsChoice => InputKind is "Boolean" or "Select";

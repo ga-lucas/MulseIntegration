@@ -2154,6 +2154,16 @@ On the Config values page, **Check for problems** looks across all saved flows a
 
 It needs no AI provider and changes nothing. It shows names, flow ids and counts only, never config values or secrets. Unused is advisory: a value may be used by something outside saved flows. The API is `GET /api/assist/config-review`.
 
+## Settings checks while editing
+
+Module setting fields (in the flow editors and the designer) show a short, quiet note under a value when it is probably a mistake. The notes appear as you type, before the flow is saved, and never block typing or saving:
+
+- **A credential typed in as plain text.** A setting that holds a password, token, key or connection string (a password-type setting, or a key such as `password`, `apiKey` or `connectionString`; keys such as `tokenUrl` or `passwordFile` are not flagged) is saved and exported with the flow. **Move to a stored secret...** suggests a name, stores the value on the Config values page and replaces the setting with `{{secret:name}}`. It never overwrites an existing stored value: the stored names are read again first, and a name that is already used is refused.
+- **A placeholder that was never filled in** (`TODO`, `CHANGEME`, `<value>`).
+- **An incomplete reference** such as `{{secret:abc`, which would be used as plain text.
+
+It needs no AI provider and makes no calls until you choose to move a value. The notes never repeat the value. If the value cannot be stored, the setting is left unchanged and you are pointed to the Config values page. The same credential and placeholder rules are applied again by the pre-enable review for saved flows. Not checked yet: path style, match patterns and retry rules.
+
 ## Working without AI
 
 AI assistance is optional and off by default. With nothing set up, importing, editing, saving, reviewing, running

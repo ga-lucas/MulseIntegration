@@ -1061,7 +1061,7 @@
                         <div class="setting-row" @key="key">
                             <label class="field-label">@key</label>
                             <div class="inline-row">
-                                <ReferenceInput Value="@node.Settings[key]" ValueChanged="value => node.Settings[key] = value" Label="@key" References="_configReferences" />
+                                <ReferenceInput Value="@node.Settings[key]" ValueChanged="value => node.Settings[key] = value" SettingKey="@key" Label="@key" References="_configReferences" />
                                 <button class="secondary-button" @onclick="() => node.Settings.Remove(key)">Remove</button>
                             </div>
                         </div>

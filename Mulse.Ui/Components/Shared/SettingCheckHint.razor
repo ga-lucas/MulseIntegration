@@ -1,0 +1,95 @@
+@using Mulse.Ui.Services
+@inject IServiceProvider Services
+
+@if (_findings.Count > 0)
+{
+    <div class="setting-check" data-testid="setting-check" role="note">
+        @foreach (var finding in _findings)
+        {
+            <p class="field-hint" data-code="@finding.Code">@finding.Message</p>
+        }
+        @if (_findings.Any(finding => finding.CanStore))
+        {
+            @if (!_moving)
+            {
+                @if (Api is not null)
+                {
+                    <button type="button" class="secondary-button" data-testid="setting-check-move" @onclick="StartMove">Move to a stored secret...</button>
+                }
+                else
+                {
+                    <p class="field-hint">Add it on the <a href="/config-values">Config values</a> page and insert the reference instead.</p>
+                }
+            }
+            else
+            {
+                <label class="field-label">Name for the stored secret
+                    <input class="mapping-input" data-testid="setting-check-name" aria-label="Name for the stored secret" @bind="_name" @bind:event="oninput" />
+                </label>
+                <button type="button" class="secondary-button" data-testid="setting-check-store" disabled="@_busy" @onclick="StoreAsync">Store and use it</button>
+                <button type="button" class="secondary-button" data-testid="setting-check-cancel" disabled="@_busy" @onclick="CancelMove">Cancel</button>
+                <p class="field-hint">The value is saved on the Config values page (not shown again here) and this setting becomes a reference to it.</p>
+                @if (_error is not null) { <p class="field-hint" role="status" data-testid="setting-check-error">@_error</p> }
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? SettingKey { get; set; }
+    [Parameter] public string Value { get; set; } = string.Empty;
+    [Parameter] public string InputKind { get; set; } = "Text";
+    [Parameter] public IReadOnlyList<string> References { get; set; } = [];
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private IReadOnlyList<SettingFinding> _findings = [];
+    private bool _moving, _busy;
+    private string _name = "";
+    private string? _error;
+
+    private IMulseApiClient? Api => Services.GetService(typeof(IMulseApiClient)) as IMulseApiClient;
+
+    protected override void OnParametersSet()
+    {
+        _findings = SettingChecks.Evaluate(SettingKey, Value, InputKind);
+        if (_findings.All(finding => !finding.CanStore)) { _moving = false; _error = null; }
+    }
+
+    private void StartMove()
+    {
+        _name = SettingChecks.SuggestName(SettingKey, References);
+        _error = null;
+        _moving = true;
+    }
+
+    private void CancelMove()
+    {
+        _moving = false;
+        _error = null;
+    }
+
+    private async Task StoreAsync()
+    {
+        if (Api is not { } api || _busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var name = _name.Trim();
+            // The list passed in can be stale, so the stored names are read again before anything is written.
+            var existing = (await api.GetConfigValuesAsync(CancellationToken.None)).Select(stored => stored.Reference).Concat(References).ToArray();
+            if (SettingChecks.ValidateName(name, existing) is { } problem) { _error = problem; return; }
+            await api.SetConfigValueAsync(name, Value, CancellationToken.None);
+            _moving = false;
+            await ValueChanged.InvokeAsync(SettingChecks.SecretReference(name));
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            _error = "The value could not be stored, so the setting is unchanged. Try again, or add it on the Config values page.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
