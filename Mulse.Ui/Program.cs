@@ -58,7 +58,7 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("MulseAdmin", policy => policy.RequireAuthenticatedUser().RequireRole(adminRole));
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddGitHubCopilotSignIn(builder.Configuration, builder.Environment);
-builder.Services.AddHttpClient("oidc-token");
+builder.Services.AddHttpClient("oidc-token", httpClient => httpClient.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<MulseApiAccessTokenProvider>();
 builder.Services.AddScoped<IBizTalkSessionStore, BizTalkSessionStore>();
 builder.Services.AddTransient<MulseApiAccessTokenHandler>();
@@ -99,6 +99,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseIdentityProviderUnavailablePage();
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -111,9 +112,7 @@ app.MapGet("/auth/login", () => Results.Challenge(
 app.MapPost("/auth/logout", async (HttpContext context, IAntiforgery antiforgery) =>
     {
         await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
-        return Results.SignOut(
-            new AuthenticationProperties { RedirectUri = "/" },
-            [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme]);
+        await OidcSession.SignOutAsync(context).ConfigureAwait(false);
     })
     .RequireAuthorization();
 

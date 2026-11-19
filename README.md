@@ -1433,6 +1433,22 @@ without an ID token use the client ID and may receive a Keycloak logout confirma
 `https://localhost:7021/signout-callback-oidc` is registered as a valid post-logout redirect URI for
 `mulse-ui`. After changing authentication configuration, restart the UI and sign in afresh.
 
+**When the identity provider is unavailable.** Mulse separates "the sign-in service is down" from "your login or
+token is not valid":
+
+- The UI answers a sign-in that cannot reach the provider with a plain "Sign-in is temporarily unavailable" page
+  (HTTP 503 with `Retry-After`), not the generic error page. Nothing is changed and running flows are not affected.
+- Sign-out always ends the local Mulse session first. If the provider cannot be reached to end its own session,
+  you are still signed out of Mulse and sent to the home page.
+- The Service answers a bearer token it cannot check because the provider's signing keys are unreachable with
+  HTTP 503, `Retry-After: 5` and a problem body, instead of a misleading 401 `invalid_token`. A request with no token
+  is still 401. Once the keys have been fetched they are cached, so a short outage does not affect callers.
+- The UI's own service-to-service token is cached. If a refresh fails while the cached token is still valid it keeps
+  being used; otherwise API calls report "The sign-in service (identity provider) could not be reached" and the UI
+  does not retry for 10 seconds. A rejected client secret is reported separately and names the settings to check
+  (`MulseApi:ClientId`, `MulseApi:ClientSecret`) without echoing the secret.
+- Calls to the provider time out after 15 seconds.
+
 The `/api/inbound/{route}` endpoint intentionally remains anonymous for compatibility with existing senders.
 It is not protected by the administrator login, and an IP allowlist is not yet implemented. Until inbound
 authentication and network restrictions are added, expose that route only behind a firewall or trusted

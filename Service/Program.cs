@@ -25,17 +25,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.Authority = authority;
         options.Audience = apiAudience;
         options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        options.BackchannelTimeout = TimeSpan.FromSeconds(15);
         options.MapInboundClaims = false;
         options.TokenValidationParameters.NameClaimType = "preferred_username";
         options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
-        options.Events = new JwtBearerEvents
+        options.Events = JwtBearerProviderAvailability.Attach(new JwtBearerEvents
         {
             OnTokenValidated = context =>
             {
                 OidcRoleClaims.AddJsonArrayRoles(context.Principal, rolesClaim, rolesProperty);
                 return Task.CompletedTask;
             }
-        };
+        });
     });
 builder.Services.AddAuthorization(options =>
 {
