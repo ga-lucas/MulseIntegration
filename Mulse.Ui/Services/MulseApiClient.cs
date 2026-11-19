@@ -154,6 +154,18 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<FlowViewModel>(response, cancellationToken, "imported BizTalk flow response").ConfigureAwait(false);
     }
 
+    public async Task<BizTalkUpdatePlanViewModel> PlanBizTalkFlowUpdateAsync(string flowId, CreateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"/api/biztalk-import/flows/{Uri.EscapeDataString(flowId)}/update-plan", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<BizTalkUpdatePlanViewModel>(response, cancellationToken, "BizTalk flow update plan").ConfigureAwait(false);
+    }
+
+    public async Task<BizTalkUpdateResultViewModel> UpdateBizTalkFlowAsync(string flowId, UpdateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"/api/biztalk-import/flows/{Uri.EscapeDataString(flowId)}/update", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<BizTalkUpdateResultViewModel>(response, cancellationToken, "BizTalk flow update result").ConfigureAwait(false);
+    }
+
     public async Task<DownloadedFileViewModel> DownloadBizTalkScaffoldedModulesAsync(CreateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken)
     {
         using var response = await httpClient.PostAsJsonAsync("/api/biztalk-import/scaffolded-modules/download", request, cancellationToken).ConfigureAwait(false);
