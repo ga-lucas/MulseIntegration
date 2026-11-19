@@ -77,6 +77,9 @@ public interface IMulseApiClient
     Task<ModulePromptViewModel> BuildModulePromptAsync(string flowJson, string moduleId, string? description, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support module prompts.");
 
+    Task<RunExplanationViewModel> ExplainRunAsync(string executionId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support run explanations.");
+
     Task<FlowWordingDisclosureViewModel> PreviewFlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support AI wording of flow explanations.");
 

@@ -368,6 +368,20 @@ public sealed class FlowJournal : IDurableInbox
             };
         }, false, cancellationToken);
 
+    /// <summary>A run in the shape the assistant reads: states, stage names and event text. Message content is never loaded.</summary>
+    public Task<Service.Models.AssistRunSource> RunForAssistAsync(string executionId, CancellationToken cancellationToken)
+        => UseAsync(async session =>
+        {
+            var key = Key(executionId);
+            var execution = await session.Db.Executions.AsNoTracking().SingleOrDefaultAsync(row => row.Key == key, cancellationToken).ConfigureAwait(false)
+                ?? throw new KeyNotFoundException("Execution not found.");
+            var events = await session.Db.ExecutionEvents.AsNoTracking().Where(row => row.ExecutionKey == key).OrderBy(row => row.CreatedUtcTicks).Take(1000).ToArrayAsync(cancellationToken).ConfigureAwait(false);
+            var deliveries = await session.Db.Deliveries.AsNoTracking().Where(row => row.ExecutionKey == key).Take(1000).ToArrayAsync(cancellationToken).ConfigureAwait(false);
+            return new Service.Models.AssistRunSource(execution.ExecutionId, execution.FlowId, new Service.Models.AssistRunInput(execution.State,
+                [.. events.Select(row => new Service.Models.AssistRunEventInput(row.Stage, row.State, JsonSerializer.Deserialize<string?>(session.Decode(row.Detail, "event:" + row.Id.ToString("N")), Json)))],
+                [.. deliveries.Select(row => new Service.Models.AssistRunDeliveryInput(row.Stage, row.State))]));
+        }, false, cancellationToken);
+
     public static object Summary(ExecutionRecord row) => new { id = row.ExecutionId, row.FlowId, row.State, row.StartedUtcTicks, row.UpdatedUtcTicks };
 
     public Task<string> ReadMessageAsync(Guid id, CancellationToken cancellationToken)

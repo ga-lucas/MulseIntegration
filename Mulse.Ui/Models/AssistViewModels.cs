@@ -18,3 +18,6 @@ public sealed record ModulePromptViewModel(string Module, string Kind, List<stri
 public sealed record AssistSettingStateViewModel(string Key, string Label, string Description, bool Required, string State);
 public sealed record NodeExplanationViewModel(AssistStepViewModel Step, AssistNodeKindViewModel KindInfo, string? ModuleDescription,
     List<AssistSettingStateViewModel> Settings, List<string> Facts, List<AssistFindingViewModel> Findings);
+public sealed record RunDeliveryExplanationViewModel(string Stage, string State, string Meaning, bool NeedsPerson);
+public sealed record RunExplanationViewModel(string ExecutionId, string FlowId, string State, string Meaning, bool NeedsPerson, List<string> WhatHappened,
+    List<RunDeliveryExplanationViewModel> Deliveries, List<string> WhatToCheck, string Disclaimer);

@@ -506,6 +506,12 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<CompareExplainResponseViewModel>(response, cancellationToken, "explanation").ConfigureAwait(false);
     }
 
+    public async Task<RunExplanationViewModel> ExplainRunAsync(string executionId, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/assist/explain/run/" + Uri.EscapeDataString(executionId), cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<RunExplanationViewModel>(response, cancellationToken, "run explanation").ConfigureAwait(false);
+    }
+
     public async Task<FlowWordingDisclosureViewModel> PreviewFlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
     {
         using var response = await httpClient.PostAsJsonAsync("/api/authoring/flow-wording/preview", request, cancellationToken).ConfigureAwait(false);

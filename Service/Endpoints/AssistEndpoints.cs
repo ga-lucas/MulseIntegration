@@ -59,6 +59,18 @@ public static class AssistEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
 
+        group.MapGet("/explain/run/{executionId}", async (string executionId, IServiceProvider services, HttpResponse response, CancellationToken cancellationToken) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                var journal = services.GetService<Service.Execution.FlowJournal>()
+                    ?? throw new InvalidOperationException("Execution history requires a database storage engine, so there is no run to explain.");
+                return TypedResults.Ok(AssistRunExplainer.Explain(await journal.RunForAssistAsync(executionId, cancellationToken).ConfigureAwait(false)));
+            })
+            .WithName("ExplainRun")
+            .WithSummary("Facts about one stored run: what its state means, what each delivery's state means and what a person should check. Never repeats error text or message content, and never offers a retry")
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
+
         group.MapGet("/activity", (string? flowId, int? take, IServiceProvider services, HttpResponse response) =>
             {
                 response.Headers.CacheControl = "no-store";

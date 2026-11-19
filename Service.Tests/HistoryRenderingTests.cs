@@ -307,6 +307,49 @@ public sealed class HistoryRenderingTests
         }, flowId: "orders & billing");
     }
 
+    [Fact]
+    public async Task History_ExplainThisRunIsOnDemandShowsFactsAndOffersNoRetry()
+    {
+        using var handler = new HistoryHandler();
+        await RenderAsync(handler, async (page, html) =>
+        {
+            await InvokeAsync(page, "SelectExecutionAsync", "run-new");
+            Assert.Contains("data-testid=\"run-explain\"", html());
+            Assert.DoesNotContain("run-explanation", html());
+            Assert.DoesNotContain(handler.Requests, path => path.StartsWith("/api/assist/"));
+
+            await InvokeAsync(page, "ExplainRunAsync");
+            var text = html();
+            Assert.Contains("data-testid=\"run-explanation\"", text);
+            Assert.Contains("Mulse stopped this run on purpose.", text);
+            Assert.Contains("A person needs to look at this run.", text);
+            Assert.Contains("It may or may not have reached its destination.", text);
+            Assert.Contains("Check the destination by hand.", text);
+            Assert.Contains("does not resend or retry on your behalf", text);
+            Assert.DoesNotContain(Secret, text);
+            Assert.DoesNotContain(">Retry", text);
+            Assert.Contains("/api/assist/explain/run/run-new", handler.Requests);
+
+            await InvokeAsync(page, "SelectExecutionAsync", "run-held");
+            Assert.DoesNotContain("run-explanation", html());
+        });
+    }
+
+    [Fact]
+    public async Task History_ExplainThisRunShowsTheServerRefusal()
+    {
+        using var handler = new HistoryHandler(failedPath: "/api/assist/explain/run/run-new");
+        await RenderAsync(handler, async (page, html) =>
+        {
+            await InvokeAsync(page, "SelectExecutionAsync", "run-new");
+            await InvokeAsync(page, "ExplainRunAsync");
+            var text = html();
+            Assert.Contains("run-explain-error", text);
+            Assert.Contains("Unable to explain this run", text);
+            Assert.DoesNotContain("run-explanation", text);
+        });
+    }
+
     private static async Task RenderAsync(HistoryHandler handler, Func<History, Func<string>, Task> test, string? flowId = null)
     {
         using var httpClient = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("http://localhost") };
@@ -404,6 +447,9 @@ public sealed class HistoryRenderingTests
                     [new(ExecutionMessageId, "execution-channel", "Consumed", "run-new", ticks)],
                     [new(UnknownDeliveryId, "delivery-stage", _confirmed ? "Confirmed" : "Unknown", ticks),
                      new(CompletedDeliveryId, "completed-stage", "Succeeded", ticks)]),
+                "/api/assist/explain/run/run-new" => new RunExplanationViewModel("run-new", "orders-flow", "Held", "Mulse stopped this run on purpose.", true,
+                    ["1 event(s) were recorded."], [new("delivery-stage", "Unknown", "It may or may not have reached its destination.", true)],
+                    ["Check the destination by hand."], "Mulse does not resend or retry on your behalf from here."),
                 "/api/history/messages" => new HistoryMessageViewModel[]
                 {
                     new(InboxId, "inbox-channel", "Pending", null, ticks),
