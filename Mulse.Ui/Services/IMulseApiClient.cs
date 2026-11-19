@@ -74,6 +74,9 @@ public interface IMulseApiClient
     Task<IReadOnlyList<AssistGlossaryEntryViewModel>> SearchAssistGlossaryAsync(string? search, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support the glossary.");
 
+    Task<ModulePromptViewModel> BuildModulePromptAsync(string flowJson, string moduleId, string? description, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support module prompts.");
+
     Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken);
 
     Task<NativeMapConversionViewModel> ImportNativeXmlMappingAsync(XmlMappingImportRequestViewModel request, CancellationToken cancellationToken);

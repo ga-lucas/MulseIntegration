@@ -53,7 +53,7 @@ public static class AssistSurfaces
             [Action("draft", "Describe a flow and get a draft", Built: true, NeedsAi: true)]),
         new("native-editor", "Native flow editor",
             [Part("Step kinds and counts", AssistCategory.Structure, 20_000), Part("Module and setting names", AssistCategory.Structure, 40_000), Part("Conditions and expressions", AssistCategory.SourceExpressions, 40_000), Part("Setting values", AssistCategory.SettingValues, 40_000)],
-            [Action("explain-node", "Explain a step", Built: true, NeedsAi: false), Action("explain-flow", "Explain the whole flow", Built: true, NeedsAi: false), Action("explain-ai", "Put the explanation in plain words", Built: false, NeedsAi: true), Action("edit-node", "Change a selected step", Built: false, NeedsAi: true)]),
+            [Action("explain-node", "Explain a step", Built: true, NeedsAi: false), Action("explain-flow", "Explain the whole flow", Built: true, NeedsAi: false), Action("module-prompt", "Copy a prompt to write a missing module (manual copy and paste)", Built: true, NeedsAi: false), Action("explain-ai", "Put the explanation in plain words", Built: false, NeedsAi: true), Action("edit-node", "Change a selected step", Built: false, NeedsAi: true)]),
         new("mapping-designer", "Mapping designer",
             [Part("Field names and types", AssistCategory.Structure, 40_000), Part("Sample values", AssistCategory.MessageData, 40_000)],
             [Action("custom-function", "Copy a prompt for a formula stub (manual copy and paste)", Built: true, NeedsAi: false), Action("field-matches", "Suggest field matches", Built: false, NeedsAi: true)]),

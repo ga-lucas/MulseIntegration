@@ -19,6 +19,20 @@
                 }
             </ul>
         }
+        @if (_flow.MissingModules is { Count: > 0 })
+        {
+            <h4>Modules this server does not have</h4>
+            <p class="field-hint">The flow uses these modules, but none is installed here. Check Modules > Module Packages first: a package that is registered but not loaded may already contain it. Otherwise you can copy a prompt that asks an AI tool to write it. The prompt names the module and the setting names the flow gives it. It never includes setting values, expressions or messages. Describe what the module should do; the more you say, the better the result.</p>
+            <ul data-testid="explain-missing">
+                @foreach (var missing in _flow.MissingModules)
+                {
+                    <li @key="missing.Module">
+                        <strong>@missing.Module</strong> <span class="field-hint">(@missing.Kind, used by @missing.NodeIds.Count step(s))</span>
+                        <button type="button" class="secondary-button" disabled="@_busy" @onclick="() => ChooseModule(missing.Module)" data-testid="module-prompt-choose">Prepare a prompt</button>
+                    </li>
+                }
+            </ul>
+        }
         @if (_flow.Effects.Count > 0)
         {
             <h4>What it sends</h4>
@@ -58,6 +72,22 @@
             @foreach (var finding in _node.Findings) { <p class="field-hint">@finding.Severity: @finding.Text</p> }
         </div>
     }
+    @if (_promptModule is not null)
+    {
+        <div data-testid="module-prompt">
+            <h4>Prompt for the module '@_promptModule'</h4>
+            <label class="field-label">What should this module do? (optional; sent nowhere, it only goes into the prompt below)
+                <textarea class="mapping-input" rows="4" maxlength="4000" @bind="_moduleDescription" data-testid="module-prompt-description"></textarea>
+            </label>
+            <button type="button" class="secondary-button" disabled="@_busy" @onclick="BuildPromptAsync" data-testid="module-prompt-build">Build the prompt</button>
+            @if (_prompt is not null)
+            {
+                <p class="field-hint">Copy this into Copilot, ChatGPT or any assistant. @(_prompt.UnloadedPackages.Count > 0 ? $"Registered but not loaded packages that might already contain it: {string.Join(", ", _prompt.UnloadedPackages)}. " : "")It lists @_prompt.SettingKeys.Count setting name(s) and no values.</p>
+                <textarea class="sample-textarea" readonly rows="14" aria-label="AI prompt for the module" value="@_prompt.Prompt" data-testid="module-prompt-text"></textarea>
+                <p class="field-hint" data-testid="module-prompt-disclaimer">@_prompt.Disclaimer</p>
+            }
+        </div>
+    }
     <h4>BizTalk terms</h4>
     <label class="field-label">Look up a term <input class="mapping-input" @bind="_search" maxlength="80" data-testid="glossary-search" /></label>
     <button type="button" class="secondary-button" disabled="@_busy" @onclick="SearchAsync" data-testid="glossary-go">Look up</button>
@@ -82,13 +112,16 @@
     private FlowExplanationViewModel? _flow;
     private NodeExplanationViewModel? _node;
     private IReadOnlyList<AssistGlossaryEntryViewModel>? _terms;
+    private string? _promptModule;
+    private string _moduleDescription = "";
+    private ModulePromptViewModel? _prompt;
 
     protected override void OnParametersSet()
     {
         if (_definition == Value) return;
         _definition = Value;
         _revision++;
-        _flow = null; _node = null; _error = null;
+        _flow = null; _node = null; _error = null; _prompt = null; _promptModule = null;
     }
 
     private async Task RunAsync(Func<IMulseApiClient, int, Task> action)
@@ -114,6 +147,18 @@
     {
         var result = await api.ExplainNativeNodeAsync(Value, nodeId, default);
         if (revision == _revision) _node = result;
+    });
+
+    private void ChooseModule(string module)
+    {
+        _promptModule = module; _prompt = null; _error = null;
+    }
+
+    private Task BuildPromptAsync() => RunAsync(async (api, revision) =>
+    {
+        if (_promptModule is not { } module) return;
+        var result = await api.BuildModulePromptAsync(Value, module, string.IsNullOrWhiteSpace(_moduleDescription) ? null : _moduleDescription, default);
+        if (revision == _revision && _promptModule == module) _prompt = result;
     });
 
     private Task SearchAsync() => RunAsync(async (api, _) => _terms = await api.SearchAssistGlossaryAsync(_search, default));

@@ -28,8 +28,15 @@ public sealed class AssistExplainer(IModuleCatalog catalog)
         if (all.Count > 0 && !all.Any(node => node.Kind == NativeFlowNodeKind.Deliver))
             findings.Add(new("Info", "The flow has no Deliver step, so nothing is sent to a destination.", null));
 
-        return new(flow.Durable, all.Count, counts, steps, effects, findings, Disclaimer);
+        return new(flow.Durable, all.Count, counts, steps, effects, findings, Disclaimer, MissingOf(all, modules));
     }
+
+    private static List<AssistMissingModule> MissingOf(IEnumerable<NativeFlowNode> nodes, IReadOnlyList<ModuleDescriptor> modules)
+        => [.. nodes
+            .Where(node => ModuleKindOf(node.Kind) is not null && node.Module.Length > 0 && !modules.Any(module => string.Equals(module.Id, node.Module, StringComparison.OrdinalIgnoreCase)))
+            .GroupBy(node => (Module: node.Module.ToLowerInvariant(), Kind: ModuleKindOf(node.Kind)!.Value))
+            .OrderBy(group => group.Key.Module, StringComparer.Ordinal)
+            .Select(group => new AssistMissingModule(group.First().Module, group.Key.Kind.ToString(), [.. group.Select(node => node.Id)]))];
 
     public NodeExplanation ExplainNode(string flowJson, string nodeId)
     {
@@ -112,8 +119,17 @@ public sealed class AssistExplainer(IModuleCatalog catalog)
 
         if (moduleKind is not null && node.Module.Length > 0 && descriptor is null)
         {
-            notes.Add($"Module '{node.Module}' is not installed.");
-            findings.Add(new("Warning", $"'{title}' uses module '{node.Module}', which is not installed here, so the flow cannot run until it is.", node.Id));
+            var other = modules.FirstOrDefault(module => string.Equals(module.Id, node.Module, StringComparison.OrdinalIgnoreCase));
+            if (other is not null)
+            {
+                notes.Add($"Module '{node.Module}' is installed as a {other.Kind} module, not a {moduleKind}.");
+                findings.Add(new("Warning", $"'{title}' needs '{node.Module}' as a {moduleKind} module, but the installed module of that name is a {other.Kind} module.", node.Id));
+            }
+            else
+            {
+                notes.Add($"Module '{node.Module}' is not installed.");
+                findings.Add(new("Warning", $"'{title}' uses module '{node.Module}', which is not installed here, so the flow cannot run until it is.", node.Id));
+            }
         }
 
         if (descriptor is not null) CheckSettings(node, title, descriptor, notes, findings);

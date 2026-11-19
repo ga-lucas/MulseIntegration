@@ -185,6 +185,12 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<List<AssistGlossaryEntryViewModel>>(response, cancellationToken, "glossary").ConfigureAwait(false);
     }
 
+    public async Task<ModulePromptViewModel> BuildModulePromptAsync(string flowJson, string moduleId, string? description, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/assist/module-prompt", new { FlowJson = flowJson, ModuleId = moduleId, Description = description }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ModulePromptViewModel>(response, cancellationToken, "module prompt").ConfigureAwait(false);
+    }
+
     public async Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken)
     {
         using var response = await httpClient.PostAsJsonAsync("/api/flow-designer/xml-mapping/schemas", request, cancellationToken).ConfigureAwait(false);

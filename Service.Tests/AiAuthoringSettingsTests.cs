@@ -26,7 +26,9 @@ internal sealed class ReadOnlyCatalog(params ModuleDescriptor[] descriptors) : I
         return descriptors.Select(static item => new ModuleCatalogEntry("test", RuntimePackageSourceKind.BuiltIn, "", item)).ToArray();
     }
 
-    public IReadOnlyList<ModulePackageInfo> GetPackages() => throw new NotSupportedException();
+    public IReadOnlyList<ModulePackageInfo> GetPackages() => Packages;
+
+    public IReadOnlyList<ModulePackageInfo> Packages { get; init; } = [];
     public IDisposable PinFlowModules(PipelineDefinition flow) => throw new NotSupportedException();
     public ValueTask<ModuleLease<IFetchModule>> LeaseFetchAsync(string moduleId, CancellationToken cancellationToken) => throw new NotSupportedException();
     public ValueTask<ModuleLease<IParseModule>> LeaseParseAsync(string moduleId, CancellationToken cancellationToken) => throw new NotSupportedException();

@@ -9,6 +9,7 @@ public static class AssistEndpoints
     public static IServiceCollection AddAssist(this IServiceCollection services)
     {
         services.AddSingleton<AssistExplainer>();
+        services.AddSingleton<AssistModuleAuthoring>();
         return services;
     }
 
@@ -46,6 +47,17 @@ public static class AssistEndpoints
             .WithSummary("Facts about one native step, read locally. Setting values are never returned")
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound);
+
+        group.MapPost("/module-prompt", (ModulePromptRequest request, AssistModuleAuthoring authoring, HttpResponse response) =>
+            {
+                response.Headers.CacheControl = "no-store";
+                return TypedResults.Ok(authoring.Build(request.FlowJson, request.ModuleId, request.Description));
+            })
+            .WithName("BuildModuleAuthoringPrompt")
+            .WithSummary("A prompt, built locally, that asks an AI tool to write a module the flow needs but this server lacks. Setting names only, never values")
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         return app;
     }

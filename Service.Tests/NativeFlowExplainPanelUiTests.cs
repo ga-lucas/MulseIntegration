@@ -21,7 +21,7 @@ public sealed class NativeFlowExplainPanelUiTests
         [new(0, "w", "Wait", "Pause", null, null, "Waits.", ["5 second(s)"]), new(0, "d", "Deliver", "Send file", "sftp", "SFTP deliver", "Sends.", ["No automatic retry."])],
         ["Sends data with SFTP deliver"],
         [new("Warning", "Send file has no value for the required setting Host.", "d")],
-        "Facts only.");
+        "Facts only.", [new("acme-send", "Deliver", ["d"])]);
 
     private static NodeExplanationViewModel NodeExplanation() => new(new(0, "d", "Deliver", "Send file", "sftp", "SFTP deliver", "Sends.", []),
         new("Deliver", "Deliver", "Sends data.", "Sends", "External effect", []), "Sends a file over SFTP.",
@@ -68,6 +68,37 @@ public sealed class NativeFlowExplainPanelUiTests
         });
         using var body = JsonDocument.Parse(Assert.Single(fixture.Requests).Body);
         Assert.Equal("d", body.RootElement.GetProperty("nodeId").GetString());
+    }
+
+    [Fact]
+    public async Task OffersAPromptForAMissingModuleAndShowsItReadOnly()
+    {
+        await using var fixture = new Fixture();
+        fixture.Replies["/api/assist/explain/flow"] = Explanation();
+        fixture.Replies["/api/assist/module-prompt"] = new ModulePromptViewModel("acme-send", "Deliver", ["d"], ["url", "token"], ["old-pack"], "PROMPT BODY", "Review the code.");
+        await fixture.RunAsync(async component =>
+        {
+            await fixture.CallAsync(component, "ExplainFlowAsync");
+            await fixture.RefreshAsync(component);
+            var html = fixture.Html();
+            Assert.Contains("data-testid=\"explain-missing\"", html);
+            Assert.Contains("acme-send", html);
+            Assert.DoesNotContain("module-prompt-text", html);
+
+            fixture.Call(component, "ChooseModule", "acme-send");
+            typeof(NativeFlowExplainPanel).GetField("_moduleDescription", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(component, "Posts claims.");
+            await fixture.CallAsync(component, "BuildPromptAsync");
+            await fixture.RefreshAsync(component);
+            html = fixture.Html();
+            Assert.Contains("PROMPT BODY", html);
+            Assert.Contains("readonly", html);
+            Assert.Contains("old-pack", html);
+            Assert.Contains("2 setting name(s) and no values", html);
+            Assert.Contains("Review the code.", html);
+        });
+        using var body = JsonDocument.Parse(fixture.Requests.Last().Body);
+        Assert.Equal("acme-send", body.RootElement.GetProperty("moduleId").GetString());
+        Assert.Equal("Posts claims.", body.RootElement.GetProperty("description").GetString());
     }
 
     [Fact]
@@ -158,9 +189,14 @@ public sealed class NativeFlowExplainPanelUiTests
 
         public Task CallAsync(object target, string name, params object[] arguments)
         {
+            return (Task)Call(target, name, arguments)!;
+        }
+
+        public object? Call(object target, string name, params object[] arguments)
+        {
             var method = target.GetType().GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
                 .Single(candidate => candidate.Name == name && candidate.GetParameters().Length == arguments.Length);
-            return (Task)method.Invoke(target, arguments)!;
+            return method.Invoke(target, arguments);
         }
 
         public async ValueTask DisposeAsync()

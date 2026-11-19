@@ -30,6 +30,21 @@ public sealed record FlowExplanation(
     IReadOnlyList<AssistStep> Steps,
     IReadOnlyList<string> Effects,
     IReadOnlyList<AssistFinding> Findings,
+    string Disclaimer,
+    IReadOnlyList<AssistMissingModule>? MissingModules = null);
+
+/// <summary>A module the flow uses that is not installed on this server, with the steps that use it.</summary>
+public sealed record AssistMissingModule(string Module, string Kind, IReadOnlyList<string> NodeIds);
+
+public sealed record ModulePromptRequest(string FlowJson, string ModuleId, string? Description);
+
+public sealed record ModulePromptResponse(
+    string Module,
+    string Kind,
+    IReadOnlyList<string> NodeIds,
+    IReadOnlyList<string> SettingKeys,
+    IReadOnlyList<string> UnloadedPackages,
+    string Prompt,
     string Disclaimer);
 
 public sealed record AssistSettingState(string Key, string Label, string Description, bool Required, string State);

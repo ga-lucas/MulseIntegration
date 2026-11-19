@@ -142,6 +142,88 @@ public sealed class AssistFoundationTests
         Assert.Throws<KeyNotFoundException>(() => Explainer().ExplainNode(FlowJson, "missing"));
     }
 
+    private const string NeedsAcme = """
+        {"version":1,"durable":true,"nodes":[
+          {"id":"s","kind":"Deliver","module":"acme-send","messageName":"","settings":{"url":"https://private.example/secret-path","token":"tok-12345","bad\nkey":"x"},"settingExpressions":{"host":{"kind":"Variable","variable":"host"}},"retry":{"attempts":2,"intervalSeconds":5}},
+          {"id":"s2","kind":"Deliver","module":"ACME-send","settings":{"url":"u2"}}
+        ]}
+        """;
+
+    [Fact]
+    public void MissingModulesAreListedAndWrongKindIsNotCalledMissing()
+    {
+        var explanation = Explainer().ExplainFlow(FlowJson);
+        var missing = Assert.Single(explanation.MissingModules!);
+        Assert.Equal(("missing-mod", "Deliver"), (missing.Module, missing.Kind));
+        Assert.Equal(["m"], missing.NodeIds);
+
+        var renderOnly = new AssistExplainer(new ReadOnlyCatalog(new ModuleDescriptor("acme-send", "Acme", ModuleKind.Render, "d")));
+        var wrongKind = renderOnly.ExplainFlow(NeedsAcme);
+        Assert.Empty(wrongKind.MissingModules!);
+        Assert.Contains(wrongKind.Findings, finding => finding.Text.Contains("is a Render module"));
+    }
+
+    [Fact]
+    public void ModulePromptNamesTheModuleAndSettingKeysButNeverValues()
+    {
+        var authoring = new AssistModuleAuthoring(new ReadOnlyCatalog(Sftp()));
+        var result = authoring.Build(NeedsAcme, "acme-send", "Posts the file to the Acme claims API with a bearer token.");
+
+        Assert.Equal(("acme-send", "Deliver"), (result.Module, result.Kind));
+        Assert.Equal(["s", "s2"], result.NodeIds);
+        Assert.Equal(["bad?key", "host", "token", "url"], result.SettingKeys);
+        Assert.Contains("IDeliverModule", result.Prompt);
+        Assert.Contains("AddDeliver<T>()", result.Prompt);
+        Assert.Contains("module id: acme-send", result.Prompt);
+        Assert.Contains("- host (the flow calculates this when it runs)", result.Prompt);
+        Assert.Contains("retries up to 2 time(s)", result.Prompt);
+        Assert.Contains("Posts the file to the Acme claims API", result.Prompt);
+        Assert.DoesNotContain("private.example", result.Prompt);
+        Assert.DoesNotContain("tok-12345", result.Prompt);
+        Assert.DoesNotContain("\r", result.Prompt);
+        Assert.False(string.IsNullOrWhiteSpace(result.Disclaimer));
+    }
+
+    [Fact]
+    public void ModulePromptWithoutADescriptionTellsTheToolToAskAndListsUnloadedPackages()
+    {
+        var result = new AssistModuleAuthoring(new ReadOnlyCatalog()).Build(NeedsAcme, "acme-send", "  ");
+        Assert.Contains("Do not guess.", result.Prompt);
+        Assert.DoesNotContain("<<<DESCRIPTION", result.Prompt);
+        Assert.Empty(result.UnloadedPackages);
+
+        var packages = new ReadOnlyCatalog { Packages = [new("loaded-pack", "C:\\secret\\path.dll", RuntimePackageSourceKind.BuiltIn, true, DateTimeOffset.UnixEpoch, 1), new("idle-pack", "C:\\secret\\idle.dll", RuntimePackageSourceKind.BuiltIn, false, DateTimeOffset.UnixEpoch, 0)] };
+        var withPackages = new AssistModuleAuthoring(packages).Build(NeedsAcme, "acme-send", null);
+        Assert.Equal(["idle-pack"], withPackages.UnloadedPackages);
+        Assert.Contains("idle-pack", withPackages.Prompt);
+        Assert.DoesNotContain("loaded-pack", withPackages.Prompt.Replace("idle-pack", ""));
+        Assert.DoesNotContain("path.dll", withPackages.Prompt);
+        Assert.DoesNotContain("idle.dll", withPackages.Prompt);
+    }
+
+    [Fact]
+    public void ModulePromptRefusesWhatItCannotAnswerHonestly()
+    {
+        var authoring = new AssistModuleAuthoring(new ReadOnlyCatalog(Sftp()));
+        Assert.Throws<ArgumentException>(() => authoring.Build(NeedsAcme, " ", null));
+        Assert.Throws<ArgumentException>(() => authoring.Build(" ", "acme-send", null));
+        Assert.Throws<KeyNotFoundException>(() => authoring.Build(NeedsAcme, "nobody", null));
+        Assert.Throws<InvalidOperationException>(() => authoring.Build(FlowJson, "sftp", null));
+        var wrongKind = new AssistModuleAuthoring(new ReadOnlyCatalog(new ModuleDescriptor("acme-send", "Acme", ModuleKind.Render, "d")));
+        Assert.Contains("installed as a Render module", Assert.Throws<InvalidOperationException>(() => wrongKind.Build(NeedsAcme, "acme-send", null)).Message);
+    }
+
+    [Fact]
+    public void ModulePromptForATransformStatesTheArgumentCount()
+    {
+        const string json = """{"version":1,"durable":true,"nodes":[{"id":"t","kind":"InvokeTransform","module":"acme-math","variable":"r","transformInputs":[{"kind":"Variable","variable":"a"},{"kind":"Variable","variable":"b"}]}]}""";
+        var result = new AssistModuleAuthoring(new ReadOnlyCatalog()).Build(json, "acme-math", null);
+        Assert.Equal("Transform", result.Kind);
+        Assert.Contains("ITransformModule", result.Prompt);
+        Assert.Contains("passes 2 argument(s)", result.Prompt);
+        Assert.Contains("The flow passes 2 argument(s)", result.Prompt);
+    }
+
     [Fact]
     public async Task EndpointsServeCatalogsAndExplanations()
     {
@@ -177,6 +259,15 @@ public sealed class AssistFoundationTests
 
             using var missing = await client.PostAsJsonAsync("/api/assist/explain/node", new { flowJson = FlowJson, nodeId = "zzz" });
             Assert.Equal(System.Net.HttpStatusCode.NotFound, missing.StatusCode);
+
+            using var prompt = await client.PostAsJsonAsync("/api/assist/module-prompt", new { flowJson = FlowJson, moduleId = "missing-mod", description = "Does a thing." });
+            Assert.True(prompt.IsSuccessStatusCode, await prompt.Content.ReadAsStringAsync());
+            Assert.Equal("no-store", prompt.Headers.CacheControl?.ToString());
+            Assert.Contains("IDeliverModule", await prompt.Content.ReadAsStringAsync());
+            using var installed = await client.PostAsJsonAsync("/api/assist/module-prompt", new { flowJson = FlowJson, moduleId = "sftp" });
+            Assert.Equal(System.Net.HttpStatusCode.Conflict, installed.StatusCode);
+            using var unused = await client.PostAsJsonAsync("/api/assist/module-prompt", new { flowJson = FlowJson, moduleId = "nobody" });
+            Assert.Equal(System.Net.HttpStatusCode.NotFound, unused.StatusCode);
             using var bad = await client.PostAsJsonAsync("/api/assist/explain/flow", new { flowJson = "{oops" });
             Assert.Equal(System.Net.HttpStatusCode.BadRequest, bad.StatusCode);
         }
