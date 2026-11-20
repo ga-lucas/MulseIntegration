@@ -26,6 +26,16 @@ internal sealed class FakeRuntimeConfigurationStore(RuntimeMulseState state) : I
         return Task.FromResult(state);
     }
 
+    public Task<IReadOnlyList<string>> DisableFlowsWithMissingModulesAsync(IReadOnlyList<ModuleCatalogEntry> available, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var affected = state.Pipelines.Where(flow => flow.Enabled
+            && Service.Flows.FlowModuleDependencies.FindMissing(flow, available, state.ConfigValues, includeDependencyErrors: false).Count > 0).ToArray();
+        foreach (var flow in affected)
+            state.Pipelines[state.Pipelines.IndexOf(flow)] = Service.Flows.FlowMappings.WithEnabled(flow, false);
+        return Task.FromResult<IReadOnlyList<string>>(affected.Select(flow => flow.Id).ToArray());
+    }
+
     public Task<RuntimeMulseState> DeleteFlowAsync(string flowId, CancellationToken cancellationToken)
     {
         state.Pipelines.RemoveAll(existing => string.Equals(existing.Id, flowId, StringComparison.OrdinalIgnoreCase));

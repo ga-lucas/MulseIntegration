@@ -65,6 +65,10 @@
                                 <div><dt>Last loaded</dt><dd>@(package.LastLoadedAt == DateTimeOffset.MinValue ? "n/a" : package.LastLoadedAt.ToLocalTime().ToString("g"))</dd></div>
                             </dl>
                             <p><strong>Assembly:</strong> @package.AssemblyPath</p>
+                            @if (package.LoadFailure is { } failure)
+                            {
+                                <StatusBanner Error="@($"{(package.IsLoaded ? "Package update failed; the previous version is still loaded." : "Package could not be loaded.")} {failure}")" Compact="true" />
+                            }
                             <h4>Modules in this package</h4>
                             @if (!package.IsLoaded)
                             {

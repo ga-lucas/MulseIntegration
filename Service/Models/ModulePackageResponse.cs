@@ -9,9 +9,10 @@ public sealed record ModulePackageResponse(
     RuntimePackageSourceKind SourceKind,
     bool IsLoaded,
     DateTimeOffset LastLoadedAt,
-    int ModuleCount)
+    int ModuleCount,
+    string? LoadFailure = null)
 {
     /// <summary>Maps a runtime <see cref="ModulePackageInfo"/> to its API response shape.</summary>
     public static ModulePackageResponse From(ModulePackageInfo package)
-        => new(package.Id, package.AssemblyPath, package.SourceKind, package.IsLoaded, package.LastLoadedAt, package.ModuleCount);
+        => new(package.Id, package.AssemblyPath, package.SourceKind, package.IsLoaded, package.LastLoadedAt, package.ModuleCount, package.LoadFailure);
 }

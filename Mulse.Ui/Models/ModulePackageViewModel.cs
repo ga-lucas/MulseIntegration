@@ -6,4 +6,5 @@ public sealed record ModulePackageViewModel(
     string SourceKind,
     bool IsLoaded,
     DateTimeOffset LastLoadedAt,
-    int ModuleCount);
+    int ModuleCount,
+    string? LoadFailure = null);

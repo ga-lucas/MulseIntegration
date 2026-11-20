@@ -75,6 +75,63 @@ public sealed class ModulePackageLifecycleTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Startup_FailedPackageDisablesOnlyDependentFlowsAndCanRecover(bool corrupt)
+    {
+        var store = Store();
+        var brokenPath = Path.Combine(_directory, "broken", "plugin.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(brokenPath)!);
+        if (corrupt) await File.WriteAllTextAsync(brokenPath, "not an assembly");
+        await store.UpsertManagedPackageAsync(new() { Id = "broken", AssemblyPath = brokenPath, Enabled = true }, default);
+        var healthyPath = Path.Combine(_directory, "healthy", "plugin.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(healthyPath)!);
+        File.Copy(typeof(LifecycleTestInstaller).Assembly.Location, healthyPath);
+        await store.UpsertManagedPackageAsync(new() { Id = "healthy", AssemblyPath = healthyPath, Enabled = true }, default);
+        await store.UpsertFlowAsync(Flow("affected", "sample-text-batch-render", render: true), default);
+        await store.UpsertFlowAsync(Flow("healthy-flow", "lifecycle-test-fetch"), default);
+        await store.UpsertFlowAsync(Flow("built-in-flow", "file-system-fetch"), default);
+        await store.UpsertRetryStateAsync(new() { FlowId = "affected", ExecutionId = "pending", StageId = "render:0" }, default);
+
+        var catalog = Catalog(store);
+        using var worker = new ModuleSynchronizationService(catalog, NullLogger<ModuleSynchronizationService>.Instance);
+        await worker.StartingAsync(default);
+
+        var persisted = Store().GetState();
+        var affected = Assert.Single(persisted.Pipelines, flow => flow.Id == "affected");
+        Assert.False(affected.Enabled);
+        Assert.All(persisted.Pipelines.Where(flow => flow.Id != affected.Id), flow => Assert.True(flow.Enabled));
+        Assert.Equal("pending", Assert.Single(persisted.PendingRetries).ExecutionId);
+        Assert.Equal(new[] { "Render: sample-text-batch-render" }, Service.Flows.FlowModuleDependencies.FindMissing(affected, catalog.GetAll()));
+        var failed = Assert.Single(catalog.GetPackages(), package => package.Id == "broken");
+        Assert.False(failed.IsLoaded);
+        Assert.Contains(corrupt ? "dependencies" : "not found", Service.Models.ModulePackageResponse.From(failed).LoadFailure);
+        Assert.True(Assert.Single(catalog.GetPackages(), package => package.Id == "healthy").IsLoaded);
+
+        File.Copy(typeof(Mulse.SamplePlugin.SamplePluginInstaller).Assembly.Location, brokenPath, overwrite: true);
+        await catalog.SynchronizeAsync(default);
+        var repaired = Assert.Single(catalog.GetPackages(), package => package.Id == "broken");
+        Assert.True(repaired.IsLoaded);
+        Assert.Null(repaired.LoadFailure);
+        Assert.Empty(Service.Flows.FlowModuleDependencies.FindMissing(affected, catalog.GetAll()));
+        Assert.False(Assert.Single(Store().GetState().Pipelines, flow => flow.Id == affected.Id).Enabled);
+
+        // Unload the fixture assemblies before deleting their shadow copies on Windows.
+        await store.DeleteFlowAsync(affected.Id, default);
+        await store.DeleteFlowAsync("healthy-flow", default);
+        await catalog.RemoveManagedPackageAsync("broken", default);
+        await catalog.RemoveManagedPackageAsync("healthy", default);
+
+        static PipelineDefinition Flow(string id, string module, bool render = false) => new()
+        {
+            Id = id,
+            Fetches = [new() { Id = "fetch", Fetch = new() { Module = render ? "file-system-fetch" : module } }],
+            Parses = [new() { Id = "parse", Parse = new() { Module = "json-parse" }, FetchNodeIds = ["fetch"] }],
+            Deliveries = [new() { Render = new() { Module = render ? module : "json-render" } }]
+        };
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task DiscoveryDuringExecution_ListsOnlyCompatiblePackagesAsUnloaded(bool subdirectory)
     {
         var store = Store();

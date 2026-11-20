@@ -1,11 +1,14 @@
 namespace Service.Modules;
 
-public sealed class ModuleSynchronizationService(IModuleCatalog moduleCatalog, ILogger<ModuleSynchronizationService> logger) : BackgroundService
+public sealed class ModuleSynchronizationService(IModuleCatalog moduleCatalog, ILogger<ModuleSynchronizationService> logger) : BackgroundService, IHostedLifecycleService
 {
+    public Task StartingAsync(CancellationToken cancellationToken) => moduleCatalog.SynchronizeAsync(cancellationToken);
+    public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await moduleCatalog.SynchronizeAsync(stoppingToken).ConfigureAwait(false);
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try

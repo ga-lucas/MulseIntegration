@@ -246,6 +246,27 @@ public sealed class RuntimeConfigurationStore : IRuntimeConfigurationStore
         }
     }
 
+    public async Task<IReadOnlyList<string>> DisableFlowsWithMissingModulesAsync(IReadOnlyList<ModuleCatalogEntry> available, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_database?.IsMigrationSourceSealed == true) return [];
+
+            var disabled = _state.Pipelines.Where(flow => flow.Enabled
+                && FlowModuleDependencies.FindMissing(flow, available, _state.ConfigValues, includeDependencyErrors: false).Count > 0)
+                .Select(flow => flow.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (disabled.Count == 0) return [];
+
+            var updated = Clone(_state);
+            updated.Pipelines = updated.Pipelines.Select(flow => disabled.Contains(flow.Id)
+                ? FlowMappings.WithEnabled(flow, false) : flow).ToList();
+            await CommitWorkspaceAsync(updated, cancellationToken).ConfigureAwait(false);
+            return disabled.ToArray();
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<RuntimeMulseState> DeleteFlowAsync(string flowId, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);

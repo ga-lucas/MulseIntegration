@@ -16,6 +16,7 @@ public sealed class ModuleCatalog : IModuleCatalog
     private readonly Dictionary<string, RegisteredPackage> _packagesById = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, RegisteredModule> _modulesById = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (ModulePackageInfo Info, DateTime LastWriteTimeUtc)> _discoveredPackages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _packageLoadFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _synchronizationGate = new(1, 1);
 
     public ModuleCatalog(
@@ -112,6 +113,7 @@ public sealed class ModuleCatalog : IModuleCatalog
             return loadedPackages
                 .Concat(unloadedManagedPackages)
                 .Concat(discoveredPackages)
+                .Select(package => package with { LoadFailure = _packageLoadFailures.GetValueOrDefault(package.Id) })
                 .OrderBy(static package => package.SourceKind)
                 .ThenBy(static package => package.Id, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -177,11 +179,19 @@ public sealed class ModuleCatalog : IModuleCatalog
                 if (!managedPackage.Enabled)
                 {
                     await UnloadPackageIfExistsAsync(managedPackage.Id, cancellationToken).ConfigureAwait(false);
+                    ClearPackageLoadFailure(managedPackage.Id);
                     continue;
                 }
 
-                var assemblyPath = ResolveManagedAssemblyPath(managedPackage, runtimeState.PluginDirectories);
-                await LoadOrReloadPackageAsync(managedPackage.Id, assemblyPath, RuntimePackageSourceKind.Managed, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var assemblyPath = ResolveManagedAssemblyPath(managedPackage, runtimeState.PluginDirectories);
+                    await LoadOrReloadPackageAsync(managedPackage.Id, assemblyPath, RuntimePackageSourceKind.Managed, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    RecordPackageLoadFailure(managedPackage.Id, exception);
+                }
             }
 
             var managedPackageIds = runtimeState.ManagedPackages.Select(static package => package.Id)
@@ -238,11 +248,37 @@ public sealed class ModuleCatalog : IModuleCatalog
             {
                 await UnloadPackageIfExistsAsync(staleAutoPackageId, cancellationToken).ConfigureAwait(false);
             }
+
+            lock (_syncRoot)
+                foreach (var staleId in _packageLoadFailures.Keys.Where(id => !managedPackageIds.Contains(id)).ToArray())
+                    _packageLoadFailures.Remove(staleId);
+
+            var disabled = await _runtimeConfigurationStore.DisableFlowsWithMissingModulesAsync(GetAll(), cancellationToken).ConfigureAwait(false);
+            foreach (var flowId in disabled)
+                _logger.LogWarning("Disabled flow {FlowId} because one or more module dependencies are unavailable.", flowId);
         }
         finally
         {
             _synchronizationGate.Release();
         }
+    }
+
+    private void RecordPackageLoadFailure(string packageId, Exception exception)
+    {
+        var reason = exception is ArgumentException { ParamName: "assemblyPath" }
+            ? "The plugin assembly was not found. Restore the package files or correct the assembly path."
+            : "Check that the package targets a supported .NET version and that its dependencies are installed. See the Service log for details.";
+        lock (_syncRoot)
+        {
+            if (_packageLoadFailures.GetValueOrDefault(packageId) == reason) return;
+            _packageLoadFailures[packageId] = reason;
+        }
+        _logger.LogWarning(exception, "Module package {PackageId} could not be loaded or updated.", packageId);
+    }
+
+    private void ClearPackageLoadFailure(string packageId)
+    {
+        lock (_syncRoot) _packageLoadFailures.Remove(packageId);
     }
 
     public async Task<ModulePackageInfo> UpsertManagedPackageAsync(ManagedModulePackageDefinition package, CancellationToken cancellationToken)
@@ -275,6 +311,7 @@ public sealed class ModuleCatalog : IModuleCatalog
             {
                 await ChangeAndUnloadAsync(package.Id,
                     () => _runtimeConfigurationStore.UpsertManagedPackageAsync(package, cancellationToken), cancellationToken).ConfigureAwait(false);
+                ClearPackageLoadFailure(package.Id);
             }
             return GetPackages().First(packageInfo => string.Equals(packageInfo.Id, package.Id, StringComparison.OrdinalIgnoreCase));
         }
@@ -578,16 +615,28 @@ public sealed class ModuleCatalog : IModuleCatalog
             && existingPackage.SourceKind == sourceKind
             && existingPackage.SourceFileLastWriteTimeUtc == sourceLastWriteTimeUtc)
         {
+            ClearPackageLoadFailure(packageId);
             return;
         }
 
         var package = CreatePackageFromAssembly(packageId, sourceKind, fullAssemblyPath, sourceLastWriteTimeUtc);
-        AddOrReplacePackage(package, replaceExisting: true, previousPackage: out var previousPackage);
+        RegisteredPackage? previousPackage;
+        try
+        {
+            AddOrReplacePackage(package, replaceExisting: true, out previousPackage);
+        }
+        catch
+        {
+            package.LoadContext?.Unload();
+            throw;
+        }
+
         if (previousPackage is not null)
         {
             await UnloadPackageAsync(previousPackage, cancellationToken).ConfigureAwait(false);
         }
 
+        ClearPackageLoadFailure(packageId);
         _logger.LogInformation("Loaded module package {PackageId} from {AssemblyPath}.", packageId, fullAssemblyPath);
     }
 

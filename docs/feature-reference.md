@@ -100,6 +100,11 @@ Two ways to ship a module:
   **Modules > Module Packages**. Loading uses a collectible `AssemblyLoadContext` so packages can
   later be reloaded or unloaded without restarting the service, subject to dependency/active-use guards.
 
+A failed registered plugin does not prevent Service from starting or other packages from loading.
+**Module Packages** identifies the failed package; **Flows** lists each affected flow's unavailable module IDs.
+Service saves those flows as disabled without deleting pending work. After restoring the package, review
+and re-enable the flows explicitly; loading a plugin does not automatically resume them.
+
 Plugins can target **.NET 8, 9, 10 or 11** on the current .NET 11 host. `Mulse.Modules` provides `net8.0` and
 `net11.0` SDK assets; .NET 9/10 projects use the .NET 8 asset. Use the SDK from the deployed Mulse release.
 All plugin code runs on the host CLR; no separate older runtime installation is needed. .NET Framework and

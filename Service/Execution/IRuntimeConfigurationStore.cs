@@ -17,6 +17,8 @@ public interface IRuntimeConfigurationStore
 
     Task<RuntimeMulseState> UpsertFlowAsync(PipelineDefinition pipeline, CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<string>> DisableFlowsWithMissingModulesAsync(IReadOnlyList<ModuleCatalogEntry> available, CancellationToken cancellationToken);
+
     Task<RuntimeMulseState> DeleteFlowAsync(string flowId, CancellationToken cancellationToken);
 
     Task<RuntimeMulseState> UpsertManagedPackageAsync(ManagedModulePackageDefinition package, CancellationToken cancellationToken);

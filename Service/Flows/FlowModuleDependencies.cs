@@ -98,18 +98,22 @@ internal static class FlowModuleDependencies
         }
     }
 
-    public static IReadOnlyList<string> FindMissing(PipelineDefinition flow, IReadOnlyList<ModuleCatalogEntry> available, IReadOnlyDictionary<string, string>? configValues = null)
+    public static IReadOnlyList<string> FindMissing(PipelineDefinition flow, IReadOnlyList<ModuleCatalogEntry> available,
+        IReadOnlyDictionary<string, string>? configValues = null, bool includeDependencyErrors = true)
     {
+        var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            return References(flow, configValues).Where(reference => !available.Any(entry => entry.Descriptor.Kind == reference.Kind
+            foreach (var reference in References(flow, configValues))
+                if (!available.Any(entry => entry.Descriptor.Kind == reference.Kind
                     && string.Equals(entry.Descriptor.Id, reference.Id, StringComparison.OrdinalIgnoreCase)))
-                .Select(reference => $"{reference.Kind}: {reference.Id}").Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                    missing.Add($"{reference.Kind}: {reference.Id}");
         }
-        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or JsonException)
         {
-            return [exception.Message];
+            if (includeDependencyErrors) missing.Add(exception.Message);
         }
+        return missing.ToArray();
     }
 
     public static void EnsureAvailable(PipelineDefinition flow, IReadOnlyList<ModuleCatalogEntry> available, IReadOnlyDictionary<string, string>? configValues = null)
