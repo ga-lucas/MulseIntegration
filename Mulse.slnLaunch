@@ -1,0 +1,22 @@
+[
+  {
+	"Name": "Mulse (Aspire)",
+	"Projects": [
+	  {
+		"Path": "Mulse.AppHost\\Mulse.AppHost.csproj",
+		"Action": "Start",
+		"DebugTarget": "https"
+	  }
+	]
+  },
+  {
+	"Name": "Mulse (Aspire, existing Keycloak)",
+	"Projects": [
+	  {
+		"Path": "Mulse.AppHost\\Mulse.AppHost.csproj",
+		"Action": "Start",
+		"DebugTarget": "external-keycloak"
+	  }
+	]
+  }
+]

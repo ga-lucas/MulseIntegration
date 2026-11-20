@@ -1,0 +1,51 @@
+services:
+  service:
+    build:
+      context: .
+      dockerfile: Service/Dockerfile
+    environment:
+      Authentication__Authority: ${MULSE_OIDC_AUTHORITY:?Set MULSE_OIDC_AUTHORITY}
+      Authentication__ApiClientId: ${MULSE_API_CLIENT_ID:-mulse-service}
+      Authentication__ApiAudience: ${MULSE_API_AUDIENCE:-mulse-api}
+      Authentication__ApiAccessRole: ${MULSE_API_ACCESS_ROLE:-mulse-api-access}
+    volumes:
+      - service-data:/app/Data
+      - type: bind
+        source: ${MULSE_PLUGIN_DIR:-./.mulse-compose/plugins}
+        target: /app/plugins
+        read_only: true
+    stop_grace_period: 100s
+
+  ui:
+    build:
+      context: .
+      dockerfile: Mulse.Ui/Dockerfile
+    environment:
+      ASPNETCORE_URLS: https://+:8443
+      ASPNETCORE_Kestrel__Certificates__Default__Path: /https/mulse.pfx
+      ASPNETCORE_Kestrel__Certificates__Default__Password: ${MULSE_TLS_PASSWORD:?Set MULSE_TLS_PASSWORD}
+      Authentication__Authority: ${MULSE_OIDC_AUTHORITY:?Set MULSE_OIDC_AUTHORITY}
+      Authentication__ClientId: ${MULSE_UI_CLIENT_ID:-mulse-ui}
+      Authentication__ClientSecret: ${MULSE_UI_CLIENT_SECRET:?Set MULSE_UI_CLIENT_SECRET}
+      Authentication__AdminRole: ${MULSE_UI_ADMIN_ROLE:-mulse-admin}
+      MulseApi__BaseUrl: http://service:8080
+      MulseApi__ClientId: ${MULSE_API_CLIENT_ID:-mulse-service}
+      MulseApi__ClientSecret: ${MULSE_API_CLIENT_SECRET:?Set MULSE_API_CLIENT_SECRET}
+    ports:
+      - "127.0.0.1:${MULSE_HTTPS_PORT:-7443}:8443"
+    volumes:
+      - ui-data:/app/Data
+      - ui-keys:/home/app/.aspnet/DataProtection-Keys
+      - type: bind
+        source: ${MULSE_TLS_CERT:-./.mulse-compose/mulse.pfx}
+        target: /https/mulse.pfx
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      - service
+
+volumes:
+  service-data:
+  ui-data:
+  ui-keys:

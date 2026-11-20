@@ -1,0 +1,75 @@
+{
+  "realm": "mulse",
+  "enabled": true,
+  "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "${MULSE_UI_ADMIN_ROLE}" },
+      { "name": "${MULSE_API_ACCESS_ROLE}" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "${MULSE_UI_CLIENT_ID}",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${MULSE_UI_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://localhost:${MULSE_HTTPS_PORT}/signin-oidc"],
+      "attributes": { "post.logout.redirect.uris": "https://localhost:${MULSE_HTTPS_PORT}/signout-callback-oidc" },
+      "protocolMappers": [
+        {
+          "name": "mulse-realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "${MULSE_API_CLIENT_ID}",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${MULSE_API_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "mulse-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "${MULSE_API_AUDIENCE}", "access.token.claim": "true" }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "mulse-admin",
+      "enabled": true,
+      "firstName": "Mulse",
+      "lastName": "Admin",
+      "email": "mulse-admin@example.invalid",
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "${MULSE_KEYCLOAK_USER_PASSWORD}", "temporary": false }
+      ],
+      "realmRoles": ["${MULSE_UI_ADMIN_ROLE}"]
+    },
+    {
+      "username": "service-account-${MULSE_API_CLIENT_ID}",
+      "enabled": true,
+      "serviceAccountClientId": "${MULSE_API_CLIENT_ID}",
+      "realmRoles": ["${MULSE_API_ACCESS_ROLE}"]
+    }
+  ]
+}

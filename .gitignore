@@ -362,8 +362,10 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 
-# Local authentication sandbox secrets
+# Local Docker and authentication settings
 .env.auth
+.env.mulse
+/.mulse-compose/
 
 # Plugin build output
 /Service/plugins/

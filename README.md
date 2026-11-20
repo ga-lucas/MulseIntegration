@@ -14,18 +14,21 @@ See the [screenshot gallery](docs/screenshots.md) for the flow designer, BizTalk
 
 ## Run locally
 
-Install the **.NET 11 SDK** and open `Mulse.slnx` in Visual Studio, or follow these steps from the repository root.
+Install the **.NET 11 SDK** and start Docker in **Linux container mode**. Follow the [one-time Aspire setup](docs/feature-reference.md#run-with-aspire), including the instructions to [reuse an existing Keycloak database](docs/feature-reference.md#reuse-the-compose-keycloak-database) if you already use `compose.auth.yml`.
 
-1. Set up [local Keycloak](docs/feature-reference.md#local-identity-provider-sandbox) and [OIDC clients and secrets](docs/feature-reference.md#mulse-oidc-authentication). If you already have this setup, start the existing Keycloak stack without replacing its database volume.
-2. Build the solution and trust the local HTTPS development certificate:
+Select **Mulse (Aspire)** in Visual Studio's startup dropdown and press **F5**, or run this from the repository root:
 
-   ```powershell
-   dotnet build .\Mulse.slnx
-   dotnet dev-certs https --trust
-   ```
+```powershell
+dotnet run --project .\Mulse.AppHost\Mulse.AppHost.csproj
+```
 
-3. From `Service`, run `dotnet run --launch-profile Service`. The runtime uses SQLite by default. Its [Development OpenAPI document](http://localhost:5210/openapi/v1.json) is on port 5210.
-4. From `Mulse.Ui` in a second terminal, run `dotnet run --launch-profile https` and open [https://localhost:7021](https://localhost:7021). The UI uses `http://localhost:5210` for the API by default; override it with `MulseApi__BaseUrl` if needed.
+Aspire starts Service, UI, Keycloak, and Keycloak's PostgreSQL database. Open [Mulse](https://localhost:7021) or the [Keycloak admin console](http://localhost:8081). On a fresh database, [configure the Mulse realm and OIDC clients](docs/feature-reference.md#mulse-oidc-authentication) before signing into Mulse. Mulse itself still uses SQLite by default.
+
+For faster restarts, [keep Keycloak running in Docker](docs/feature-reference.md#run-with-an-existing-keycloak) and use **Mulse (Aspire, existing Keycloak)**. This profile starts only Service and UI.
+
+## Run with Docker Compose
+
+[Run Service and UI as separate containers](docs/docker-compose.md) without Visual Studio or Aspire. Use bundled Keycloak or connect to an existing HTTPS OIDC provider.
 
 ## Documentation
 

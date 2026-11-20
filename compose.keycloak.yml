@@ -1,0 +1,68 @@
+services:
+  service:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  ui:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+
+  keycloak-db:
+    image: postgres:18.3
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${MULSE_KEYCLOAK_DB_PASSWORD:?Set MULSE_KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - keycloak-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD, pg_isready, -U, keycloak, -d, keycloak]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6
+    command: [start-dev, --import-realm]
+    environment:
+      KC_HOSTNAME: http://mulse-auth.test:${MULSE_KEYCLOAK_PORT:-8180}
+      KC_HTTP_PORT: ${MULSE_KEYCLOAK_PORT:-8180}
+      KC_HEALTH_ENABLED: "true"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${MULSE_KEYCLOAK_DB_PASSWORD:?Set MULSE_KEYCLOAK_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: mulse-bootstrap
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${MULSE_KEYCLOAK_ADMIN_PASSWORD:?Set MULSE_KEYCLOAK_ADMIN_PASSWORD}
+      MULSE_KEYCLOAK_USER_PASSWORD: ${MULSE_KEYCLOAK_USER_PASSWORD:?Set MULSE_KEYCLOAK_USER_PASSWORD}
+      MULSE_UI_CLIENT_ID: ${MULSE_UI_CLIENT_ID:-mulse-ui}
+      MULSE_UI_CLIENT_SECRET: ${MULSE_UI_CLIENT_SECRET:?Set MULSE_UI_CLIENT_SECRET}
+      MULSE_API_CLIENT_ID: ${MULSE_API_CLIENT_ID:-mulse-service}
+      MULSE_API_CLIENT_SECRET: ${MULSE_API_CLIENT_SECRET:?Set MULSE_API_CLIENT_SECRET}
+      MULSE_API_AUDIENCE: ${MULSE_API_AUDIENCE:-mulse-api}
+      MULSE_API_ACCESS_ROLE: ${MULSE_API_ACCESS_ROLE:-mulse-api-access}
+      MULSE_UI_ADMIN_ROLE: ${MULSE_UI_ADMIN_ROLE:-mulse-admin}
+      MULSE_HTTPS_PORT: ${MULSE_HTTPS_PORT:-7443}
+    ports:
+      - "127.0.0.1:${MULSE_KEYCLOAK_PORT:-8180}:${MULSE_KEYCLOAK_PORT:-8180}"
+    volumes:
+      - ./deploy/keycloak/mulse-realm.json:/opt/keycloak/data/import/mulse-realm.json:ro
+    networks:
+      default:
+        aliases:
+          - mulse-auth.test
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /bin/bash, -ec, 'exec 3<>/dev/tcp/127.0.0.1/9000; printf "GET /health/ready HTTP/1.0\r\n\r\n" >&3; read -r status <&3; [[ "$$status" == "HTTP/1."*" 200 "* ]]']
+      interval: 5s
+      timeout: 3s
+      start_period: 45s
+      retries: 20
+
+volumes:
+  keycloak-data:

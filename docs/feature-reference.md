@@ -1303,6 +1303,87 @@ not proof of BizTalk-equivalent behavior.
 Prerequisites: **.NET 11 SDK**; **Node.js** only for the browser JavaScript tests. SQL Server and SFTP/SMTP
 servers are required only for flows using them. Excel does not require Microsoft Excel to be installed.
 
+### Run with Aspire
+
+Start a Linux container engine (Docker Engine on Linux, or Docker Desktop in Linux container mode on
+Windows or macOS). The existing Keycloak and PostgreSQL images support Linux x64 and ARM64. For a fresh
+Keycloak database, set two different, long random passwords in **Manage User Secrets** for `Mulse.AppHost`
+(not `Mulse.Ui`):
+
+```json
+{
+  "Parameters": {
+    "keycloak-db-password": "<local-database-password>",
+    "keycloak-admin-password": "<local-bootstrap-admin-password>"
+  }
+}
+```
+
+If you already use `compose.auth.yml`, follow the [database handoff](#reuse-the-compose-keycloak-database)
+below instead of generating a new database password.
+
+From the repository root, trust the development certificate, then launch the AppHost:
+
+```powershell
+dotnet dev-certs https --trust
+dotnet run --project .\Mulse.AppHost\Mulse.AppHost.csproj
+```
+
+In Visual Studio, select **Mulse (Aspire)** in the startup dropdown and press **F5** instead. If the profile
+isn't listed, reload `Mulse.slnx` or set `Mulse.AppHost` as the startup project directly. Don't launch Service
+or UI separately when using this profile. Aspire runs both as local .NET projects and starts Keycloak and
+its PostgreSQL database in Docker. Open **https://localhost:7021** for Mulse, or **http://localhost:8081** for
+Keycloak. Sign into Keycloak with
+`mulse-admin` and your bootstrap password on fresh installs, then complete the one-time
+[Mulse realm, clients and UI secrets setup](#mulse-oidc-authentication). Mulse workspace storage still uses
+SQLite by default. Keycloak data persists in the named volume `mulse-aspire-keycloak-db-data` by default.
+Stop the AppHost to stop its resources without deleting the database. This configuration is for local development only.
+
+If port 8081 is unavailable, the AppHost setting `LocalAuth:Port` changes both the Keycloak listener and
+issuer. It does not change the UI callback at `https://localhost:7021/signin-oidc`.
+
+#### Reuse the Compose Keycloak database
+
+Back up the existing database before switching. In `Mulse.AppHost` user secrets, use the existing
+`.env.auth` values for `Parameters:keycloak-db-password` (`KC_DB_PASSWORD`),
+`Parameters:keycloak-admin-password` (`KC_BOOTSTRAP_ADMIN_PASSWORD`), and, if nondefault,
+`LocalAuth:AdminUsername` (`KC_BOOTSTRAP_ADMIN_USERNAME`). Set `LocalAuth:DatabaseVolume` to
+`mulse-auth-dev_keycloak-db-data` (verify the name with `docker volume ls`). Keep the existing UI
+client secrets in `Mulse.Ui` user secrets.
+
+Before starting Aspire, stop the old stack from the repository root:
+
+```powershell
+docker compose --env-file .env.auth -f .\compose.auth.yml down
+```
+
+Do **not** add `--volumes`, and never run Compose and Aspire against the same database volume at the
+same time. The existing realm, users and clients are kept. To switch back, stop the AppHost first and
+then start Compose again. Stop any previous Service and UI debug sessions as well; Aspire uses the same local ports.
+
+### Run with an existing Keycloak
+
+For faster F5 restarts, leave Keycloak and PostgreSQL running independently of Visual Studio. Stop any
+full-stack Aspire session first, then start the [local Docker auth stack](#local-identity-provider-sandbox):
+
+```powershell
+docker compose --env-file .env.auth -f .\compose.auth.yml up -d
+```
+
+Select **Mulse (Aspire, existing Keycloak)** in Visual Studio and press **F5**, or run:
+
+```powershell
+dotnet run --project .\Mulse.AppHost\Mulse.AppHost.csproj --launch-profile external-keycloak
+```
+
+Aspire checks discovery at `http://localhost:8081/realms/mulse/.well-known/openid-configuration` before
+starting Service and UI. The Keycloak realm and OIDC clients must already be configured. This profile
+uses the same UI client secrets and callback URL as the full-stack profile, and does not need the AppHost
+bootstrap or database passwords. Stopping F5 leaves the Docker containers running. Stop the Compose
+stack before switching back to **Mulse (Aspire)**, especially if both configurations use the same volume.
+
+### Run Service and UI separately
+
 From the repository root, build the solution (including plugins into `Service\plugins\`):
 
 ```powershell
@@ -1332,15 +1413,8 @@ Development OpenAPI JSON at **http://localhost:5210/openapi/v1.json**. There is 
 `MulseApi__BaseUrl` when the runtime is hosted elsewhere. It is a **UI-server-to-Service** address,
 not the browser's URL.
 
-Alternatively, from the repository root, use the Aspire AppHost to launch both projects:
-
-```powershell
-dotnet run --project .\Mulse.AppHost\Mulse.AppHost.csproj
-```
-
-Use the launch endpoints shown by Aspire and ensure `MulseApi:BaseUrl` still resolves to the actual
-Service endpoint. For a single optional plugin, `dotnet build .\Mulse.Excel\Mulse.Excel.csproj` (or its
-SQL Server/HL7/sample equivalent) is enough; then load it in **Module Packages**.
+For a single optional plugin, `dotnet build .\Mulse.Excel\Mulse.Excel.csproj` (or its SQL Server/HL7/sample
+ equivalent) is enough; then load it in **Module Packages**.
 
 ### Local identity-provider sandbox
 

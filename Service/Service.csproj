@@ -9,8 +9,7 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <UserSecretsId>dotnet-Service-eb4daf54-1acc-46ea-a1e3-323c25c4136b</UserSecretsId>
     <ContainerRepository>mulse-service</ContainerRepository>
-    <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:11.0-nanoserver-ltsc2025</ContainerBaseImage>
-    <ContainerRuntimeIdentifier>win-x64</ContainerRuntimeIdentifier>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Data/**;Runtime/**;plugins/**;SampleData/Outbox/**</DefaultItemExcludes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>

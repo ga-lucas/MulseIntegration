@@ -1,6 +1,10 @@
 **/.classpath
 **/.dockerignore
 **/.env
+**/.env.*
+**/*.pfx
+**/*.key
+.mulse-compose
 **/.git
 **/.gitignore
 **/.project
@@ -21,6 +25,11 @@
 **/obj
 **/secrets.dev.yaml
 **/values.dev.yaml
+Service/Data
+Service/Runtime
+Service/plugins
+Service/SampleData/Outbox
+Mulse.Ui/Data
 LICENSE
 README.md
 !**/.gitignore
