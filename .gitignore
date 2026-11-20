@@ -376,3 +376,5 @@ FodyWeavers.xsd
 /Service/Data/*.db-journal
 /Service/Data/*.owner.lock
 /mulse-design.db*
+/Mulse.Ui/Data/github-copilot
+/Service/Data/ai-authoring
