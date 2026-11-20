@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Mulse.Modules;
+using Service.BizTalkImport.Evidence;
 using Service.Models;
 
 namespace Service.BizTalkImport;
@@ -43,6 +44,29 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
     public Task<BizTalkSolutionAnalysisResponse> AnalyzeAsync(AnalyzeBizTalkSolutionRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var notes = new List<string>();
+        var items = request.Evidence ?? [];
+
+        // Uploaded and pasted evidence is read during this call only; its temporary folder is deleted afterwards.
+        using var evidence = BizTalkEvidenceMaterializer.Create(items);
+        var effective = items.Count == 0 && !request.SourcePath.StartsWith("evidence:", StringComparison.OrdinalIgnoreCase)
+            ? request : BizTalkEvidenceApplier.Apply(request, items, evidence.Paths, notes);
+        var analysis = AnalyzeCoreAsync(effective, cancellationToken).GetAwaiter().GetResult();
+
+        var requests = BizTalkEvidenceRules.Build(effective, analysis);
+        var summary = BizTalkEvidenceRules.Summarize(requests, analysis);
+        return Task.FromResult(analysis with
+        {
+            Warnings = [.. analysis.Warnings, .. notes],
+            EvidenceRequests = requests,
+            Summary = summary,
+            Delta = request.PreviousSummary is { } previous ? BizTalkEvidenceRules.Compare(previous, summary) : null
+        });
+    }
+
+    private Task<BizTalkSolutionAnalysisResponse> AnalyzeCoreAsync(AnalyzeBizTalkSolutionRequest request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         if (request.AdditionalRulePaths is null || request.AdditionalRulePaths.Count > 32
             || request.AdditionalRulePaths.Any(string.IsNullOrWhiteSpace))
             throw new ArgumentException("Supply at most 32 nonblank rule export file paths.");
@@ -58,8 +82,8 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
             throw new ArgumentException("Native configuration snapshots require native generation, one host configuration path and 1-16 explicit helper .cs paths (at most 4096 characters each).");
         var nativeConfiguration = request.NativeHostConfigurationPath is { } configurationPath
             ? NativeSourceConfigurationCatalog.Read(configurationPath, request.NativeConfigurationHelperPaths) : null;
-        if (request.DeriveNativeMapChoices && (!request.GenerateNativeFlow || request.AdditionalRulePaths.Count == 0))
-            throw new ArgumentException("Deriving native map choices requires native generation and at least one rule export path.");
+        if (request.DeriveNativeMapChoices && !request.GenerateNativeFlow)
+            throw new ArgumentException("Deriving native map choices requires native generation.");
         if (request.NativeMapChoicesJson is not null)
         {
             if (!request.GenerateNativeFlow) throw new ArgumentException("Native map choices require native generation.");
@@ -264,20 +288,30 @@ public sealed partial class BizTalkImportService : IBizTalkImportService
         var nativeSchemas = request.GenerateNativeFlow ? BizTalkSchemaSourceCatalog.Read(hydratedProjects.Select(project => project.ProjectPath)) : null;
         var mapChoicesJson = request.NativeMapChoicesJson;
         DerivedMapChoices? derivedChoices = null;
+        var storedMapValues = new Dictionary<string, string>(StringComparer.Ordinal);
         if (request.DeriveNativeMapChoices)
         {
             var literals = request.AdditionalRulePaths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase)
-                .SelectMany(path => BizTalkRulePolicyAnalyzer.ReadMapNameLiterals(path, request.NativePolicyVersions, cancellationToken)).ToArray();
-            derivedChoices = BizTalkNativeMapChoiceDeriver.Derive(hydratedProjects.Select(project => project.ProjectPath), literals, nativeSchemas!, request.NativeMapChoicesJson, cancellationToken);
+                .SelectMany(path => BizTalkRulePolicyAnalyzer.ReadMapNameLiterals(path, request.NativePolicyVersions, cancellationToken))
+                .Concat(ReadTransformShapeMapNames(hydratedProjects.SelectMany(static project => project.Artifacts)
+                    .Where(static artifact => string.Equals(artifact.Kind, "Orchestration", StringComparison.OrdinalIgnoreCase)).Select(static artifact => artifact.FullPath))).ToArray();
+            derivedChoices = BizTalkNativeMapChoiceDeriver.Derive(hydratedProjects.Select(project => project.ProjectPath), literals, nativeSchemas!, request.NativeMapChoicesJson, cancellationToken, storedMapValues);
             mapChoicesJson = derivedChoices.CasesJson;
-            warnings.Add($"{derivedChoices.Report.Count(static item => item.Status is "Converted" or "ConvertedWithStubs")} of {derivedChoices.Report.Count} policy map-name values were converted to native map choices (some may wait on script stubs); the rest are listed with reasons and stay fail-closed. Derived choices are not verified equivalents of the BizTalk maps.");
+            warnings.Add($"{derivedChoices.Report.Count(static item => item.Status is "Converted" or "ConvertedWithStubs")} of {derivedChoices.Report.Count} map-name values (policy literals and orchestration Transform shapes) were converted to native map choices (some may wait on script stubs); the rest are listed with reasons and stay fail-closed. Derived choices are not verified equivalents of the BizTalk maps.");
+            if (storedMapValues.Count > 0)
+                warnings.Add($"Converted maps are stored as {storedMapValues.Count} config value(s) named 'biztalk-map.*'; the generated flows reference them, so the effective choices JSON holds references rather than map content.");
         }
         var reservedFlowIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // The native translator reads custom pipeline components from the binding, falling back to the design-time pipeline files of every analyzed project.
+        var pipelineArtifacts = hydratedProjects.SelectMany(static project => project.Artifacts.Concat(project.ReferencedArtifacts)).ToArray();
+        var nativeBindings = request.GenerateNativeFlow ? bindingAnalyses.Select(binding => ApplyPipelineFileDefaults(binding, pipelineArtifacts, [])).ToArray() : [];
         var flowCandidates = candidateProjects
             .OrderBy(static project => project.Response.ProjectPath, StringComparer.OrdinalIgnoreCase)
             .SelectMany(project => CreateFlowCandidates(project, customAssemblies, bindingAnalyses, mapInventory, reservedFlowIds))
             .Select(candidate => AttachRuleEvidence(candidate, rulePolicies))
-            .Select(candidate => request.GenerateNativeFlow ? AttachNativeFlow(candidate, bindingAnalyses, rulePolicies, nativeSchemas!, request.NativePolicyVersions, nativeConfiguration, mapChoicesJson) : candidate)
+            .Select(candidate => request.GenerateNativeFlow ? AttachNativeFlow(candidate, nativeBindings, rulePolicies, nativeSchemas!, request.NativePolicyVersions, nativeConfiguration, mapChoicesJson) : candidate)
+            .Select(candidate => AttachStoredConfigValues(candidate, storedMapValues))
+            .Select(AttachOrigin)
             .ToArray();
 
         return Task.FromResult(new BizTalkSolutionAnalysisResponse(

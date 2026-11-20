@@ -73,6 +73,14 @@ public sealed class RuntimeConfigurationStore : IRuntimeConfigurationStore
         return Clone(_state);
     }
 
+    public string? TryGetConfigValue(string reference)
+    {
+        _ownership?.EnsureAvailable();
+        _database?.EnsureAvailable();
+        // Committed states are replaced, never mutated, so the captured snapshot is safe to read without the write gate.
+        return Volatile.Read(ref _state).ConfigValues.GetValueOrDefault(reference);
+    }
+
     public async Task SetMaintenanceAsync(bool requested, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);

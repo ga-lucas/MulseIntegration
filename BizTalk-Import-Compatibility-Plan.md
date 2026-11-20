@@ -9,9 +9,136 @@ BizTalk project -> analyzed artifacts -> canonical Mulse model
 				-> Flow Designer + Mapping Designer -> native Mulse workflow
 ```
 
-Latest verification: 2,097 service tests
+Latest verification: 2,473 service tests (the 29 empty leftover files were removed; no tests lost)
+
+### Guiding principles (general BizTalk compatibility)
+
+The importer is meant for this organization first and for publication as a reusable open-source tool second, so the goal is the broadest BizTalk compatibility that can be proven, not just the shape of the Billing samples. Billing and its policy, binding and host-config exports are the only available corpus; they say which constructs to prioritize, not what the product supports.
+
+- Fix each gap for the BizTalk construct in general (as the public BizTalk documentation defines it), not for the specific shape seen in the samples.
+- Importer code names no organization-specific type, schema or map. Org-specific behavior goes in the `ClientIntegration\` plugin solution.
+- Tests use small synthetic artifacts and cover variants the samples do not use. Real sample content is never copied into the repo.
+- What cannot be proven stays a visible `Blocked` node or a documented stub with an editable UI setting. The importer never guesses.
+- Track coverage by BizTalk construct (shapes, functoids, adapters, pipeline components, rule constructs), independent of the samples.
 
 Report-bearing imports remain disabled and fail closed until verified translation support exists. Configuration review and report statuses are not approvals. Older imports without migration metadata require reanalysis/re-import to receive the gate.
+
+## Construct coverage matrix
+
+This table is by BizTalk construct, not by sample. It was written from the importer code (2026-11), so re-check it when a translator changes; it is maintained by hand.
+
+Status key:
+- **Supported:** imported as native, editable nodes or settings (often with a review warning).
+- **Evidence only:** kept as a named, visible node. It does not change behavior and is not enforced.
+- **Stub:** imported as a documented placeholder with editable UI settings; the original logic is not run.
+- **Blocked:** imported as a visible `Blocked` node (or the map or policy is left unconverted). The flow cannot be enabled until you configure it.
+- **Not recognized:** the construct is not looked at specifically; the default is Blocked, never skipped.
+
+### Orchestration shapes
+
+| Construct | Status | Notes |
+|---|---|---|
+| Service, ServiceBody, Construct | Supported | Plain native sequences. |
+| Scope | Supported | Becomes a sequence. Timeout, retry, batch, isolation, synchronization and rollback are not enforced (warned). |
+| Scope with one untyped `System.Exception` catch | Supported | Native `Try` (body faults only; see the Try increment). |
+| Typed, multiple or fault-message catches | Blocked | Handler order and exception-type matching are not guessed. |
+| Atomic / long-running transaction attributes | Evidence only | Kept by name with their settings. |
+| Decision (if / else if / else) | Supported | Final branch may be an else. Conditions use the supported expression subset. |
+| While / Loop | Supported | Native safety bound of 100 iterations (editable). |
+| Receive (channel + message) | Supported | Filters become native conditions. A filter mixing AND and OR groups is Blocked. |
+| Receive that follows a correlation set | Supported | Native correlation keys. Unproven sets are Blocked. |
+| Listen (2 to 16 branches, at most one Delay) | Supported | First match in source order; timeout fixed on entry. |
+| Send to a uniquely bound FILE, FTP, SFTP, SMTP or HTTP port | Supported | Becomes a Deliver node with editable settings. |
+| Send with `Response` operation | Supported | Becomes a Reply. |
+| Send to a dynamic port (FILE, FTP, HTTP, SMTP) | Supported | Explicit transport dispatch on the assigned TransportType. |
+| Send to an unbound, ambiguous, direct-bound or other-transport port (WCF, SQL, MSMQ, ...) | Blocked | Needs a binding export or an explicit native adapter. |
+| Send port with retry | Supported (warned) | Maps to the Deliver node's retry (attempts, interval). Only failures a module proves sent nothing are retried automatically (HTTP, FTP/SFTP, SMTP); ambiguous failures are held unless the node opts in. Backup transport not imported. Stock `PassThruTransmit` and `XMLTransmit` with no per-port configuration are Supported (warned). |
+| Send port with a custom transmit pipeline | Supported for a proven subset | Components translate to an ordered chain of named Augment/Render nodes in front of the Deliver: `HL7TypeCaster`, `.SetProperty`, promotion tables, the HL7 assembler and a MIME/S-MIME encoder (as an SMTP attachment). Any other component (for example a signing or encrypting encoder) keeps the send Blocked and names the component. The flat-file assembler is translated when the flow's choice table has a flat-file schema (see the flat-file renderer increment). |
+| Delay (constant `TimeSpan` to the millisecond, or `dateTime.Subtract(dateTime)`) | Supported | Native Wait; a fixed sub-second wait pauses in place. Non-millisecond, zero and nested forms are Blocked. |
+| Terminate (literal message) | Supported | Dynamic messages are Blocked. |
+| Expression / variable / message assignment | Supported | Statement subset, see "Source expressions" below. |
+| Transform shape | Blocked | Maps run through supported assignments or the dynamic-transform pattern instead. |
+| Call Rules | Blocked by default | The policy proposal is attached. With an explicit version choice it can become native Apply XML Rules (single XML fact, conflict-free). |
+| Call / Start Orchestration, Parallel Actions, Throw, Suspend, Compensate, Task and other shapes | Not recognized | Default is Blocked, with the shape type named. |
+| Port, port type, operation, message and multipart declarations | Supported | Named declarations. Message declarations with an initial value are Blocked. |
+| Message part reference (`MessagePartRef`) | Blocked | |
+| Scalar variables (String, Int32, Boolean, DateTime) | Supported | DateTime is UTC (assumption stated at import). Other variable types are Blocked. |
+
+### Source expressions
+
+| Construct | Status | Notes |
+|---|---|---|
+| Literals, comparison, arithmetic, logical operators | Supported | |
+| String members (`Length`, `IndexOf`, `LastIndexOf`, `Substring`) and `Regex.IsMatch` | Supported | Only when operand types are proven. Search is ordinal, not culture-sensitive (warned). |
+| `Convert.ToString`, `Convert.ToInt32` | Supported | Only for proven operand types. |
+| `DateTime.Subtract`, `DateTime` values | Supported | UTC. |
+| XPath and distinguished-field reads, XML construction | Supported | |
+| Context properties declared in a property schema | Supported | Needs one exact declared schema identity. |
+| `BTS.MessageID` | Supported (read only) | See the `BTS.MessageID` increment. |
+| Adapter and HL7 assembler properties (FTP.*, FILE.*, SMTP.*, MIME.FileName, BTAHL7Schemas.*, nsoftware.*) | Evidence only | Stored as importer metadata keys; no native module reads them. Configure the Deliver settings. Writes of literal credentials are Blocked. |
+| Other platform properties (for example `WCF.*`) | Blocked | |
+| Part-level context | Blocked | Native messages carry message-level metadata only. |
+| Host configuration getters and similar pure helpers | Supported | Pinned as editable literals from a supplied snapshot. |
+| Arbitrary .NET helper calls | Blocked | Known helpers can be added as pure transforms (for example the filename template). |
+| `System.Type.GetType` / compiled-map transform calls | Supported | Dynamic transforms from the shared renderer table. |
+
+### Maps and functoids
+
+| Construct | Status | Notes |
+|---|---|---|
+| Schema-tree XML maps, direct links, nested and repeating records | Supported | Converted to native maps; compare with real output before use. |
+| Multi-input maps | Supported | Inline aggregate source schema. |
+| Custom XSLT map | Supported | Becomes an XSLT render choice. |
+| String: Left, Right, Size, Concatenate, Uppercase, Lowercase, Trim Left/Right (FIDs 102-105, 107-110) | Supported | Some are verified against compiled helper code; the rest follow documented behavior and are reported as unverified. |
+| Math: Int, Abs, Add, Subtract, Multiply, Divide (FIDs 111, 112, 118-121) | Supported | |
+| Date: Current Date, Current Date and Time (FIDs 123, 125) | Supported | UTC. |
+| Logical: comparisons, And, Or, Not, Existence (FIDs 311-316, 320, 321, 701, 705) | Supported | Records created only when a logical functoid is true are supported. |
+| Iteration, Record Count, Index (FIDs 474, 322, 323) | Supported | |
+| Cumulative: Sum, Average, Min, Max, Concatenate (FIDs 324-328) | Supported | |
+| Looping (424, single input) and Mass Copy (802) | Supported | |
+| Value Mapping (375) and Value Mapping (Flattening) (374) | Supported | Conditional target. 374 is equivalent only for single-value inputs. A Value Mapping feeding another functoid is not converted. |
+| Scripting functoid (260): inline C# and XSLT | Stub | Documented stub with editable settings; the script is not run. Other script languages are not imported. |
+| Any other functoid ID | Blocked | The map is left unconverted and the error names the FID. |
+| Maps in assemblies that were not supplied | Blocked | Reported as "map class not found". |
+
+### Adapters and ports
+
+| Construct | Status | Notes |
+|---|---|---|
+| Send: FILE, FTP, SFTP (including nsoftware variants), SMTP, HTTP | Supported | |
+| Send: WCF-*, SQL, MSMQ, POP3, SOAP, Service Bus and other adapters | Blocked | |
+| Receive locations: FILE, SFTP, HTTP | Supported | Draft trigger step chosen from the address and transport. |
+| Other receive transports | Stub | Falls back to a document-repository placeholder step to configure; confirm the source. |
+| Receive-location service window, start and end dates | Supported | Imported as operational settings or warnings. |
+| MessageBox direct binding | Supported (receive); Stub (send) | The host must supply the channel and filter metadata for receives. Outbound direct-bound Sends import as a flow-link deliver with an unset channel you choose. |
+| Dynamic send ports | Supported | See the Send rows above. |
+
+### Pipelines
+
+| Construct | Status | Notes |
+|---|---|---|
+| Pipeline stages (Decode, Disassemble, Validate, ResolveParty, PreAssemble, Assemble, Encode) | Evidence only | Inventoried per stage and component. |
+| `SetProperty` / property-promotion components | Supported | Become set-context-property steps. |
+| HL7 type caster | Supported | Becomes the HL7 message-type step. |
+| BTAHL7 assembler | Supported | Becomes the `hl7-schema-render` step (schema-driven ER7) when a converted map writes an HL7 schema, using the schemas stored as config value `biztalk-hl7.schemas`; otherwise the generic `hl7-xml-render` step. Delimiters and escaping need verification with synthetic messages (see the HL7 schema increment). |
+| HL7 add-delimiter component | Evidence only | Source passes the message through unchanged; MLLP framing is a Deliver setting. |
+| Flat-file assembler (send pipeline) | Supported for a proven schema subset | Becomes a render node that picks the flat-file schema from the message type (`namespace#root`), or from `DocumentSpecName` when set, in the flow's shared choice table. The importer adds one `flat-file-schema-render` choice for each flat-file schema a converted map writes. Header/trailer specs, non-UTF-8 charsets or code pages, BOM preservation and unsupported schema features stay Blocked and named. Output follows stated assumptions that are editable; it is not verified against real BizTalk output. |
+| Flat-file disassembler | Not recognized | Only the migration report points to the flat-file modules; no step is generated and the layout is not translated. |
+| MIME / S-MIME encoder | Blocked | Warned. No native module. Use the SMTP attachment settings and decide separately about signing and encryption. |
+| XML disassembler / assembler, JSON, custom pipeline components | Not recognized | Warned as unsupported; custom pipelines produce no native flow. |
+
+### Business rules (BRE)
+
+| Construct | Status | Notes |
+|---|---|---|
+| Policy export read (versions, facts) | Supported | The latest exported version is not proof of the deployed version. |
+| Typed equality conditions with literal XML assignments, single pass | Supported | Proposal can be run natively on an explicit selection. |
+| Potentially conflicting matches | Blocked | Agenda and priority order are not guessed. |
+| Priorities, forward chaining (update/halt), .NET object facts, database facts, functions | Not recognized | No proposal is produced; the rule needs manual translation. |
+
+### How to read the Billing blockers against this table
+
+The remaining Billing blockers (`orch39`) fall in these rows: outbound ports without an exported binding (47), `MessagePartRef` (3), `RulesParameterRef` and Call Rules review (3 each), a receive filter mixing AND and OR (1), a sub-second Delay (1), part-level context (1), a message copy without a declared source (1), a Transform shape (1). Converter gaps (26 maps) are in the maps and functoids section.
 
 ## Current continuation: isolated testing and Billing migration
 
@@ -66,6 +193,261 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 - **Importer:** an optional record with at least one directly written field below it (no repeating level in between, fixed schema values excluded) now converts, with a warning that it is always created and that the target schema may reject an empty record. Records reached only through record links or across a repeating level are still refused, with a clearer message.
 - **Measured effect (292 real maps):** converting maps rose from 107 to 114. Next: required targets not produced (23), functoid/field inputs below a repeating record (18), functoids linked to records (15), schema paths still missing (10), functoids without a verified equivalent (9).
 - **Verification:** 2,051 service tests passed and the solution built.
+
+### Increment: Property-setter pipeline components become editable steps (send and receive)
+
+- **Evidence (from the component C#):** `ConsumptionPropertySetter`, `SetAndPromoteItemSyncProperties`, `MapNamePromotions` and `HL7Promotions` each just promote a fixed list of context properties in a namespace held by one of their own properties. Two names differ from the component property (`ReadyForSync` is promoted as `ReadyForSynch`, `IsEDI` as `IsEDIData`).
+- **Change:** the importer drafts one `set-context-property-augment` step per promoted property (namespace, name and value all editable). Receive-location pipelines are now read too (binding `ReceivePipelineData`, falling back to the design-time `.btp`), where these components live; before only send ports were read. Receive steps run for the whole flow. If receive locations differ only the first is generated and the others are reported by name. Standard Microsoft receive components are left to the parse step; unrecognized custom components warn. `AddBlockCharacters` (`Hl7AddDelimit`, an unchanged pass-through in the source) is reported as having no effect instead of as unsupported.
+- **Unverified:** BizTalk's behavior when promoting an empty value. Steps with no configured value stay in the draft as no-ops (the module writes nothing for an empty value) and are listed in a warning.
+- **Verification:** 8 new tests (`BizTalkReceivePipelineTests`); 2,454 service tests passed.
+
+### Increment: Orchestration blocker report (`ImportOrchestrationReportTests`)
+
+- **What:** an opt-in test (no-op unless `ORCH_ROOT` is set) that imports every solution or project under a path with `GenerateNativeFlow = true` and writes a TSV of CLEAN/BLOCKED flows plus a `.summary.txt` grouping blocked shapes by reason. Optional semicolon-separated inputs: `ORCH_EXTRA` (extra source paths such as schema projects), `ORCH_BINDINGS`, `ORCH_RULES`, and `ORCH_DERIVE=1`.
+- **Billing result, analyzed alone:** 342 blocked shapes. **With the Core schema projects supplied:** 132 blocked. The 113 `DecisionBranch` and 79 schema-ownership blocks were artifacts of missing inputs, so always supply the schema projects.
+- **What is left in Billing (132):** 46 outbound ports with no binding export, 35 dynamic transforms that need the policy exports for map identity, 11 members with no distinguished-field declaration, 9 non-scalar variables (DateTime/Type), 6 distinguished-field datatype conversions, and a few StatementRef/Listen/delay/correlation shapes. The first two need user-supplied binding and policy exports, not importer changes.
+
+### Increment: Billing moved into the ClientIntegration solution, target-location node, importer diagnostics
+
+- **Moved:** `ExternalBillingPlugin` was folded into `ClientIntegration\ClientIntegration` (module id `legacy-billing-field-augment` unchanged, so saved flows keep working). Added `ClientIntegration-billing-target-location-augment` (per-transport parsing of `TargetLocation`; every pattern and key is a UI setting; 20 tests).
+- **Importer:** `intVariable.ToString()` imports as an explicit text conversion; DateTime/TimeSpan/Type variable blocks now name the Mulse replacement; the "no distinguished field" message names the member; unique scratch `XmlDocument` variables stay known in statements that also contain a dynamic transform (the block now names the real cause instead of `msgXml`); `xs:integer` distinguished fields accept Int32 writes and stay blocked for reads (BizTalk exposes them as Decimal).
+- **Report tool:** new `ORCH_HELPERS` and `ORCH_HOSTCONFIG` (must be supplied together). The real host `.config` is not in the samples.
+- **Billing result:** 132 blocked -> 123. Remaining: 46 ports need binding exports, 37 dynamic transforms need policy exports, DateTime batch loops (`System.DateTime.Compare`, `dtTimeOfBatch`), StatementRef/ListenBranch/Listen/correlation shapes.
+
+### Increment: UTC DateTime values (backend UTC, server-local UI with a toggle)
+
+- **Rule:** the backend stores and computes every date-time as UTC with the invariant culture. The UI shows and accepts date-times in server-local time by default, with one global "Times: server local / UTC" display switch in the side menu (saved in the browser, keyed per workspace so a future multi-workspace setup can differ). The importer states this as a warning.
+- **Native model:** new `DateTime` scalar (ISO 8601 text ending in `Z`; non-UTC text is rejected) and expression kinds `Now`, `ParseDateTime`, `DateTimeFromParts`, `Year`..`Second`, `AddDays/Hours/Minutes/Seconds`, `CompareDateTime`, `SecondsBetween`, plus `IsInt32` and `ParseInt32OrZero`. A Wait can take a computed `DurationExpression` instead of fixed seconds (evaluated once; negative becomes 0; over 366 days fails). Time-only text such as `06:15` takes its date from the flow clock, not the machine.
+- **Importer:** `System.DateTime` variables (default `DateTime.MinValue` as UTC), `Now`/`UtcNow`, `Parse`, the six-argument constructor, parts, `AddX`, `Compare`, comparisons, and a Delay of `later.Subtract(earlier)`. `if ([!]Int32.TryParse(s, out v))` is split into a parse step plus an `If`. Arithmetic on DateTimes, `ToString`, culture overloads and compound `TryParse` conditions stay blocked.
+- **UI:** expression editor has the new kinds, a DateTime literal that follows the global display switch, and a Wait "Fixed seconds / Computed from an expression" mode.
+- **Billing result:** 123 blocked -> 109 (all DateTime variable, date/time statement and `Subtract` delay blocks are gone). Listen/ListenBranch still block the batch loop itself.
+
+### Increment: policy map choices stored as config values
+
+- **Evidence:** the "Billing Processing Policy" export (40 rules) names 83 map classes, which live in the sibling `Example.Legacy.Interfaces.Partners.*` projects. With those projects analyzed, 49 of 83 convert (11 clean, 38 with script stubs), 26 fail conversion (FID 106, empty linked records, a Value Mapping feeding another functoid, no source root) and 8 classes were not found.
+- **Problem:** each dispatch case embedded its whole map, so 83 maps could not fit one render-dispatch table (262,144 characters) or one native flow (1,000,000 characters).
+- **Stored maps:** when derivation is on, each converted map or stylesheet is saved as a config value named `biztalk-map.<TypeName>-<10 hex of the full policy value>`. The dispatch case keeps only a `{{config:...}}` reference. The values are listed on the Config Values page, so each map is editable in the UI. Creating the flow writes the values that do not exist yet and never overwrites an existing one, so edits survive a re-import. The reference check at enable time still fails closed on a missing value.
+- **Runtime:** only the selected case is loaded, when it renders (`RenderModuleInvoker`). A missing value fails closed. Only a whole-value `{{config:...}}` in `mappingJson` or `xsltText` is deferred; everything else is resolved as before.
+- **Explicit choices** and the existing inline behavior are unchanged when no sink is supplied.
+- **Tests:** `StoredMapChoiceTests` (resolver deferral, lazy invoker, naming, candidate filtering) plus two deriver tests. Suite: 2,510 passed.
+- **Billing result (`orch37`):** BatchDoubleBody and BatchWithTrailer now import (14 blocked nodes each, down from whole-flow failure). BillingService still fails: it has 58 dynamic transforms and every one embeds the same 49-case table (about 20 KB each), which exceeds the 1,000,000-character flow limit. Next: one shared per-flow choice table instead of a copy per transform (a native flow schema, executor and editor change).
+
+### Increment: one shared renderer-choice table per flow
+
+- **Problem:** 58 dynamic transforms x one ~20 KB case table exceeded the 1,000,000-character native flow limit, so LegacyBillingProcess could not be imported at all.
+- **Choice:** a native flow now has an optional flow-level `renderChoicesJson` (the same JSON array as a dispatch node's `casesJson`). A dynamic-transform node that carries no `casesJson` of its own selects from that table. The importer emits every dynamic transform without settings and writes the table once. The table is validated when the flow is read (at most 128 cases and 262,144 characters, as for any dispatch). The UI shows it as "Shared renderer choices" under "Execution and message settings"; each node shows a hint instead of its own editor.
+- **Implications (please review):**
+  - Editing the table changes every transform in the flow at once.
+  - The table is not scoped per policy field. It holds every map name found for the solution, so a transform can select any map in it, including a map BizTalk would only choose for a different policy field. A name that is not listed still fails closed. Narrowing a transform to fewer choices means giving that node its own `casesJson`.
+  - Per-node tables still work. A node's own `casesJson` overrides the shared table (all-or-nothing per node), so older flows and hand-built nodes behave as before.
+  - This extends the native flow JSON schema. Flows imported earlier keep working. A runtime older than this change cannot read a flow that uses the shared table.
+  - The maps still live in config values. Each case holds only a `{{config:biztalk-map.*}}` reference, loaded when it is selected, so editing a map affects every flow that references the same value. The shared table keeps the stored-reference checks (the value must exist to enable the flow, and edits are blocked while a durable checkpoint depends on it).
+  - Explicit (non-derived) map choices are shared the same way.
+- **Tests:** executor (shared table, node override, unlisted identity fails closed, validation), dependency scan, importer (nodes have no settings, table written once), editor render, model round trip, config deferral. Suite: 2,518 passed.
+- **Billing result (`orch38`):** LegacyBillingProcess now imports with its 58 dynamic transforms resolved (28 blocked nodes, all genuine: outbound bindings, part-level context, a sub-second delay, context properties, Retrieve Map, RulesParameterRef). Batch-level counts: 64 blocked rows, 2 clean, 33 none. The row count rose from 36 because the one whole-flow size failure became 28 specific blocked nodes.
+
+### Increment: `BTS.MessageID` is readable
+
+- **Construct:** the BizTalk system context property `BTS.MessageID` (the message's GUID) can now be read in a source expression, for example `Convert.ToString(msg(BTS.MessageID))`. It becomes a String metadata fact on the flow's message-id key (`messageId`, the default of "Message id metadata key" under Execution and message settings), which every received message of a durable native flow must already carry.
+- **Implications (please review):**
+  - BizTalk assigns a new GUID to each message. A native flow uses the id the host supplied when the message arrived, so the value's format can differ from a GUID. The importer adds a draft warning whenever a flow reads it.
+  - A message built inside the flow has no id, so reading its `BTS.MessageID` fails closed. Nothing is invented.
+  - If you change the flow's message-id key in the UI, update the nodes that read the id as well; they name the key explicitly.
+  - It is read-only, as in BizTalk: assigning `BTS.MessageID` stays Blocked. Every other platform property stays write-only (adapter-property writes) and unlisted ones stay Blocked.
+  - The mapping is a small table in the context catalog (`ReadOnlySystemProperties`). Other system properties are added only when their behavior can be proven.
+- **Tests:** 2 synthetic tests (read maps to the key, evaluates, and fails closed without an id; assignment stays Blocked with no read warning). Suite: 2,520 passed.
+- **Billing result (`orch39`):** the 3 "context property requires one exact declared property-schema identity" blocks are gone (all were `BTS.MessageID` reads). 61 blocked rows, 2 clean, 33 none.
+
+### Increment: stock transmit pipelines and MessageBox direct sends
+
+- **Binding file in use.** Report `orch40` was the first run with the real binding export (`ORCH_BINDINGS`). It resolved 35 of the 47 "no unique physical binding" Sends to a send port; those became "uses a transmit pipeline" blocks.
+- **Stock transmit pipelines import without a pipeline step** when the port carries no component configuration of its own:
+  - `Microsoft.BizTalk.DefaultPipelines.PassThruTransmit` does no processing.
+  - `Microsoft.BizTalk.DefaultPipelines.XMLTransmit` is the XML assembler with default settings.
+  - Applies to both static and dynamic Sends. A draft warning is added for each.
+- **Implications (please review):**
+  - For `XMLTransmit` the native output is the native XML text. The assembler can add an XML declaration or convert the character set, and that is **not** reproduced or checked. Compare one delivered file with real BizTalk output (declaration, encoding, byte-order mark) before use. Envelopes and document-spec properties are not evaluated.
+  - A stock pipeline whose port carries its own pipeline component configuration stays Blocked, because it is no longer known to be unmodified.
+  - Custom pipelines (and `EdiSend`) stay Blocked and the pipeline is named.
+  - Retry above 0 stays Blocked with its own reason, separate from the pipeline reason. No automatic resend is inferred.
+- **MessageBox direct-bound Sends** (the ODX port has `DirectBindingType=MessageBox` and no bound send port) now import as a `flow-link-deliver` node, not Blocked:
+  - Its `channel` is a `Config` placeholder, listed in the configuration requirements. The flow stays disabled and the unresolved placeholder fails closed until you choose a channel.
+  - You can change the node to another deliver module in the editor.
+  - A warning explains the difference: BizTalk publishes to the MessageBox and every subscription whose filter matches receives the message. A flow-link channel reaches only flows whose flow-link-fetch source names it, with no filter. Review the real BizTalk subscribers and create one flow-link-fetch source per subscriber flow.
+  - An explicit send-port binding still wins over the direct binding.
+  - A Send on an unbound port that is not MessageBox-bound stays Blocked.
+- **Tests:** 7 synthetic tests (stock pipelines pass with warnings, custom and EdiSend blocked with the name, per-port configuration blocked, retry blocked separately, direct send becomes a flow-link deliver with an unset channel, unbound send still blocked). Suite: 2,527 passed.
+- **Billing result (`orch42`):** 61 → 40 blocked rows, 2 clean, 33 none. The "no unique physical binding" blocks dropped from 47 to 0 (the 12 genuinely direct-bound ones now import as flow-link deliveries). Remaining send blockers are custom pipelines (23 sends, 1 of them also with retry) and retry alone (3).
+
+### Increment: custom transmit pipelines as native node chains
+
+- **Change:** a send port's pipeline components now translate to an ordered chain of named native nodes ahead of the Deliver, for static and dynamic sends. The first node reads the Send's message; each writes `{message}~{nodeId}~{n}`; the Deliver (id suffixed `-delivery`) reads the last. The result is a Sequence with the original source id.
+- **Components translated:** `HL7TypeCaster` (`hl7-message-type-augment`), `.SetProperty` and promotion tables (`set-context-property-augment`; empty values are a no-op and warned), the BTAHL7 assembler (`hl7-xml-render`), `Hl7AddDelimit` (no node, warned: it passes the message through). Any other component keeps the send Blocked, naming the component; translated components are shown as children.
+- **Binding vs design-time values:** a binding stores only the properties that were overridden. Unset properties are now filled from the same component (matched by class name, in order) in the `.btp` pipeline file; binding values win. A warning says the deployed values may differ. A binding exports a true Boolean as the COM value `-1`, which is accepted.
+- **MIME/S-MIME encoder, choice and implication:** with `SendBodyPartAsAttachment` true, no signing and no encryption, the SMTP deliver sends the payload as an attachment (`attachPayload=true`, body not used). The MIME headers are produced by the SMTP library, not by an encoder, so they may differ from BizTalk's. Signing, encryption, body-part-off or a non-SMTP deliver stay Blocked.
+- **Dynamic ports with a MIME encoder:** only the SMTP branch is translated; any other assigned transport ends the flow explicitly (a Terminate node) instead of sending an unwrapped message. The warning asks you to review which transports BizTalk could really select. A port with no SMTP handler stays Blocked.
+- **Still Blocked:** flat-file assembler (no native schema-driven renderer; the Billing pipeline leaves the document spec empty, so BizTalk chooses the schema from the runtime message type), signing/encryption, retry above 0 (separate reason), unknown components.
+- **Billing result:** `orch42` 40 blocked → `orch46` 33 blocked. Remaining send blockers: flat-file assembler (15), retry only (4).
+### Increment: static orchestration Transform shapes
+
+- **Change:** an orchestration **Transform** shape (a map class with ordered input messages and one output message) now imports as a native `render-dispatch` Render step. Its selector is the map class name; it uses the flow's shared choice table, the same table that dynamic (`System.Type.GetType`) transforms use. The inputs are read in source order and the output is the construct message. Before, every static Transform was a blocked "semantics not translated" node.
+- **Map derivation now also reads Transform shapes.** The orchestration files are scanned for Transform map classes; each is matched to a `.btm` in the analyzed projects and converted like a policy map name (stored as a `biztalk-map.*` config value, editable on the Config Values page). Multi-input maps and hand-written (custom) XSLT maps use the existing conversion.
+- **No policy export needed.** "Derive native map choices" now only requires native generation (before it also required a rule export). The Designer checkbox is sent whenever native generation is on.
+- **Fail-closed rules:** the Transform stays Blocked, with the class name and the fix, when: no derived/explicit choice has exactly that class name (for example the map's project is not in the source paths, or the map could not be converted; see the derived map choices report), a part-level reference (`PartRef`) is used, there are 0 or more than 32 inputs or not exactly one output, an input is repeated, or the output is also an input.
+- **Not claimed:** the converted map is not a verified equivalent of the deployed map. Preview it with synthetic inputs against trusted expected output.
+- **Billing result:** `orch46` 33 blocked → `orch47` 30 blocked. The three `MessagePartRef` blocks (children of the UHS charge-audit Transform) are gone. The Transform itself now says the UHS map has no native choice because the map converter reports "link connects a root to a non-root" for it (a converter gap for a whole-record link from a multi-input part root to the target root).
+### Increment: BizTalk-verified policy results
+
+- **Why:** a rule policy can only be trusted as a native test target if it behaves like the deployed one. The native engine is a single-pass XML field-rule evaluator, not the BizTalk rule engine.
+- **How the real behavior is captured:** a small PowerShell script (written per policy and not shipped, because it embeds the partner case list) runs the deployed policy on a BizTalk server through the rule engine API once per (input values) case and writes a tab-separated results file. For a policy keyed on a few fields (Billing: `GroupID` and `IsBatch`, 40 rules, 13 assigned fields, no database or .NET facts) every rule has one case, plus cases that match no rule. Only configuration values are recorded; no message data.
+- **How it is compared:** an opt-in test (`PolicyResultsComparisonReportTests`, variables `POLICY_RULES`, `POLICY_NAME`, `POLICY_VERSION`, `POLICY_RESULTS`, `POLICY_OUT`) evaluates the converted policy for each row and reports MATCH, MISMATCH (with the fields) or NO-MATCH. Columns ending `_in` are inputs; all other columns are expected outputs. It is generic and names no policy. The report and results file name real partners, so they stay out of the repository.
+- **Result for `Billing Processing Policy` 1.52 (highest on the test server; production version not confirmed):** 40 of 40 cases MATCH. The two no-match cases leave the fact unchanged in BizTalk; the native step stops with "No XML rule matched" instead (fail-closed). Review that difference if an unknown group can legitimately reach the call.
+- **Selecting the version:** the three `Retrieve Map` calls already compile to a native rules step once the policy version is selected (UI: policy test version; report harness: `ORCH_POLICY="Billing Processing Policy=1.52"`). Billing result: `orch47` 30 blocked → `orch48` 24 blocked (the three `CallRules` and three `RulesParameterRef` blocks cleared). The selection is a test target, not proof of the deployed version; the import warning says so.
+- **Not claimed:** equivalence for other inputs than the recorded cases, vocabulary-linked display names (rule bodies carry the real field names), or production behavior if production runs a different version.
+### Increment: receive filters with mixed AND/OR groupings
+
+- **Rule (confirmed by the BizTalk owner):** BizTalk filters are disjunctive normal form. AND binds within a group; OR separates groups; there is no other precedence.
+- **Reading of the orchestration file:** each predicate's `Grouping` joins it to the **next** predicate (OR ends a group); the last predicate's `Grouping` has no next predicate and is ignored. The sample supports this: every filter's last predicate says AND, including all single-predicate filters, while the 13-target UHS filter is twelve OR rows followed by an AND row. This direction is inferred from the sample; the import warns whenever the groupings are mixed so it can be checked against the filter dialog in the designer.
+- **What imports:** one AND group (a conjunction, as before), or several groups that are each a single Equals on the same property (one native `In` condition, as before). The UHS filter is now the second kind.
+- **Still Blocked:** a group of several predicates beside other groups (for example `(A AND B) OR C`) and OR groups on different properties. The native Receive has one AND-list of conditions, so independent disjunctive groups are not representable; the block message says so.
+- **Billing result:** `orch48` 24 blocked → `orch49` 23 blocked (the UHS receive filter).
+- **Tests:** a trailing AND after OR alternatives still means alternatives; an AND group whose last Grouping is OR stays one conjunction; `A AND B OR C` stays Blocked. Suite: 2,550 passed.
+### Increment: sub-second waits
+
+- **Model:** a Wait gains an optional `DurationMilliseconds` (0-999), added to `DurationSeconds`. It is only valid on a fixed Wait (not on Receive, other nodes, or beside a duration expression), and the total stays within 366 days. Older flow JSON is unchanged: the field is not written when zero.
+- **Runtime:** a fixed wait shorter than one second pauses the running instance in place (a throttle between sends in a loop). A wait of one second or more still parks the instance with an exact persisted deadline and resumes on the flow's next run, so it is a minimum, not an exact delay. Computed (expression) waits stay whole seconds.
+- **UI:** the Wait node has a milliseconds field with a note explaining the difference; an empty fixed wait (0 s, 0 ms) is still flagged incomplete.
+- **Importer:** constant `TimeSpan` delays now import with millisecond precision (constructor, `FromMilliseconds`, whole-millisecond tick values). Delays that are not a whole number of milliseconds, are zero, or exceed 366 days stay Blocked. A sub-second delay adds a warning.
+- **Billing result:** `orch49` 23 blocked → `orch50` 22 blocked (the 200 ms throttle delay).
+- **Tests:** `NativeSubSecondWaitTests` (validation bounds, back-compat JSON, in-place pause, one-second-plus still parks, editor field) and the import cases in `BizTalkTransportMappingTests`. Suite: 2,556 passed.
+
+### Increment: deliver retry
+
+- **Model:** a native Deliver node gets an optional `Retry` (additional attempts 1-100, interval 0-604800 s, `RetryAmbiguous`). It is only valid on a Deliver; older flow JSON is unchanged (not written when absent).
+- **Safety rule:** a send repeats automatically only when the module proves nothing was sent (`DeliveryNotSentException`). HTTP (connection refused, name not found, TLS handshake failure on the first request), FTP/FTPS and SFTP (connect phase) and SMTP (connect phase, first message) classify this way. Timeouts, dropped connections and anything after sending began are ambiguous and stay held for reconciliation. FILE and other modules never prove it.
+- **Opt-in:** `RetryAmbiguous` (off by default) also retries ambiguous failures and can duplicate data. The editor shows a warning when it is on. The AI assistant never triggers retries.
+- **Runtime:** after a failed attempt the instance parks with an exact deadline and resumes on the flow's next run, so the interval is a minimum. Each attempt is a suspension with its reason in the run history. When attempts are exhausted the existing ambiguous-effect hold applies, so nothing is dropped silently.
+- **UI:** a Retry section on Deliver nodes (enable, attempts, interval seconds, ambiguous opt-in with warning); validity is checked.
+- **Importer:** BizTalk `RetryCount` and `RetryInterval` (minutes) map onto the node, with warnings that BizTalk also retried after timeouts, that a backup transport is not imported, and (for FILE and other modules) that retry only runs with the ambiguous opt-in. Counts or intervals above the native limits stay Blocked. Stock and translated pipelines keep their chain with the retrying Deliver.
+- **Billing result:** `orch50` 22 blocked → `orch51` 18 blocked (the four retry-only sends). Of the 21 retrying send ports in the sample binding, 20 use FTP/SFTP/SMTP and 1 uses FILE.
+- **Tests:** `NativeDeliverRetryTests` (bounds, back-compat JSON, park then resume, exhaustion, ambiguous held by default and retried on opt-in, no retry without the setting, classifier cases, a real refused-versus-dropped HTTP connection, editor) and updated importer tests. Suite: 2,571 passed.
+
+### Increment: policy no-match choice
+
+- **Finding:** an imported policy call is an `ApplyXmlRules` node, which already left the fact unchanged when no rule matched (BizTalk's behavior); the later renderer choice then failed on the empty value. Only the `xml-rules-augment` module stopped immediately. The two behaviors were inconsistent and not editable.
+- **Decision (user):** stop by default, editable.
+- **Model/UI:** `ApplyXmlRules.StopWhenNoRuleMatches` (off when absent, so older flows are unchanged) with a checkbox and explanation on the node. `xml-rules-augment` gets an `onNoMatch` setting (Stop by default, or Continue unchanged).
+- **Importer:** sets Stop on the imported call and warns that BizTalk continued.
+- **Tests:** `NativeRuleNoMatchTests` (default continue, stop, back-compat JSON, validity, module setting, editor).
+
+### Increment: schema-driven flat-file renderer
+
+- **Module:** `flat-file-schema-render` (Compatibility Pack) writes an XML message as delimited/positional text from a BizTalk flat-file XSD (`b:schemaInfo`/`recordInfo`/`fieldInfo`/`groupInfo`). The schema is compiled strictly: anything it cannot reproduce rejects the schema, with the feature named. Compiled schemas are cached by hash.
+- **Supported:** delimited and positional records, infix/prefix/postfix child order, tag names (also with prefix order), repeat delimiters, `suppress_trailing_delimiters`, wrapping, justification and padding, `datetime_format`, nillable (a nil value fails), attributes before child elements (one `sequence_number` order), nested `xs:sequence` groups that repeat as a whole, `ref` and imported schemas.
+- **Blocked and named:** `escape_char`, choice/all, global groups, simple types, non-zero `pos_offset`, `include`/`redefine`, `substitutionGroup`/`abstract`, header/trailer specs, non-UTF-8 code pages. A `ref` use whose recordInfo lacks the delimiters of its definition stays blocked.
+- **Editable settings:** `schemaText` (a stored config value), `wrapValues`, `tooLongValues`, `delimiterInValue`, `hourClock`, `absentOptional`. Each default is an assumption: infix default order; non-empty values wrapped when a wrap character is set; a delimiter inside an unwrapped value or a too-long positional value fails; `hh` is 24-hour; an absent optional field keeps its delimiter place; an absent optional group writes nothing; UTF-8 without BOM.
+- **Flow model:** new fact kind `XmlMessageType` (root `namespace#local`, or the local name) selects the renderer choice; it has an editor entry.
+- **Importer:** the map-choice deriver adds a flat-file choice for each converted map whose target is a supported flat-file schema, stored as `biztalk-flatfile.*` config values when a store is supplied; a schema it cannot compile is reported on the map. The FFAsm component builds the render node; with no table or an unsupported setting the send stays Blocked with the reason.
+- **Billing result:** `orch52` 18 blocked → `orch53` 3 blocked. The 15 flat-file sends now translate. 58 of the 61 flat-file schemas the Billing catalog declares compile; the other three (a shared definitions schema and two with a missing child delimiter) stay Blocked.
+- **Evidence still needed:** a real BizTalk output, to confirm the assumptions above (see the AI plan's compare-with-real-output tool).
+- **Tests:** `FlatFileSchemaRenderTests` (29), deriver and pipeline-chain importer tests, `XmlMessageType` fact, executor and editor tests.
+- **Map converter:** a required, non-repeating source record (for example the single part of an aggregate wrapper) linked to the target root is accepted like a root-to-root link; optional or repeating records are still rejected. This cleared one map's first reason ("connects a root to a non-root"); it now stops on a different one (fields under a repeating target with no record link read from unrelated repeating sources). The compiled XSLT of that map (read from the deployed assembly's string data, kept out of the repo) shows BizTalk writes such a target record once, with first-occurrence paths and no loop; the converter now does the same and warns. The map still has three scripting functoids that stay documented stubs, so it fails closed until each has a formula.
+- **Body-part MIME file name:** `msg.BodySegments(MIME.FileName) = value` on an HL7 multipart becomes message-level metadata `{urn:mulse:biztalk-platform-property:MIME}FileName` (a disclosed assumption: not confirmed against a real BizTalk email). The dynamic SMTP deliver now carries `attachmentNameMetadataKey` for that key. Other part-level context stays blocked.
+- **Part copy:** `message = multipart.MSHSegment` / `.BodySegments` becomes a named Render step with the new `xml-child-select` module (Compatibility Pack), which takes child 1 (MSH) or child 2 (body) of the `HL7Multipart` wrapper. Settings: `partNumber`, `expectedRootName` (optional guard), `metadata` (Clear, assumed, or Keep). This is proven for multipart messages built by imported flows (the Billing producer builds the wrapper with exactly this order) and is disclosed as unproven for a message another system publishes. `ZSegments` copies stay blocked (the empty Z part is dropped). The UHS flow receives the multipart by a direct-bound (MessageBox) receive from the Billing service flow, so the wrapper is the one this importer defines.
+- **Billing result:** `orch54` 3 blocked → `orch57` **0 blocked** (CLEAN 6, NONE 34). The UHS map still has three scripting-functoid stubs, so that send fails closed until each has a formula.
+- **Tests:** `XmlChildSelectModuleTests` (module), part-copy importer tests in `NativePlatformMultipartImportTests`.
+
+### Increment: schema-driven HL7 render and parse
+
+- **Why:** the generic `hl7-xml-render` needs `SEG.n` element names. BTAHL7 schemas name fields `PID_3_...` and put components in schema order, so the imported assembler could not render real HL7 schema XML.
+- **Modules (`Mulse.Hl7`, plugin):** `hl7-schema-render` (schema XML to ER7) and `hl7-schema-parse` (ER7 to schema XML), sharing an internal XSD reader (`Hl7SchemaSet`). Field number comes from the element name; component and sub-component position come from schema sequence order. Group sequences are flattened, so segments sit flat under the root. The reader limits documents to 64 of at most 4 MB, rejects DTDs, rejects conflicting redefinitions, and stops on `complexContent` and `group`.
+- **Render:** accepts an `HL7Multipart` wrapper or one message and picks each part's schema by root name. Settings: `schemaText`, `trimTrailingDelimiters`, `trimTrailingComponents`, `segmentTerminator`, `escapeSequences` (None, assumed, or Encode), `fieldSeparator`, `encodingCharacters`. An undeclared element or a missing schema root stops the flow.
+- **Parse:** output is a multipart of header plus body, or one document. The body schema is chosen from MSH.9 and narrowed by MSH.12 when `bodyRoot` is empty. Settings: `schemaText`, `bodyRoot`, `headerRoot`, `unknownSegments` (Fail or Skip), `unknownFields` (Fail or Ignore), `escapeSequences` (None or Decode). The importer does not generate a parse node yet.
+- **Importer:** the map-choice deriver adds one `HL7Multipart` choice (`hl7-schema-render`) holding the union of the HL7 schemas that converted maps write, stored as config value `biztalk-hl7.schemas`. Conflicting definitions are reported as `AmbiguousMap` and an explicit choice is kept. The BTAHL7 assembler uses it and warns about the assumptions; with no HL7 schema evidence it keeps `hl7-xml-render`. The importer has its own evidence helper (`BizTalkHl7SchemaEvidence`) because `Service` must not reference the plugin.
+- **Stored-value fix:** `AttachStoredConfigValues` only matched `biztalk-map.*`, so `biztalk-flatfile.*` values were never attached to the candidate. It now matches `biztalk-(map|flatfile|hl7).*`.
+- **Billing result:** `orch58` still 0 blocked (CLEAN 6, NONE 34); the deriver finds 21 HL7 schema documents.
+- **Unverified assumptions (all editable):** escape sequences are written as is, trailing component delimiters are kept, repeating-field edge cases, ZSegments and the segment terminator (CR). A real BizTalk-assembled message is needed to confirm them. A real-schema check (synthetic ER7 through parse then render) was byte-identical.
+- **Tests:** `Hl7SchemaRenderTests`, `Hl7SchemaParseTests` (synthetic mini-schemas), deriver, pipeline-chain and stored-value importer tests.
+
+
+
+### Increment: import wizard backend
+
+- **API:** `POST /api/biztalk-import/analyze` (and the import and download endpoints, which re-analyze) accept `evidence` (up to 32 items: `id`, `kind`, `origin` Path, Text or Upload, `name`, `path`, `text`, `contentBase64`) and `previousSummary`. The response adds `evidenceRequests`, `summary` and `delta`. The server stays stateless; the client keeps the summary and sends it back.
+- **Evidence kinds read today:** Source, Bindings, RulePolicy, HostConfig, HelperSource. `RealOutput` is only recorded. Evidence is added to the matching path fields (a path field may also say `evidence:<id>`); the request's own paths are kept. A host configuration and helper source are used only together; with only one, neither is used and a warning says so.
+- **Uploads:** a single file is written under its own safe name; a `.zip` is extracted. Limits: 32 items, 64 MB per upload, 16M characters of text, 5,000 zip entries, 128 MB per entry, 512 MB extracted (counted on bytes written, not header sizes). Rejected by name: parent-relative, absolute or drive paths, device names, link entries, nested archives, bad base64, unreadable zips, bad or duplicate ids. XML keeps DTDs prohibited. The temporary folder is deleted when the analysis ends, including after an error. Source paths inside an uploaded tree in the response therefore point at a folder that no longer exists.
+- **Rules (one structured signal each, aggregated per rule so ids stay stable):** `bindings`, `rule-policies`, `policy-versions` (no evidence; chosen in the Environment step), `unresolved-projects`, `map-owners`, `map-stubs` (no evidence; edit the map), `unknown-components`, `real-output` (Possible), `host-config` (Possible). A request disappears only when a later analysis no longer reports its gap.
+- **Weak signals (documented):** the importer reports no structured signal for "a setting came from the host configuration", so `host-config` is raised as Possible whenever native generation has blocked steps and no host configuration was supplied. `rule-policies` reads the policy name from the importer's own diagnostic message, and `unknown-components` reads component names from blocked-node reasons; both formats are covered by tests. Ambiguous map choices are not yet a request.
+- **Delta:** requests cleared, new and still open; open blockers per flow before and after; derived choice status changes. Blockers are blocked native nodes (Blocking diagnostics when there is no native flow).
+- **Not built:** the wizard UI and session storage. (Origin tracking, the update plan, the UI and the AI assist are built; see the later increments.)
+- **Billing result:** `orch59` unchanged (CLEAN 6, NONE 34, 0 blocked).
+- **Tests:** `BizTalkEvidenceWizardTests` (requests, clearing and delta, policy-version choice, zip tree by evidence id, unsafe entries, limits, cleanup, host/helper pairing) and two cases in `NativeSendPipelineChainTests` (unknown component, HL7 real output).
+
+### Increment: import wizard origin tracking
+
+- **Origin:** every analyzed candidate carries `Migration.Origin` (`MigrationOrigin`: `Pieces` name → 16-character SHA-256 prefix, and `ImportedUtc`). Analysis stays deterministic, so `ImportedUtc` is null there; the import endpoint stamps it when the flow is saved. The UI view model mirrors `Origin`, so a UI round trip keeps it and the provenance guard still passes.
+- **Pieces tracked:** `structure` (node ids, kinds and nesting), `flow` (flow-level settings), `node:<id>` (a node's own fields), `choice:<nodeId>:<value>` and `shared-choice:<value>` (one dispatch choice each), and `config:<name>` (stored config values). Hashes use canonical JSON with sorted keys, so property order does not matter.
+- **Not tracked (never changed by an update):** trigger, fetch, parse and deliver steps and other non-native augments.
+- **Classification** (O = recorded origin, C = saved, N = fresh): Unchanged (O=N=C), KeptEdit (O=N, C edited), AlreadyCurrent (C=N), Add (not in O or C), UpdateInPlace (C=O, N differs), Conflict (C edited and N differs), Removed (N gone; never deleted). Selected by default: Add, UpdateInPlace, AlreadyCurrent. Conflict and KeptEdit need an explicit opt-in.
+- **Modes:** `NoOrigin` (flow not imported with origin), `NewDraft` (structure differs), `InPlace`, `NothingToDo`. NoOrigin and NewDraft save the new import as a separate disabled flow and require `Import.NewFlowId`; otherwise the request returns 400.
+- **API:** `POST /api/biztalk-import/flows/{flowId}/update-plan` (changes nothing) and `POST /api/biztalk-import/flows/{flowId}/update` (`import`, `replacePieces`). The import endpoint also accepts `newFlowId`. In-place order: new config values, the flow save, then config overwrites, so a rejected save never loses an edited value.
+- **Guard:** `IFlowDefinitionService.ReplaceImportedAsync` requires the saved flow and the new pipeline to carry `Migration`, forces `Enabled=false`, skips the client-edit provenance guard, and keeps validation and module pinning. `UpdateAsync` still rejects client-supplied `Migration` changes.
+- **Billing result:** `orch60` unchanged (CLEAN 6, NONE 34, 0 blocked).
+- **Tests:** `BizTalkImportUpdateTests` (hashing, each classification, per-choice and shared choices, structure change, no origin, config pieces, selection validation, `ReplaceImportedAsync`, UI round trip) and an origin check in `NativeSendPipelineChainTests`.
+
+### Increment: import wizard UI
+
+- **Entry point:** the Designer's "Import from BizTalk" button opens the wizard. The former form stays as "BizTalk quick import" for one-shot imports.
+- **Stages:** Source, Environment, Rules and maps, Evidence of behavior, Review and import. Each shows its open request count and a running "request(s) still open" summary. Request ids map to stages in `BizTalkWizardStages`; an id this build does not know appears in Review.
+- **Request card:** why it matters, numbered steps to get it, impact and risk, the evidence already added, and add by path, paste or upload ("zip when several"). A request can be skipped or marked not available with a note, and reopened. Answers never satisfy a request; only the importer's analysis does.
+- **Re-entry:** adding, removing or changing evidence marks the analysis stale; re-analysis sends the evidence and the previous summary and shows what was resolved, which blockers changed per flow, and which map choices appeared.
+- **Sessions:** saved automatically in this browser only (localStorage index, IndexedDB content read back in 16 KB slices to stay under the circuit's receive limit). Resume, delete, export and import a session file, with or without pasted and uploaded content. Names are limited to 80 letters, digits, spaces, dots, dashes and underscores because they become storage keys. Storage failures are shown and never stop the wizard.
+- **Candidates:** load onto the canvas, save as a new disabled flow, or update an existing imported flow through the update plan, where each piece can be kept or replaced and edited pieces are never selected by default. Downloads: control-flow model and scaffolded modules.
+- **Not built here:** the real-output comparison (M6) was added afterwards; see "Increment: compare with real output". Real-output samples can now be saved from the wizard as comparison scenarios.
+- **Result:** `orch61` unchanged (CLEAN 6, NONE 34, 0 blocked). Full suite 2,727 tests; one `ModulePackageLifecycleTests` cleanup flake passed on rerun.
+- **Tests:** `BizTalkWizardUiTests` (24): stage mapping, initial render, request cards with rationale and counts, answers and reopen, stale analysis and delta, unknown request ids, missing source, resume, storage failure, invalid name, update-plan view, the browser store round trip with slicing and failure wrapping, and the import actions: save as new (typed and suggested id, same inputs sent, flow remembered, refusal), update (plan, typed or suggested flow id, escaped, apply only chosen pieces, refused plan, no plan, close) and the actions being disabled while the analysis is out of date. The static renderer does not run after-render hooks, so the test host invokes them.
+
+### Increment: compare with real output (M6, deterministic part)
+
+The user can paste pairs of input and real output and see how Mulse's result differs. Everything is in the native test panel ("Compare with real output"); nothing is stored and no AI is involved.
+- **Runner:** `POST /api/flow-designer/native/compare`. A sample is the real output plus either Mulse's output as text, or an input to run through the existing isolated native test (same mocks, no real module). The text compared is the input of the chosen delivery (default: the last delivery, or the flow output when nothing is delivered). Up to 20 samples, 1,000,000 characters each. A sample that cannot run (missing mock, wrong delivery module, bad payload index) is reported as not compared with the reason; the rest still compare.
+- **XML-aware diff:** declaration (presence, encoding, version), byte-order mark, indentation and spacing, namespace prefix (reported once per prefix pair), attribute order, empty-element form, element order, missing and extra elements and attributes (repeats paired by occurrence), and values classified as date/time format, date/time value (may be clock-dependent), number format, letter case, surrounding spaces or other value. Each difference has a path, both values (clipped to 200 characters), an explanation and whether it is formatting only. DTDs are refused. At most 200 differences are returned and the list is marked truncated beyond that.
+- **Text:** for non-XML output (flat files, HL7): line separator style, trailing newline, trailing spaces, and per-line value, missing and extra lines. Line separators are not treated as formatting because flat-file and HL7 consumers depend on them.
+- **Verdict and wording:** per sample `Identical`, `FormattingOnly` (every difference is cosmetic: declaration, byte-order mark, whitespace, prefix, attribute order, empty-element form), `Different` or `NotCompared`. The summary reads "Matches N of M compared samples (a exactly, b apart from formatting); c differ" and always says it is evidence from the supplied samples, not proof of equivalence.
+- **Saved comparison scenarios (built):** the user can save the samples under a name and re-run them after a change (`/api/flow-designer/native/compare/scenarios`: list, get, save, delete, run). A scenario holds real data, so it is stored as a single DataProtection-encrypted file under `ComparisonScenarios:Directory` (default `Data\comparison-scenarios`, DPAPI on Windows, its own key ring), written atomically. Names are letters, digits, spaces, dot, dash and underscore (up to 80), unique ignoring case; saving a name again replaces it. Retention is chosen per scenario (until deleted, or 1 to 365 days) and expired scenarios are deleted, not archived, when the store is next read. At most 50 scenarios and 20 MB. Each scenario shows who saved it (the signed-in name when there is one, otherwise a typed value), when, and a "contains real data" flag that defaults on. Running one uses the flow definition currently in the editor; the flow is never stored with it. Only the verdict, difference class and path of the last run are kept, never values. Responses are `Cache-Control: no-store`. **Scenarios are deliberately left out of backups and exports** (the backup format has no place for them and a backup is copied more widely than the encrypted store); this is a decision, not a gap, and the UI says so.
+- **AI explanation of difference classes (built):** after a comparison, "Explain the differences" asks the AI provider the user already configured (consent each time, with a "don't ask again this session" choice). What is sent is only per-sample verdicts and a list of difference class, path and cosmetic flag, plus class counts and an optional question of up to 500 characters. **Never sent:** real or Mulse output values, sample names, error text, explanations, scenario content. Paths that do not look like plain element, attribute or line paths are replaced with "(path withheld)". The preview (`/api/authoring/compare-explain/preview`) contacts no provider; the send (`/api/authoring/compare-explain`) is bound to the SHA-256 of the previewed payload, provider and model and returns 409 otherwise. Up to 20 samples and 50 differences per sample. The reply is labeled "AI-generated explanation" and is never applied.
+- **Wizard samples to scenario (built):** in the wizard's evidence-of-behavior stage, "Check the pairs" reads the recorded real-output evidence in the browser and pairs files by name: `name.in.xml` with `name.out.xml` (also `.input`/`.output`), or the same relative path under a folder called `in`/`input` and one called `out`/`output`. Evidence can be a zip, separate uploads or pasted text; a path on the service machine is not read. Files that are unpaired, unmarked, duplicated, binary, over 5 MB or in an unsafe zip path are listed with the reason and left out; limits are 20 pairs, 200 zip entries and 50 MB. The user then names the scenario, picks retention and the real-data flag, and saves it into the store above; the flow's native test panel lists it under "Show saved scenarios". The importer still ignores these samples, and they are never sent to AI.
+- **Tests:** `OutputComparerTests` (comparer classes, bounds, DTD refusal), `NativeFlowCompareRunnerTests` (summary wording, run samples, not-compared reasons, validation, HTTP endpoint), `NativeFlowCompareUiTests` (section, request shape, local validation, server refusal, result cleared on edit, explain panel shown), `ComparisonScenarioTests` (18: encryption on disk, corrupt store, upsert, expiry, limits, delete, no values kept, HTTP), `ComparisonScenarioUiTests` (9), `BizTalkAssistEndpointTests` (6 compare-explain wire tests), `CompareExplainPanelUiTests` (7) and `BizTalkRealSamplePairingTests` (pairing rules and limits, and the wizard hand-off UI).
+
+### Increment: import wizard AI assist
+
+Optional, per request card ("Get help (optional)"). It uses whatever AI provider the user already configured for AI authoring (OpenAI, OpenAI-compatible, or the user's own GitHub Copilot connection). No new provider settings.
+- **Operations:** *Explain with AI* sends only the request text (why, steps, impact, risk) and the optional question; no evidence. *Check what I supplied* is a local, deterministic inspection (which kind of export, which applications, counts and names) and needs no AI or consent. *Ask AI about what I supplied* sends those findings (names and counts, never values); excerpts only if the user ticks "include excerpts".
+- **Consent:** every send is previewed first (`POST /api/authoring/biztalk-assist/preview`, which contacts no provider). The panel shows provider, model and the exact payload. The user chooses Send, "Send and don't ask again this session", or Cancel. The default is to ask each time. "Don't ask again" is held in the wizard's memory only, covers metadata-only sends, is never saved or exported, and resets on a new, resumed or imported session. Sends with excerpts always ask.
+- **Hash-bound send:** `POST /api/authoring/biztalk-assist` rebuilds the payload and returns 409 unless the request carries the SHA-256 of the previewed payload (with provider and model), so only what was shown can be sent. AI turned off or invalid settings also refuse the send; the local check still works.
+- **Anonymization:** payloads are scrubbed before building (secret-bearing attributes and elements, connection-string secrets, tokens, addresses, long unbroken text). Scrubbing is fail-closed: a regex timeout replaces the text with `[REMOVED]`. Excerpts are at most 6,000 characters per item and 24,000 in total, scrub-then-cut, and never include real-output samples, server paths, zips or binary content. Uploads over 1 MB are not inspected. File names only, never full paths.
+- **Limits:** question 1,000 characters, 8 evidence items, 8 MB body; reply is plain text, at most 1,024 tokens, no tools. Untrusted data stays in the user message.
+- **Output:** replies are labeled "AI-generated", are never applied to a flow, and never mark a request satisfied; the importer's analysis still decides.
+- **Copilot:** preview needs no token; sending needs the user's connected Copilot credential and otherwise shows the AI authoring "not connected" message.
+- **Not built:** any UI action that applies AI output. (The real-output comparison is a separate, deterministic increment.)
+- **Result:** `orch62` unchanged (CLEAN 6, NONE 34, 0 blocked). Full suite 2,782 tests, all passing.
+- **Tests:** `BizTalkAssistTests` (26: inspector, scrubber including a stall regression, payload plan, hash binding, limits), `BizTalkAssistEndpointTests` (5 wire tests against a fake provider: preview calls nothing, exact payload sent, missing or stale approval is 409, AI off, malformed requests), `BizTalkAssistPanelUiTests` (13) and 3 wizard UI tests (help on every card, only the request's evidence and no large uploads, don't-ask-again reset).
+
+### Increment: native Listen and correlation following
+
+- **Runtime:** new durable `Listen` node. Each branch is a `Sequence` whose first step is a `Receive` or the single timeout `Wait`. The first matching Receive in source order wins; otherwise the timeout branch runs once its saved deadline passes. The deadline is fixed on entry and survives restarts. Duplicate, unmatched and late messages are rejected, not queued. Checkpoints are validated.
+- **UI:** the editor and graph offer `Listen` and flag malformed branch shapes (fewer than 2 branches, a head that is not Receive/Wait, two timeouts, no Receive).
+- **Importer:** `Listen`/`ListenBranch` become native Listens. A correlation set initialized by the activating Receive and followed by later Receives becomes `CorrelationKeys` on those Receives, resolved from the correlation type's property references through the property schemas (string/int/boolean only). The correlation type may live in another orchestration of the same `.btproj` (exact module-qualified name). Anything else (Send-initialized plus followed, shared followers, unknown or unsupported properties) stays blocked with a specific reason.
+- **Warnings stated in the draft:** keys are pinned from the initial message's metadata, property promotion is not verified, and simultaneous-arrival tie-breaking is not reproduced.
+- **Tests:** 12 runtime/UI tests (`NativeListenTests`) and 16 importer tests (`NativeListenImportTests`). Suite: 2,503 passed.
+- **Billing result:** 109 blocked -> 97 (Listen, ListenBranch, StatementRef and the correlation sets are gone). The batch loops still need the 37 map choices from policy exports.
+
+### Increment: ClientIntegration-specific module solution (`ClientIntegration\ClientIntegration.slnx`)
+
+- **Scope rule:** only ClientIntegration-specific code goes in the new plugin solution; general-purpose helpers belong in the Compatibility Pack, `Mulse.Hl7` or the importer.
+- **Added:** `ClientIntegration-process-throttle-augment` (replaces `ProcessThrottler.GetNextProcessId`; maximum and output key are explicit UI settings; random, so not replay-safe) with 15 tests in its own test project. It builds into `Service\plugins\ClientIntegration\net11.0\` like the other plugins.
+- **Checked every other helper in the source solution** (table in `ClientIntegration\README.md`). Already covered: app-setting getters, FilenameMaker, HL7TypeCaster, SetProp, ExecuteXSLTransform.
+- **General-purpose TODO (not in the plugin):** binary-document store/retrieve module; full dynamic-map (preprocess/header/body/trailer) pattern; map `GetNextProcessId` assignments to the new module. (Property-setter drafting and the `AddBlockCharacters` report are done in the next increment.)
 
 ### Increment: A record switched on from a repeating list (per-partner on/off settings)
 
@@ -126,7 +508,7 @@ Typed or multiple catches, fault-message catches and assignments to `ex.*` remai
 
 - **Evidence:** compiled output of the Froedtert, Tenet and Norton item-sync maps has no record link, yet loops over the nearest repeating source record around the nearest repeating target record that the linked fields write to. This holds for direct links and functoid inputs, and nested repeating records get nested loops.
 - **Importer:** when scalar fields (or functoid inputs) below a repeating source record are linked into a repeating target record that has no record link, a record link is inferred, outer records first, and shown under "Repeating records" for review. A warning states that this follows partner output and was not compared with the map's own compiled output.
-- **Still refused:** inputs from unrelated repeating sources under one target record, inputs outside the enclosing record link, and functoid inputs below a repeating source whose target has no repeating ancestor (BizTalk would loop around a single field; unproven).
+- **Still refused:** inputs outside the enclosing record link, and functoid inputs below a repeating source whose target has no repeating ancestor (BizTalk would loop around a single field; unproven). Inputs from unrelated repeating sources under one target record write that record once with first-occurrence values (observed in one compiled map) and warn.
 - **Measured effect (292 real maps):** converting maps 114 to 118; the "no record link" refusal dropped from 26 to 12. Next: required targets not produced (25), "no record link and no field written directly below" optional records (9), schema paths missing (10), functoids without a verified equivalent (10).
 - **Verification:** 2,072 service tests passed and the solution built.
 
@@ -273,7 +655,7 @@ Review rule: a module with no hard-coded customer schema is generic. No aliases 
 
 - **Platform properties:** an exact allowlist of adapter/assembler symbols (`BTAHL7Schemas.*`, `FTP.*`, `FILE.Username|Password`, `MIME.FileName`, `SMTP.*`, `nsoftware.BizTalk.FTP|SFTP.*`) may be **written** with `msg(Symbol) = value`. Each write becomes a typed `SetMessageValue` (String, Int32, Boolean) on the importer-defined key `{urn:mulse:biztalk-platform-property:<clrNamespace>}<name>`. Reads, null values, unknown types, other namespaces (`EDI.*`, `HTTP.*`, `WCF.*`) and non-empty literals written to password properties stay blocked; secrets must come from a message field.
 - **Assumption (warned at import):** the properties are recorded as message metadata only. No delivery module reads them, so the delivery settings must still be configured in the UI. Wiring was deliberately not added because a missing metadata key would fail the send.
-- **HL7vXGeneric multipart:** the exact internal type (MSHSegment XmlDocument, body BodySegments XmlDocument, ZSegments String) is imported as one native XML message: an `HL7Multipart` root, then the header root, then the body root. A strict five-statement prelude is required. A whole-message copy from another multipart becomes `UseMessage` + `SaveMessage`, which also copies metadata (BizTalk starts a new context). Non-empty `ZSegments`, mixed sources and part-level context (`msg.BodySegments(MIME.FileName)`) stay blocked. `hl7-xml-render` flattens this shape; BTAHL7 assembler behavior is not claimed.
+- **HL7vXGeneric multipart:** the exact internal type (MSHSegment XmlDocument, body BodySegments XmlDocument, ZSegments String) is imported as one native XML message: an `HL7Multipart` root, then the header root, then the body root. A strict five-statement prelude is required. A whole-message copy from another multipart becomes `UseMessage` + `SaveMessage`, which also copies metadata (BizTalk starts a new context). Non-empty `ZSegments`, mixed sources and other part-level context stay blocked; `msg.BodySegments(MIME.FileName)` is mapped to message-level metadata (see the map-converter increment). `hl7-xml-render` flattens this shape; BTAHL7 assembler behavior is not claimed.
 - **Tokenizer:** verbatim strings (`@"^~\&"`) are now read.
 - **Measured effect (indicative):** all 13 ownership blockers in LegacyBillingProcess are cleared (88 -> 81 unresolved nodes) but 10 now fail on the descendant/predicate XPath reads above, so the `Create HL7 Message` blocks remain Blocked. The batch flows are unchanged. Flows stay disabled; no BizTalk equivalence is claimed.
 - **Verification:** 12 new importer tests; 1,635 service tests passed.
@@ -289,7 +671,7 @@ Review rule: a module with no hard-coded customer schema is generic. No aliases 
 ### Increment: receive filters and MessageBox direct binding
 
 - **Importer:** a Receive's `DNFPredicate` filter becomes native Receive **conditions** (already evaluated for the activating and every resumed message, and editable in the flow editor). Each predicate's property must resolve to an exact declared property schema (or the platform symbol `BTS.ReceivePortName`); the metadata key, type and literal are checked together (string `"x"` without escapes, Boolean `true`/`false`, Int32 decimal). Accepted shapes: all-AND (or one predicate) with `Equals`/`Exists`; and all-OR `Equals` on one property, translated to a single `In` condition (no commas or padding in values). Mixed AND/OR, other operators, independent OR groups and unresolved or unsupported property types keep the Receive as a visible Blocked node with the reason.
-- **`DirectBindingAttribute(MessageBox)`** is kept as a named declaration; other direct-binding kinds stay blocked. Nothing publishes or subscribes natively: the host must deliver messages with the port name as `channel` and the filter properties as metadata keys. Outbound direct-bound Sends are still blocked ("no unique physical binding") pending a native publish route.
+- **`DirectBindingAttribute(MessageBox)`** is kept as a named declaration; other direct-binding kinds stay blocked. Nothing publishes or subscribes natively: the host must deliver messages with the port name as `channel` and the filter properties as metadata keys. Outbound direct-bound Sends were blocked at this increment; the later "stock transmit pipelines and MessageBox direct sends" increment imports them as a flow-link deliver with a configurable channel.
 - **Known deviations (warned at import):** native comparisons are case-insensitive (BizTalk filters are case-sensitive); `Exists` requires a non-blank value; non-matching messages are rejected, not routed elsewhere. `BTS.ReceivePortName` is the BizTalk *receive port* name and is stored under an importer-defined platform key, so the host/ingress must populate it.
 - **Measured effect (whole `ClientIntegration Interface` repo, 53 candidates, 18 flows analysed in the audit):** the 38 `DNFPredicate`, 38 `DirectBindingAttribute` and 16 receive-filter blockers are cleared; 14 of 16 filters translate. Two stay blocked (one mixed AND/OR in UHS, one non-scalar property type). LegacyBillingProcess 71 -> 66, batch flows 38 -> 33 and UHS 22 -> 7 unresolved nodes. Flows stay disabled; no BizTalk equivalence is claimed.
 - **Verification:** 21 new tests (typed conditions and runtime matching, OR to `In`, 13 fail-closed shapes, platform key, direct-binding kinds, executor rejects non-matching messages); 1,694 service tests passed.
@@ -461,7 +843,7 @@ Shape inventory is complete (nothing dropped from evidence): 192 / 196 / 574 sha
 | Decisions (10 / 10 / 31) | Simple equality branches become `decision-augment` rules that only tag metadata (`biztalk:<decision>`). 9 / 9 / 24 branches were too complex and are quoted in a scaffolded C# module. |
 | Decision branch bodies (sends, map construction, assignments) | NOT executed by the draft flow; the tags are not consumed by anything yet. The behavior still has to be wired by hand, or by the native path below. |
 | Listen / correlation / convoy / long-running + atomic scopes | Represented only by a scaffolded `stateful-orchestration-augment` and atomic-scope tagging with a compensation requirement per route. |
-| CallRules `Billing Processing Policy` (version -1) | Reported (`BT-RULE-POLICY-MISSING`); policy not in supplied exports; no policy is wired. |
+| CallRules `Billing Processing Policy` (version -1) | Earlier state: policy not in the supplied exports. Now exported (version 1.52) and wired as a native test target when that version is selected; see "BizTalk-verified policy results" below. |
 | Dynamic maps (`Create Header & Body`, ...) | Evidence only; require explicit native renderer choices. |
 | Delay | Not translated in the draft path (native path supports pinned timers by explicit binding). |
 
@@ -518,6 +900,94 @@ Verification: 76 targeted tests and 1,508 service tests passed; solution build a
 | 10 | Run regression verification and record remaining gaps. | done: 68 targeted tests passed, solution build and `git diff --check` succeeded. |
 
 Dynamic DateTime delays, sub-second timing and the other N4/N5 behavior remain untranslated; no BizTalk equivalence or browser interaction was verified. The full suite was not rerun in this continuation.
+
+## Planned: guided import wizard (backend, origin tracking, UI and AI assist built)
+
+Status: all four build-order steps are built, see "Increment: import wizard backend", "Increment: import origin tracking and update plan", "Increment: import wizard UI" and "Increment: import wizard AI assist". Decisions confirmed by the user: the session lives in the browser; re-entry updates imported pieces in place; evidence arrives as paths, pasted text or browser upload; AI is optional, uses the provider the user already set up, and asks before every send.
+
+### Why
+
+Today the import panel is one form of path fields plus Analyze. The API is stateless, and what the importer still needs is scattered across analysis warnings, derived-choice reports, configuration requirements and blocked nodes. A user who does not know BizTalk cannot tell what to fetch, why, or where it lives on the server. Evidence also arrives over time (a binding export this week, a captured output next week), and each re-analysis starts from nothing.
+
+### Concepts
+
+- **Import session.** A named record of: source paths, the evidence items supplied, the options chosen (native draft, derive map choices, policy targets), skipped or unavailable requests with the user's note, and a summary of the last analysis. The server stays stateless: each analyze call receives the whole session and returns the result.
+- **Evidence item.** `kind`, `name`, `origin` (server path, pasted text, upload), content or path, `addedUtc`. Kinds are the ones the importer already understands: binding export, BRL policy export, host config, configuration helper source, project or solution source, deployed assembly, and (later) real output sample for compare.
+- **Evidence request.** A deterministic finding derived from an analysis result by a rule in code (not by AI):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable, derived from the rule and its subject, so the same gap keeps its identity across re-analyses. |
+| `title` | One line, plain language. |
+| `why` | What it unblocks, with counts: "13 sends use ports whose transport settings are placeholders". |
+| `howToGet` | General steps to retrieve it from a BizTalk server or host, by tool (Administration Console, `BTSTask`, Rule Composer or Rule Engine Deployment Wizard, the host `.config`, GAC folders, Tracking). Written generally, never for one organization. |
+| `accepts` | Which evidence kinds satisfy it, and which input origins are allowed. |
+| `impact` | Flows, nodes or choices affected, as links. |
+| `status` | Open, Supplied, Skipped, NotAvailable (with a note). A skipped request never blocks the import; the importer keeps failing closed. |
+| `risk` | What to avoid sharing (credentials, personal data) and what the importer drops or ignores. |
+
+- **Delta.** After each re-analysis: requests cleared, requests that appeared, blockers cleared or added per flow, and derived choices that changed status. A request is only cleared when the analysis no longer reports the gap, not because the user supplied a file.
+
+### Initial request rules (each maps to behavior the importer already has)
+
+| Rule | Trigger | Typical `howToGet` |
+| --- | --- | --- |
+| Bindings | No binding file found, or ports still carry placeholders. | Administration Console export of bindings, or `BTSTask ExportBindings` (per application). |
+| Rule policies | Rule-call shapes found and no BRL export supplied. | Export from the Business Rule Composer or Rule Engine Deployment Wizard; one file may hold many versions. |
+| Deployed policy version | Several versions present and none selected. | Rule Engine Deployment Wizard or the application's deployed-policy list. The importer never infers it. |
+| Host configuration | Code or maps read app settings the importer cannot resolve. | The host instance `.config` (for example `BTSNTSvc64.exe.config`). |
+| Configuration helper source | A helper type is called for settings. | The source file, or a decompiled copy, of the helper. |
+| Owning project for a map | A map class named by a policy or Transform shape has no analyzed project. | The project or solution that builds that assembly. |
+| Map with a stub | A scripting functoid or helper call was stubbed. | The inline script, or the compiled XSLT from the deployed map (stays local, never committed). |
+| Real output | A send was translated under a stated assumption. | A captured file from the send port's location or tracking (needed for the compare feature, plan item M6). |
+| Unknown component | A pipeline component was blocked by name. | The component's documentation, and its configuration from the send port. |
+
+New rules are added the same way as modules: one class per rule with a unit test using synthetic input.
+
+### Wizard stages
+
+1. **Source.** Choose the solution or project and any additional ones. Shows what was found (counts) and a short explanation of the result.
+2. **Environment.** Bindings and host configuration. Requests from the first two rules appear here.
+3. **Rules and maps.** Policies, deployed version, map projects, helper source. Shows the derived map choices and why each unproven one stays closed.
+4. **Evidence of behavior.** Output samples and other assumption checks. Optional, can be skipped.
+5. **Review and import.** Delta, remaining requests, the flows to create, and the per-piece update plan (see re-entry). Nothing is saved until the user confirms.
+
+A stage opens only when the earlier results make it relevant; every stage can be revisited. A request can be answered from any stage that shows it. A "what is still open" summary is always visible.
+
+### Re-entry
+
+- **Session storage.** Index and options in browser local storage; evidence content in IndexedDB (local storage is too small for exports). Both are per browser and per user, are not shared or backed up, and have an Export and Import session action (a JSON file without evidence content by default, with an explicit choice to include it). A banner states this.
+- **Server stays stateless.** Analyze receives evidence inline or as a path. Uploaded and pasted evidence is written to a request-scoped temporary folder and deleted afterwards. Limits apply: file count, per-file size and total size, with named errors. Evidence content is treated as untrusted data; nothing in it is executed, and XML is read with DTDs prohibited.
+- **Update in place.** An imported flow records an import origin: session name, and for each imported piece (map-choice entries, stored config values, specific node settings) a hash of what the importer wrote. Re-entry classifies each changed piece:
+  - **Unchanged since import:** can be updated in place.
+  - **Edited since import:** never overwritten; shown side by side with a keep or replace choice per piece.
+  - **Structural change** (nodes added, removed or reordered, new blockers): not applied in place; the user is offered a new disabled draft and a diff.
+  - Stored config values follow the existing rule (an existing value is kept) with a per-value replace option.
+  - The flow stays disabled after an update. Saving, enabling and running remain separate actions.
+
+### Optional AI layer
+
+Built on the AI authoring foundations (provider settings, redaction, per-user Copilot credential). Off by default; the wizard is complete without it. Built as two operations in the "Get help (optional)" panel of every request card (see the AI assist increment for behavior):
+- **Explain this request** in the user's terms and adapt the `howToGet` steps ("which of these tools do you have?").
+- **Ask about this file:** a user-supplied export is summarized by structure (counts, names), not content, unless the user enables more.
+- **Check what I supplied:** a deterministic check first (is this a binding export? which application?), then optional wording.
+- Never decides that a request is satisfied or that behavior is equivalent; the importer's analysis does. AI output is labeled as generated and is never applied to a flow.
+
+### Build order
+
+1. **Backend (built):** evidence request model and rule catalog; analysis input with inline evidence and temporary materialization; delta computation; tests per rule (synthetic data, no org types).
+2. **Origin tracking (built):** import-origin hashes written on flow creation; the classification above; update-plan and update endpoints; tests for unchanged, edited and structural cases.
+3. **UI (built):** wizard shell, request cards, browser session storage, upload and paste, export and import session, update-plan view. See "Increment: import wizard UI".
+4. **AI layer (built):** see "Increment: import wizard AI assist". Reuses the AI authoring provider settings, redaction and per-user Copilot credential.
+
+### Decisions on the former open questions
+
+- **Upload forms (user decision: whatever is most appropriate; zip when several files or folders are expected).** A single export (bindings, a BRL policy file, a host `.config`, a helper `.cs`) uploads as that one file. Anything that is naturally several files or a folder tree (a project or solution, a folder of binding exports, schema folders) uploads as one `.zip`. The server extracts a zip into the request-scoped temporary folder with limits (entry count, per-entry and total uncompressed size), rejects entries that escape the folder (zip-slip), absolute paths, links and nested archives, and deletes the folder afterwards.
+- **Real output stage (recommended, pending the user's reply).** The stage records samples: a pair of the input and the real output for a named send, kept in the session with the strictest disclosure rules. The importer does not read them. The deterministic comparison (see "Increment: compare with real output") is run from the native test panel; the wizard saves the recorded pairs as an encrypted comparison scenario that the panel can run.
+
+### Open questions
+
+- A shared server-side session store, if multiple people migrate one application. Not planned; the browser-local choice can be revisited.
 
 ## Product surfaces
 

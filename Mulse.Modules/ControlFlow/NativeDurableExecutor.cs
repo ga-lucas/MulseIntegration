@@ -68,8 +68,8 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
             if (available)
             {
                 if (state.Status == "Completed" || state.Stack.LastOrDefault() is not { } waiting
-                    || !nodes.TryGetValue(waiting.NodeId, out var receive) || receive.Kind != NativeFlowNodeKind.Receive
-                    || !ReceiveMatches(receive, waiting))
+                    || !nodes.TryGetValue(waiting.NodeId, out var receive)
+                    || (receive.Kind == NativeFlowNodeKind.Listen ? waiting.Phase != 1 || MatchingBranch(receive, waiting) < 0 : receive.Kind != NativeFlowNodeKind.Receive || !ReceiveMatches(receive, waiting)))
                     throw new NativeUnmatchedMessageException("Incoming native message does not match the persisted receive/channel/correlation/filter/deadline; it was not accepted or acknowledged.");
             }
         }
@@ -92,6 +92,13 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
             foreach (var correlation in node.CorrelationKeys)
                 if (!state.InitialMetadata.TryGetValue(correlation, out var pinned) || !TryMetadata(payload, correlation, out var value) || pinned != value) return false;
             return DecisionRuntime.MatchesAll(payload, node.Conditions, node.Id);
+        }
+        // Index of the first Listen branch whose Receive accepts the incoming message, or -1. Branch order is the source order.
+        int MatchingBranch(NativeFlowNode listen, NativeDurableCursor cursor)
+        {
+            for (var index = 0; index < listen.Children.Count; index++)
+                if (listen.Children[index].Children[0] is { Kind: NativeFlowNodeKind.Receive } head && ReceiveMatches(head, cursor)) return index;
+            return -1;
         }
         void Accept()
         {
@@ -120,7 +127,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                     {
                         ModuleId = step.Module, LastExecutionId = context.ExecutionId,
                         DeadlineUtc = state.Status == "Running" && state.EffectNodeId is null
-                            ? top?.DeadlineUtc ?? (top is not null && nodes.TryGetValue(top.NodeId, out var pending) && pending.Kind == NativeFlowNodeKind.Receive ? null : clock.GetUtcNow()) : null,
+                            ? top?.DeadlineUtc ?? (top is not null && nodes.TryGetValue(top.NodeId, out var pending) && (pending.Kind == NativeFlowNodeKind.Receive || pending.Kind == NativeFlowNodeKind.Listen && top.Phase == 1) ? null : clock.GetUtcNow()) : null,
                         RecoveryPending = state.Status is "Completed" or "Faulted" || state.EffectNodeId is not null,
                         State = state
                     }
@@ -141,9 +148,16 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
             state.Stack.Add(new() { NodeId = node.Id });
         }
         NativeScalar Fact(NativeMessageFact fact) => fact.Read(fact.MessageName.Length == 0 ? batch : Message(fact.MessageName));
+        TimeSpan WaitDuration(NativeFlowNode node)
+        {
+            if (node.DurationExpression is null) return TimeSpan.FromSeconds(node.DurationSeconds) + TimeSpan.FromMilliseconds(node.DurationMilliseconds);
+            if (node.DurationExpression.Evaluate(state.Variables, Fact, instance, clock).Read() is not int seconds)
+                throw new InvalidOperationException($"Native wait '{node.Id}' duration expression must produce an Int32 number of seconds.");
+            return TimeSpan.FromSeconds(seconds > 31622400 ? throw new InvalidOperationException($"Native wait '{node.Id}' duration exceeds 366 days.") : Math.Max(0, seconds));
+        }
         bool Matches(NativeFlowNode node)
         {
-            if (node.Expression is not null) return NativeExpression.Boolean(node.Expression.Evaluate(state.Variables, Fact, instance).Read());
+            if (node.Expression is not null) return NativeExpression.Boolean(node.Expression.Evaluate(state.Variables, Fact, instance, clock).Read());
             if (batch.Count != 1) throw new InvalidOperationException($"Native condition '{node.Id}' requires exactly one payload.");
             return DecisionRuntime.MatchesAll(batch.Payloads[0], node.Conditions, node.Id);
         }
@@ -171,7 +185,8 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
             for (var index = state.Stack.Count - 1; index > 0; index--)
             {
                 var candidate = nodes[state.Stack[index].NodeId];
-                if (candidate.Kind is NativeFlowNodeKind.ForEach or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Wait) return -1;
+                if (candidate.Kind is NativeFlowNodeKind.ForEach or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Wait
+                    || candidate.Kind == NativeFlowNodeKind.Listen && state.Stack[index].Phase == 1) return -1;
                 if (candidate.Kind != NativeFlowNodeKind.Try || state.Stack[index].Phase == 2) continue;
                 foreach (var variable in new[] { candidate.ExceptionMessageVariable, candidate.ExceptionDetailsVariable })
                     if (variable is not null && (state.VariableTypes.TryGetValue(variable, out var type) ? type != NativeScalarType.String : state.Variables.Count >= 128)) return -1;
@@ -274,14 +289,46 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                         context.Suspend("Native receive: " + node.Id); return batch;
                     }
                 }
+                else if (node.Kind == NativeFlowNodeKind.Listen && cursor.Phase == 2) Pop();
+                else if (node.Kind == NativeFlowNodeKind.Listen)
+                {
+                    var timeoutBranch = node.Children.FindIndex(branch => branch.Children[0].Kind == NativeFlowNodeKind.Wait);
+                    if (cursor.Phase == 0)
+                    {
+                        foreach (var correlation in node.Children.Select(branch => branch.Children[0]).Where(head => head.Kind == NativeFlowNodeKind.Receive).SelectMany(head => head.CorrelationKeys))
+                            if (!state.InitialMetadata.ContainsKey(correlation)) throw new InvalidOperationException("Native receive correlation was not initialized: " + correlation);
+                        cursor.Phase = 1;
+                        // The timeout is measured once, from when the listen starts, and survives restarts in the checkpoint.
+                        cursor.DeadlineUtc = timeoutBranch < 0 ? null : clock.GetUtcNow() + WaitDuration(node.Children[timeoutBranch].Children[0]);
+                    }
+                    var chosen = available ? MatchingBranch(node, cursor) : -1;
+                    if (available && chosen < 0) throw new NativeUnmatchedMessageException("Initial native message does not match any listen branch; it was not accepted or acknowledged.");
+                    if (chosen < 0 && cursor.DeadlineUtc is { } listenDeadline && clock.GetUtcNow() >= listenDeadline) chosen = timeoutBranch;
+                    if (chosen < 0)
+                    {
+                        await Save(cancellationToken).ConfigureAwait(false);
+                        context.Suspend("Native listen: " + node.Id); return batch;
+                    }
+                    var trigger = node.Children[chosen].Children[0];
+                    if (trigger.Kind == NativeFlowNodeKind.Receive) { batch = incoming; state.Messages[trigger.MessageName] = Capture(incoming); Accept(); }
+                    cursor.Phase = 2; cursor.DeadlineUtc = null; cursor.Position = chosen + 1;
+                    Push(node.Children[chosen]);
+                    state.Stack[^1].Position = 1;
+                }
                 else if (node.Kind == NativeFlowNodeKind.Wait)
                 {
                     Accept();
-                    if (cursor.Phase == 0) { cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow().AddSeconds(node.DurationSeconds); }
+                    if (cursor.Phase == 0) { cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow() + WaitDuration(node); }
                     if (clock.GetUtcNow() < cursor.DeadlineUtc)
                     {
-                        await Save(cancellationToken).ConfigureAwait(false);
-                        context.Suspend("Native wait: " + node.Id); return batch;
+                        // A fixed sub-second wait is a throttle: pausing in-process is exact and cheaper than parking the instance until the next resume.
+                        if (node.DurationExpression is null && node.DurationSeconds == 0 && node.DurationMilliseconds > 0)
+                            await Task.Delay(cursor.DeadlineUtc!.Value - clock.GetUtcNow(), clock, cancellationToken).ConfigureAwait(false);
+                        else
+                        {
+                            await Save(cancellationToken).ConfigureAwait(false);
+                            context.Suspend("Native wait: " + node.Id); return batch;
+                        }
                     }
                     Pop();
                 }
@@ -291,27 +338,27 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                     switch (node.Kind)
                     {
                         case NativeFlowNodeKind.DeclareVariable:
-                        case NativeFlowNodeKind.SetVariable: NativeVariables.Apply(node, state.Variables, state.VariableTypes, Fact, instance); Pop(); break;
+                        case NativeFlowNodeKind.SetVariable: NativeVariables.Apply(node, state.Variables, state.VariableTypes, Fact, instance, clock); Pop(); break;
                         case NativeFlowNodeKind.InvokeTransform:
                             // A transform is a pure value function, not an external effect: after a crash before the next checkpoint it simply runs again.
                             if (!state.VariableTypes.TryGetValue(node.Variable!, out var resultType) || resultType != NativeScalarType.String)
                                 throw new InvalidOperationException("Native transform result requires a declared String variable: " + node.Variable);
-                            var arguments = node.TransformInputs!.Select(input => ToJson(input.Evaluate(state.Variables, Fact, instance))).ToArray();
+                            var arguments = node.TransformInputs!.Select(input => ToJson(input.Evaluate(state.Variables, Fact, instance, clock))).ToArray();
                             var transformed = await transforms!.InvokeTransformAsync(node.Module, context, arguments, node.Settings, cancellationToken).ConfigureAwait(false);
                             if (transformed is not JsonValue transformedValue || !transformedValue.TryGetValue<string>(out var transformedText) || transformedText.Length > 65_536)
                                 throw new InvalidOperationException($"Native transform '{node.Module}' must return one String of at most 65,536 characters.");
                             state.Variables[node.Variable!] = NativeScalar.From(transformedText); Pop(); break;
                         case NativeFlowNodeKind.CreateXmlMessage:
-                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateXml(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance))); Pop(); break;
+                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateXml(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance, clock))); Pop(); break;
                         case NativeFlowNodeKind.CreateXmlRoot:
-                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateRoot(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance), node.NamespaceExpression!.Evaluate(state.Variables, Fact, instance))); Pop(); break;
+                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.CreateRoot(node.MessageName, node.Expression!.Evaluate(state.Variables, Fact, instance, clock), node.NamespaceExpression!.Evaluate(state.Variables, Fact, instance, clock))); Pop(); break;
                         case NativeFlowNodeKind.AppendXmlMessage:
                             state.Messages[node.MessageName] = Capture(NativeMessageOperations.AppendXml(Message(node.MessageName), Message(node.SourceMessage!))); Pop(); break;
                         case NativeFlowNodeKind.SetMessageValue:
                             var target = node.Target!;
-                            state.Messages[target.MessageName] = Capture(NativeMessageOperations.SetValue(target, node.Expression!.Evaluate(state.Variables, Fact, instance), Message(target.MessageName))); Pop(); break;
+                            state.Messages[target.MessageName] = Capture(NativeMessageOperations.SetValue(target, node.Expression!.Evaluate(state.Variables, Fact, instance, clock), Message(target.MessageName))); Pop(); break;
                         case NativeFlowNodeKind.ApplyXmlRules:
-                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.ApplyRules(Message(node.MessageName), node.PolicyJson!, cancellationToken)); Pop(); break;
+                            state.Messages[node.MessageName] = Capture(NativeMessageOperations.ApplyRules(Message(node.MessageName), node.PolicyJson!, cancellationToken, node.StopWhenNoRuleMatches)); Pop(); break;
                         case NativeFlowNodeKind.SaveMessage: state.Messages[node.MessageName] = Capture(batch); Pop(); break;
                         case NativeFlowNodeKind.UseMessage: batch = Message(node.MessageName); Pop(); break;
                         case NativeFlowNodeKind.Reply: context.CaptureResponse(Message(node.MessageName)); Pop(); break;
@@ -335,7 +382,7 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                             {
                                 var effective = new Dictionary<string, string>(node.Settings, StringComparer.OrdinalIgnoreCase);
                                 foreach (var (settingKey, settingExpression) in settingExpressions)
-                                    effective[settingKey] = settingExpression.Evaluate(state.Variables, Fact, instance).Read() switch
+                                    effective[settingKey] = settingExpression.Evaluate(state.Variables, Fact, instance, clock).Read() switch
                                     {
                                         string text => text, int number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
                                         bool flag => flag ? "true" : "false",
@@ -345,21 +392,46 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                             }
                             if (node.SelectionExpression is { } selection)
                             {
-                                if (selection.Evaluate(state.Variables, Fact, instance).Read() is not string identity)
+                                if (selection.Evaluate(state.Variables, Fact, instance, clock).Read() is not string identity)
                                     throw new InvalidOperationException("Native renderer selection requires a String identity.");
-                                var choice = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(node.Settings["casesJson"])
+                                var choice = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(definition.ChoicesFor(node))
                                     .SingleOrDefault(choice => choice.Value == identity)
                                     ?? throw new InvalidOperationException("Native renderer selected an unconfigured identity; no CLR type is loaded.");
                                 rendererModule = choice.Module; rendererSettings = choice.Settings;
                             }
+                            if (node.Kind == NativeFlowNodeKind.Deliver && cursor.Phase == 1)
+                            {
+                                if (clock.GetUtcNow() < cursor.DeadlineUtc)
+                                {
+                                    await Save(cancellationToken).ConfigureAwait(false);
+                                    context.Suspend("Native deliver retry wait: " + node.Id); return batch;
+                                }
+                                cursor.Phase = 0; cursor.DeadlineUtc = null;
+                            }
                             state.EffectNodeId = node.Id; state.EffectKind = node.Kind; state.EffectModule = node.Module;
                             await Save(cancellationToken).ConfigureAwait(false);
-                            var result = node.Kind switch
+                            IntegrationBatch result;
+                            try
                             {
-                                NativeFlowNodeKind.Augment => await augments.AugmentAsync(node.Module, context, effectBatch, node.Settings, cancellationToken).ConfigureAwait(false),
-                                NativeFlowNodeKind.Render => await renderers.RenderAsync(rendererModule, context, effectBatch, rendererSettings, cancellationToken).ConfigureAwait(false),
-                                _ => await deliveries!.DeliverAsync(node.Module, context, effectBatch, deliverSettings, cancellationToken).ConfigureAwait(false)
-                            };
+                                result = node.Kind switch
+                                {
+                                    NativeFlowNodeKind.Augment => await augments.AugmentAsync(node.Module, context, effectBatch, node.Settings, cancellationToken).ConfigureAwait(false),
+                                    NativeFlowNodeKind.Render => await renderers.RenderAsync(rendererModule, context, effectBatch, rendererSettings, cancellationToken).ConfigureAwait(false),
+                                    _ => await deliveries!.DeliverAsync(node.Module, context, effectBatch, deliverSettings, cancellationToken).ConfigureAwait(false)
+                                };
+                            }
+                            catch (Exception failure) when (node.Kind == NativeFlowNodeKind.Deliver && node.Retry is { } retry && cursor.Iterations < retry.Attempts
+                                && failure is not (OperationCanceledException or NativePersistenceException or NativeAmbiguousEffectException)
+                                && (failure is DeliveryNotSentException || retry.RetryAmbiguous))
+                            {
+                                // Only a failure the module proves sent nothing is safe to repeat; an opted-in ambiguous retry may duplicate the send.
+                                cursor.Iterations++; cursor.Phase = 1; cursor.DeadlineUtc = clock.GetUtcNow().AddSeconds(retry.IntervalSeconds);
+                                state.EffectNodeId = null; state.EffectKind = null; state.EffectModule = null;
+                                await Save(CancellationToken.None).ConfigureAwait(false);
+                                var detail = failure.Message.Length > 300 ? failure.Message[..300] + "..." : failure.Message;
+                                context.Suspend($"Native deliver '{node.Id}' attempt {cursor.Iterations} of {retry.Attempts + 1} failed ({(failure is DeliveryNotSentException ? "nothing was sent" : "ambiguous; retry of ambiguous failures is enabled")}): {detail} Next attempt at {cursor.DeadlineUtc:O}.");
+                                return batch;
+                            }
                             if (context.Disposition != FlowExecutionDisposition.Continue || context.DeliveryFailures.Count != 0)
                                 throw new InvalidOperationException($"Native effect '{node.Id}' suspended or reported delivery failure; its intent requires reconciliation.");
                             if (node.Kind == NativeFlowNodeKind.Deliver)
@@ -471,13 +543,19 @@ public sealed class NativeDurableExecutor(IFlowOrchestrationStateStore store, Ti
                 || node?.Kind is NativeFlowNodeKind.If or NativeFlowNodeKind.Try && (cursor.Iterations != 0 || cursor.Phase == 0 && cursor.Position != 0)
                 || node?.Kind == NativeFlowNodeKind.ForEach && (cursor.Phase > 1 || cursor.Inputs.Count > node.MaxIterations || cursor.Iterations > cursor.Inputs.Count
                     || cursor.Phase == 0 && (cursor.Position != 0 || cursor.Iterations != 0 || cursor.Inputs.Count != 0 || cursor.Outputs.Count != 0))
-                || node is not null && node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.Try or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive)
+                || node is not null && node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.Try or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen or NativeFlowNodeKind.Deliver)
                     && (cursor.Position != 0 || cursor.Phase != 0 || cursor.Iterations != 0)
+                || node?.Kind == NativeFlowNodeKind.Deliver && (cursor.Position != 0 || cursor.Phase > 1 || cursor.Iterations > (node.Retry?.Attempts ?? 0)
+                    || (cursor.Phase == 1) != (cursor.DeadlineUtc is not null) || cursor.Phase == 1 && cursor.Iterations == 0)
                 || node?.Kind == NativeFlowNodeKind.While && (cursor.Phase > 1 || cursor.Iterations > node.MaxIterations)
                 || node?.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive && (cursor.Phase > 1 || cursor.Position != 0 || cursor.Iterations != 0)
                 || node?.Kind == NativeFlowNodeKind.Wait && cursor.Phase == 1 && cursor.DeadlineUtc is null
                 || node?.Kind == NativeFlowNodeKind.Receive && cursor.Phase == 1 && (node.DurationSeconds == 0 ? cursor.DeadlineUtc is not null : cursor.DeadlineUtc is null)
-                || node?.Kind is not (NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive) && cursor.DeadlineUtc is not null
+                || node?.Kind == NativeFlowNodeKind.Listen && (cursor.Iterations != 0 || cursor.Phase == 2 && (cursor.Position == 0 || cursor.DeadlineUtc is not null)
+                    || cursor.Phase != 2 && cursor.Position != 0
+                    || cursor.Phase == 1 && (node.Children.Any(branch => branch.Children[0].Kind == NativeFlowNodeKind.Wait) ? cursor.DeadlineUtc is null : cursor.DeadlineUtc is not null)
+                    || cursor.Phase == 0 && cursor.DeadlineUtc is not null)
+                || node?.Kind is not (NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen or NativeFlowNodeKind.Deliver) && cursor.DeadlineUtc is not null
                 || node?.Kind != NativeFlowNodeKind.ForEach && (cursor.Inputs.Count != 0 || cursor.Outputs.Count != 0))
                 throw new InvalidOperationException("Invalid persisted native cursor state.");
             if (index + 1 < state.Stack.Count && (cursor.Position == 0 || children[cursor.Position - 1].Id != state.Stack[index + 1].NodeId))

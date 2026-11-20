@@ -1,0 +1,33 @@
+.flow-assistant {
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    margin: 0.75rem 0;
+    background: var(--surface-panel);
+    min-width: 0;
+}
+.assistant-header { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
+.assistant-header h2 { margin-top: 0; }
+.proposal-review { border-top: 1px solid var(--border-subtle); margin-top: 1rem; padding-top: 1rem; }
+.proposal-table { max-height: 22rem; overflow: auto; margin-bottom: 1rem; }
+.proposal-table table { width: 100%; border-collapse: collapse; }
+.proposal-table th, .proposal-table td { text-align: left; vertical-align: top; padding: 0.5rem; border-bottom: 1px solid var(--border-subtle); overflow-wrap: anywhere; }
+.flow-assistant ::deep .sc-ai-root {
+    --sc-ai-color-bg: var(--surface-panel);
+    --sc-ai-color-surface: var(--surface-input);
+    --sc-ai-color-surface-hover: var(--surface-card);
+    --sc-ai-color-text: var(--text-primary);
+    --sc-ai-color-text-secondary: var(--text-secondary);
+    --sc-ai-color-text-on-accent: var(--accent-ink);
+    --sc-ai-color-accent: var(--accent);
+    --sc-ai-color-accent-hover: var(--accent-hover);
+    --sc-ai-color-border: var(--border-subtle);
+    --sc-ai-color-error: var(--error-text);
+    --sc-ai-color-error-bg: var(--error-bg);
+    --sc-ai-color-bubble-user: var(--surface-preview);
+    --sc-ai-color-bubble-user-text: var(--text-primary);
+    --sc-ai-color-bubble-assistant-text: var(--text-primary);
+    max-height: 36rem;
+    overflow: auto;
+}
+@media (max-width: 700px) { .assistant-header { flex-direction: column; } }

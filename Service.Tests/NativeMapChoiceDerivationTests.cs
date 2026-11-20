@@ -201,6 +201,39 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
     }
 
     [Fact]
+    public void StoredMode_KeepsReferencesInTheCasesAndTheMapsInTheSink_SoManyMapsStaySmall()
+    {
+        var project = WriteProject();
+        var values = Enumerable.Range(0, 128).Select(index => $"Acme.Partner.Maps.OrderToResult, Acme.Partner, Version=1.0.{index}.0").ToArray();
+        var stored = new Dictionary<string, string>();
+
+        var result = Derive(project, Literals(values), stored: stored);
+        var inline = Derive(project, Literals(values));
+
+        Assert.Equal(128, stored.Count);
+        var cases = RenderDispatchDefinition.Read(result.CasesJson);
+        Assert.Equal(128, cases.Count);
+        Assert.All(cases, entry => Assert.Equal("{{config:" + BizTalkNativeMapChoiceDeriver.StoredName(entry.Value) + "}}", entry.Settings["mappingJson"]));
+        Assert.True(result.CasesJson.Length < inline.CasesJson.Length, "references must be smaller than the embedded maps");
+        Assert.DoesNotContain("Number", result.CasesJson, StringComparison.Ordinal);
+        Assert.Contains("Number", inline.CasesJson, StringComparison.Ordinal);
+        var first = cases[0];
+        Assert.Equal("42", XDocument.Parse(new XmlMappingEngine(stored[BizTalkNativeMapChoiceDeriver.StoredName(first.Value)]).Transform("<Order xmlns='urn:source' code='A'><Id>42</Id></Order>")).Root!.Element("Number")!.Value);
+        Assert.All(result.Report.Where(item => item.Status == "Converted"), item => Assert.Contains("Stored as config value 'biztalk-map.OrderToResult-", item.Detail, StringComparison.Ordinal));
+        Assert.DoesNotContain(inline.Report, item => item.Detail.Contains("config value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void StoredMode_DoesNotStoreUnconvertedValues()
+    {
+        var stored = new Dictionary<string, string>();
+
+        Derive(WriteProject(), Literals("Acme.Partner.Maps.Broken, Acme.Partner", "Acme.Partner.Maps.Missing, Acme.Partner"), stored: stored);
+
+        Assert.Empty(stored);
+    }
+
+    [Fact]
     public void MapNameLiterals_OnlyIncludeNonEmptyMapNameStringsOfSelectedVersions()
     {
         var path = Path.Combine(_directory, "rules.xml");
@@ -229,9 +262,7 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
 
         Assert.Equal(["Converted", "NoMatchingMap"], response.DerivedMapChoices.OrderBy(item => item.Status, StringComparer.Ordinal).Select(item => item.Status));
         Assert.Single(RenderDispatchDefinition.Read(response.EffectiveMapChoicesJson!));
-        Assert.Contains(response.Warnings, warning => warning.Contains("1 of 2 policy map-name values", StringComparison.Ordinal));
-        await Assert.ThrowsAsync<ArgumentException>(() => service.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest
-        { SourcePath = project, GenerateNativeFlow = true, DeriveNativeMapChoices = true }, default));
+        Assert.Contains(response.Warnings, warning => warning.Contains("1 of 2 map-name values", StringComparison.Ordinal));
         await Assert.ThrowsAsync<ArgumentException>(() => service.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest
         { SourcePath = project, AdditionalRulePaths = [rules], DeriveNativeMapChoices = true }, default));
         var without = await service.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest { SourcePath = project, AdditionalRulePaths = [rules], GenerateNativeFlow = true }, default);
@@ -265,8 +296,9 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
         AnalyzeBizTalkSolutionRequestViewModel Request() => (AnalyzeBizTalkSolutionRequestViewModel)current.Invoke(designer, null)!;
 
         SetField("_generateNativeBizTalkFlow", true);
-        Assert.False(Request().DeriveNativeMapChoices);
         SetField("_additionalRulePaths", "rules.xml");
+        Assert.True(Request().DeriveNativeMapChoices);
+        SetField("_additionalRulePaths", "");
         Assert.True(Request().DeriveNativeMapChoices);
         SetField("_deriveNativeMapChoices", false);
         Assert.False(Request().DeriveNativeMapChoices);
@@ -374,10 +406,108 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
         }
     }
 
-    private DerivedMapChoices Derive(string project, IReadOnlyList<PolicyMapNameLiteral> literals, string? explicitJson = null, string[]? projects = null)
+    private const string FlatTargetXsd = """
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:b="http://schemas.microsoft.com/BizTalk/2003" targetNamespace="urn:target">
+          <xs:annotation><xs:appinfo><b:schemaInfo standard="Flat File" root_reference="Result" default_pad_char=" " pad_char_type="char" /></xs:appinfo></xs:annotation>
+          <xs:element name="Result"><xs:annotation><xs:appinfo><b:recordInfo structure="delimited" child_delimiter_type="char" child_delimiter="," child_order="infix" sequence_number="1" preserve_delimiter_for_empty_data="true" /></xs:appinfo></xs:annotation>
+            <xs:complexType><xs:sequence>
+              <xs:element name="Number" type="xs:string"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number="2" justification="left" /></xs:appinfo></xs:annotation></xs:element>
+              <xs:element name="Text" type="xs:string" minOccurs="0"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number="3" justification="left" /></xs:appinfo></xs:annotation></xs:element>
+            </xs:sequence>
+            <xs:attribute name="code" type="xs:string" use="required"><xs:annotation><xs:appinfo><b:fieldInfo sequence_number="1" justification="left" /></xs:appinfo></xs:annotation></xs:attribute></xs:complexType></xs:element>
+        </xs:schema>
+        """;
+
+    private string WriteFlatTargetProject(string targetXsd)
+    {
+        var project = WriteProject();
+        File.WriteAllText(Path.Combine(_directory, "Schemas", "Result.xsd"), targetXsd);
+        return project;
+    }
+
+    [Fact]
+    public void AMapWritingAFlatFileSchemaAddsAFlatFileRenderChoiceKeyedByMessageTypeThatRendersTheMapOutput()
+    {
+        var result = Derive(WriteFlatTargetProject(FlatTargetXsd), Literals(Good));
+
+        var flat = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "flat-file-schema-render");
+        Assert.Equal("urn:target#Result", flat.Value);
+        Assert.Contains(result.Report, item => item.Value == "urn:target#Result" && item.Status == "Converted");
+        var map = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "xml-mapping-render");
+        var mapped = new XmlMappingEngine(map.Settings["mappingJson"]).Transform("<Order xmlns='urn:source' code='A'><Id>42</Id></Order>");
+        Assert.Equal("A,42,<&>{'quoted'}", FlatFileSchema.Compile([flat.Settings["schemaText"]]).Render(mapped));
+    }
+
+    [Fact]
+    public void TheFlatFileSchemaIsStoredAsAConfigValueWhenAStoreIsSupplied()
+    {
+        var stored = new Dictionary<string, string>();
+
+        var result = Derive(WriteFlatTargetProject(FlatTargetXsd), Literals(Good), stored: stored);
+
+        var flat = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "flat-file-schema-render");
+        var name = BizTalkNativeMapChoiceDeriver.FlatFileStoredName("urn:target#Result");
+        Assert.Equal("{{config:" + name + "}}", flat.Settings["schemaText"]);
+        Assert.StartsWith("biztalk-flatfile.Result-", name, StringComparison.Ordinal);
+        Assert.Equal("urn:target#Result", FlatFileSchema.Compile([stored[name]]).MessageType);
+    }
+
+    [Fact]
+    public void AFlatFileSchemaTheRendererCannotReproduceGetsNoChoiceAndAReportedReason()
+    {
+        var unsupported = FlatTargetXsd.Replace("child_order=\"infix\"", "child_order=\"infix\" escape_char=\"\\\"", StringComparison.Ordinal);
+
+        var result = Derive(WriteFlatTargetProject(unsupported), Literals(Good));
+
+        Assert.DoesNotContain(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "flat-file-schema-render");
+        Assert.Contains(result.Report.Single(item => item.Value == Good).Warnings, warning => warning.Contains("cannot reproduce", StringComparison.Ordinal));
+    }
+
+    private static readonly string Hl7TargetXsd = NativeMapImportTests.TargetXsd.Replace("</xs:schema>",
+        "<xs:complexType name=\"PID\"><xs:sequence><xs:element name=\"PID_1_SetId\" type=\"xs:string\" minOccurs=\"0\" /></xs:sequence></xs:complexType></xs:schema>", StringComparison.Ordinal);
+
+    [Fact]
+    public void AMapWritingAnHl7SchemaAddsOneHl7RendererChoiceForTheMultipartWrapper()
+    {
+        var stored = new Dictionary<string, string>();
+
+        var result = Derive(WriteFlatTargetProject(Hl7TargetXsd), Literals(Good), stored: stored);
+
+        var hl7 = Assert.Single(RenderDispatchDefinition.Read(result.CasesJson), entry => entry.Module == "hl7-schema-render");
+        Assert.Equal("HL7Multipart", hl7.Value);
+        Assert.Equal("{{config:biztalk-hl7.schemas}}", hl7.Settings["schemaText"]);
+        Assert.Contains(result.Report, item => item.Value == "HL7Multipart" && item.Status == "Converted");
+        Assert.Contains("name=\"PID\"", Assert.Single(System.Text.Json.JsonSerializer.Deserialize<string[]>(stored["biztalk-hl7.schemas"])!), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnExplicitHl7ChoiceIsKeptAndANonHl7TargetAddsNone()
+    {
+        var explicitJson = "[{\"value\":\"HL7Multipart\",\"module\":\"hl7-schema-render\",\"settings\":{\"schemaText\":\"mine\"}}]";
+
+        var kept = Derive(WriteFlatTargetProject(Hl7TargetXsd), Literals(Good), explicitJson);
+        var none = Derive(WriteFlatTargetProject(NativeMapImportTests.TargetXsd), Literals(Good));
+
+        Assert.Contains(kept.Report, item => item.Value == "HL7Multipart" && item.Status == "ExplicitChoice");
+        Assert.Empty(RenderDispatchDefinition.Read(none.CasesJson).Where(entry => entry.Module == "hl7-schema-render"));
+        Assert.DoesNotContain(none.Report, item => item.Value == "HL7Multipart");
+    }
+
+    [Fact]
+    public void Hl7SchemaEvidenceNeedsASegmentAndAMessageElementAndDetectsConflicts()
+    {
+        Assert.True(BizTalkHl7SchemaEvidence.IsMessageSchema([Hl7TargetXsd]));
+        Assert.False(BizTalkHl7SchemaEvidence.IsMessageSchema([NativeMapImportTests.TargetXsd]));
+        Assert.False(BizTalkHl7SchemaEvidence.IsMessageSchema(["not xml"]));
+        var different = Hl7TargetXsd.Replace("PID_1_SetId", "PID_1_Other", StringComparison.Ordinal);
+        Assert.True(BizTalkHl7SchemaEvidence.Conflicts([Hl7TargetXsd, different]));
+        Assert.False(BizTalkHl7SchemaEvidence.Conflicts([Hl7TargetXsd, Hl7TargetXsd]));
+    }
+
+    private DerivedMapChoices Derive(string project, IReadOnlyList<PolicyMapNameLiteral> literals, string? explicitJson = null, string[]? projects = null, IDictionary<string, string>? stored = null)
     {
         var paths = projects ?? [project];
-        return BizTalkNativeMapChoiceDeriver.Derive(paths, literals, BizTalkSchemaSourceCatalog.Read(paths), explicitJson, default);
+        return BizTalkNativeMapChoiceDeriver.Derive(paths, literals, BizTalkSchemaSourceCatalog.Read(paths), explicitJson, default, stored);
     }
 
     private static PolicyMapNameLiteral[] Literals(params string[] values) => values.Select(value => new PolicyMapNameLiteral("Billing", "1.0", "MapName", value)).ToArray();
@@ -421,5 +551,81 @@ public sealed class NativeMapChoiceDerivationTests : IDisposable
                     new XElement(brl + "argument", new XElement(brl + "constant", new XElement(brl + "string", setter.Value))))))))))).ToString();
     }
 
+    private static readonly XNamespace Design = "http://schemas.microsoft.com/BizTalk/2003/DesignerData";
+    private static XElement Prop(string key, string value) => new(Design + "Property", new XAttribute("Name", key), new XAttribute("Value", value));
+    private static XElement Shape(string kind, string name, params object[] children) => new(Design + "Element", new XAttribute("Type", kind), Prop("Name", name), children);
+    private static XElement PartRef(string link, string message, string? part = null)
+        => new(Design + "Element", new XAttribute("Type", "MessagePartRef"), new XAttribute("ParentLink", link), Prop("MessageRef", message), part is null ? null : Prop("PartRef", part), Prop("Name", "ref-" + message));
+
+    private async Task<(BizTalkSolutionAnalysisResponse Response, BizTalkFlowCandidateResponse Candidate)> ImportTransformShape(string className, bool derive = true, string? part = null, bool twoInputs = false)
+    {
+        var project = WriteProject();
+        File.WriteAllText(project, File.ReadAllText(project).Replace("</ItemGroup>", "<XLang Include=\"Flow.odx\" /></ItemGroup>", StringComparison.Ordinal));
+        var inputs = twoInputs ? new object[] { PartRef("Transform_InputMessagePartRef", "request", part), PartRef("Transform_InputMessagePartRef", "extra") }
+            : [PartRef("Transform_InputMessagePartRef", "request", part)];
+        var source = new XElement(Design + "MetaModel", Shape("ServiceDeclaration", "Service",
+            Shape("MessageDeclaration", "request"), Shape("MessageDeclaration", "extra"), Shape("MessageDeclaration", "result"),
+            Shape("ServiceBody", "Body",
+                Shape("Receive", "input", Prop("MessageName", "request"), Prop("PortName", "input")),
+                Shape("Construct", "Build result",
+                    Shape("Transform", "Apply map", Prop("ClassName", className), inputs, PartRef("Transform_OutputMessagePartRef", "result")),
+                    Shape("MessageRef", "resultRef", Prop("Ref", "result"))))));
+        File.WriteAllText(Path.Combine(_directory, "Flow.odx"), "<?xml version='1.0'?>" + source);
+        var response = await new BizTalkImportService().AnalyzeAsync(new AnalyzeBizTalkSolutionRequest { SourcePath = project, GenerateNativeFlow = true, DeriveNativeMapChoices = derive }, default);
+        return (response, Assert.Single(response.FlowCandidates));
+    }
+
+    private static Mulse.Modules.ControlFlow.NativeFlowDefinition Definition(BizTalkFlowCandidateResponse candidate)
+        => Mulse.Modules.ControlFlow.NativeFlowDefinition.Read(candidate.DraftFlow.Augments.Single().Settings["flowJson"], allowBlocked: true);
+
+    [Fact]
+    public async Task StaticTransformShape_BecomesARenderDispatchStepOverTheSharedChoiceTable()
+    {
+        var (response, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult");
+        var definition = Definition(candidate);
+        Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.Name.Contains("Apply map", StringComparison.Ordinal));
+        var step = Assert.Single(definition.AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Render);
+        Assert.Equal("render-dispatch", step.Module);
+        Assert.Equal(["request"], step.InputMessages);
+        Assert.Equal("result", step.MessageName);
+        Assert.Equal("Acme.Partner.Maps.OrderToResult", step.SelectionExpression!.Literal!.Value);
+        Assert.Contains(RenderDispatchDefinition.Read(definition.RenderChoicesJson!), choice => choice.Value == "Acme.Partner.Maps.OrderToResult");
+        Assert.Contains(response.DerivedMapChoices, item => item.Value == "Acme.Partner.Maps.OrderToResult" && item.Status == "Converted");
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("static Transform shape", StringComparison.Ordinal));
+        Assert.False(candidate.DraftFlow.Enabled);
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_PassesEveryInputInSourceOrder()
+    {
+        var (_, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult", twoInputs: true);
+        var step = Assert.Single(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Render);
+        Assert.Equal(["request", "extra"], step.InputMessages);
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_StaysBlockedWithoutDerivedChoices()
+    {
+        var (_, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult", derive: false);
+        var blocked = Assert.Single(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.Name == "Apply map");
+        Assert.Contains("no native renderer choice", blocked.BlockReason, StringComparison.Ordinal);
+        Assert.Contains("Derive native map choices", blocked.BlockReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_WithAMapThatIsNotInTheImportStaysBlockedAndIsReported()
+    {
+        var (response, candidate) = await ImportTransformShape("Acme.Partner.Maps.NotThere");
+        Assert.Contains(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.BlockReason.Contains("no native renderer choice", StringComparison.Ordinal));
+        Assert.Contains(response.DerivedMapChoices, item => item.Value == "Acme.Partner.Maps.NotThere" && item.Status == "NoMatchingMap");
+    }
+
+    [Fact]
+    public async Task StaticTransformShape_WithAMessagePartInputStaysBlocked()
+    {
+        var (_, candidate) = await ImportTransformShape("Acme.Partner.Maps.OrderToResult", part: "BodyPart");
+        var blocked = Assert.Single(Definition(candidate).AllNodes(), node => node.Kind == Mulse.Modules.ControlFlow.NativeFlowNodeKind.Blocked && node.Name == "Apply map");
+        Assert.Contains("part-level", blocked.BlockReason, StringComparison.Ordinal);
+    }
     public void Dispose() { if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true); }
 }

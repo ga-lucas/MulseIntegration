@@ -14,7 +14,7 @@
         @foreach (var setting in module.Settings)
         {
             <label>@setting.Label @(setting.IsRequired ? "*" : "")
-                <ReferenceInput @key="(Module, setting.Key)" Label="@setting.Label" InputKind="@setting.InputKind" Options="setting.Options" References="References" DefaultValue="@setting.DefaultValue"
+                <ReferenceInput @key="(Module, setting.Key)" SettingKey="@setting.Key" Label="@setting.Label" InputKind="@setting.InputKind" Options="setting.Options" References="References" DefaultValue="@setting.DefaultValue"
                     Value="@Settings.GetValueOrDefault(setting.Key, setting.DefaultValue ?? string.Empty)" ValueChanged="value => SetSettingAsync(setting.Key, value)" />
             </label>
             <p>@setting.Description</p>

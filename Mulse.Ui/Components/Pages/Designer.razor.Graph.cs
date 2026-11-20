@@ -319,6 +319,7 @@ public partial class Designer
             _connectionFromId = source.Id;
             CompleteConnection(target);
         }
+        RecordChange();
         return InvokeAsync(StateHasChanged);
     }
 

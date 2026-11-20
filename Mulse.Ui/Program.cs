@@ -57,8 +57,10 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("MulseAdmin", policy => policy.RequireAuthenticatedUser().RequireRole(adminRole));
 builder.Services.AddCascadingAuthenticationState();
-builder.Services.AddHttpClient("oidc-token");
+builder.Services.AddGitHubCopilotSignIn(builder.Configuration, builder.Environment);
+builder.Services.AddHttpClient("oidc-token", httpClient => httpClient.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<MulseApiAccessTokenProvider>();
+builder.Services.AddScoped<IBizTalkSessionStore, BizTalkSessionStore>();
 builder.Services.AddTransient<MulseApiAccessTokenHandler>();
 builder.Services.AddHttpClient<IMulseApiClient, MulseApiClient>((serviceProvider, httpClient) =>
 {
@@ -76,6 +78,17 @@ var migrationClient = builder.Services.AddHttpClient("mulse-storage-migration", 
 migrationClient.RemoveAllResilienceHandlers();
 #pragma warning restore EXTEXP0001
 migrationClient.AddHttpMessageHandler<MulseApiAccessTokenHandler>();
+var authoringClient = builder.Services.AddHttpClient("mulse-ai-authoring", (serviceProvider, httpClient) =>
+{
+    httpClient.BaseAddress = new Uri(serviceProvider.GetRequiredService<IConfiguration>()["MulseApi:BaseUrl"] ?? "http://localhost:5210");
+    httpClient.Timeout = TimeSpan.FromMinutes(2);
+});
+#pragma warning disable EXTEXP0001 // Do not automatically replay a billable model request.
+authoringClient.RemoveAllResilienceHandlers();
+#pragma warning restore EXTEXP0001
+authoringClient.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false });
+authoringClient.AddHttpMessageHandler<MulseApiAccessTokenHandler>();
+authoringClient.RedactLoggedHeaders(_ => true);
 
 var app = builder.Build();
 
@@ -86,6 +99,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseIdentityProviderUnavailablePage();
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -98,12 +112,11 @@ app.MapGet("/auth/login", () => Results.Challenge(
 app.MapPost("/auth/logout", async (HttpContext context, IAntiforgery antiforgery) =>
     {
         await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
-        return Results.SignOut(
-            new AuthenticationProperties { RedirectUri = "/" },
-            [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme]);
+        await OidcSession.SignOutAsync(context).ConfigureAwait(false);
     })
     .RequireAuthorization();
 
+app.MapGitHubCopilotSignIn();
 app.MapDefaultEndpoints();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()

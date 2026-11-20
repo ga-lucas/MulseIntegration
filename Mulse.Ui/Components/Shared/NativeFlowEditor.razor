@@ -17,6 +17,14 @@
             <p class="field-hint">Each arrival needs a stable unique ID and a case-sensitive instance value. Receive channels use the incoming channel metadata. Source acknowledgements remain deferred until downstream success.</p>
         }
         <label class="field-label">Output named message (blank uses working batch) <input class="mapping-input" @bind="_model.OutputMessage" @bind:after="Persist" /></label>
+        @if (_model.RenderChoicesJson is not null)
+        {
+            <fieldset>
+                <legend>Shared renderer choices</legend>
+                <p class="field-hint">Every dynamic-transform step without choices of its own selects its renderer from this one table, so a change here applies to all of them. The table covers every policy map name found at import, not only the ones a given step can receive; a name that is not listed fails closed. A choice that holds a <code>{{config:...}}</code> reference loads its map or stylesheet from that config value when it is selected; that value is shared by every flow that uses it.</p>
+                <RenderDispatchEditor Settings="_sharedChoices" Modules="Modules" References="References" NativeSelectionMode="true" Changed="SharedChoicesChanged" />
+            </fieldset>
+        }
         </details>
         @if (BlockedNodes.Count > 0)
         {
@@ -76,6 +84,7 @@
         {
             <NativeFlowNodesEditor Nodes="_model.Nodes" Modules="Modules" References="References" Changed="Persist" MessageNames="SavedMessageNames" Variables="VariableNames" HtmlIdPrefix="@_htmlIdPrefix" />
         }
+        <NativeFlowExplainPanel Value="Value" />
         <NativeFlowTestEditor Value="Value" Nodes="_model.Nodes" />
     }
     <details><summary>Advanced native definition JSON</summary>
@@ -187,20 +196,21 @@
                 {
                     if (node is null || node.Id is null || !ids.Add(node.Id) || ids.Count > 2000 || node.Name is null || node.Module is null
                         || node.Settings is null || node.Conditions is null || node.Children is null || node.Otherwise is null || node.BlockReason is null
-                        || node.Kind is not ("Sequence" or "If" or "ForEach" or "While" or "Augment" or "Render" or "Blocked" or "Wait" or "Receive" or "SaveMessage" or "UseMessage" or "Reply" or "Deliver" or "DeclareVariable" or "SetVariable" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate" or "Try" or "InvokeTransform")
+                        || node.Kind is not ("Sequence" or "If" or "ForEach" or "While" or "Augment" or "Render" or "Blocked" or "Wait" or "Receive" or "SaveMessage" or "UseMessage" or "Reply" or "Deliver" or "DeclareVariable" or "SetVariable" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate" or "Try" or "InvokeTransform" or "Listen")
                         || node.MessageName is null || node.Channel is null || node.CorrelationKeys is null || node.CorrelationKeys.Any(key => key is null)
                         || node.InputMessages is { } inputs && (inputs.Count > 32 || inputs.Any(name => name is null))
                         || node.Settings.Any(pair => pair.Value is null) || node.Conditions.Any(condition => condition is null || condition.Source is null || condition.Path is null || condition.Operator is null))
                         throw new JsonException("Expected at most 1000 unique nodes with known kinds and non-null fields.");
                     if (node.Expression is not null) CheckExpression(node.Expression);
                     if (node.NamespaceExpression is not null) CheckExpression(node.NamespaceExpression);
+                    if (node.DurationExpression is not null) CheckExpression(node.DurationExpression);
                     if (node.SelectionExpression is not null) CheckExpression(node.SelectionExpression);
                     if (node.TransformInputs is not null) foreach (var input in node.TransformInputs) CheckExpression(input);
                     if (node.Target is not null) CheckExpression(new() { Kind = "MessageValue", Literal = null, Fact = node.Target });
                     Check(node.Children, depth + 1); Check(node.Otherwise, depth + 1);
                 }
             }
-            Check(model.Nodes, 0); _model = model; ValidateDraft();
+            Check(model.Nodes, 0); _model = model; _sharedChoices = new() { ["casesJson"] = model.RenderChoicesJson ?? "[]" }; ValidateDraft();
             if (SelectedLocation is null) _selectedNodeId = _model.Nodes.FirstOrDefault()?.Id;
             _removeNodeId = null;
         }
@@ -216,9 +226,9 @@
                 || (value.Kind == "Literal") != (value.Literal is not null) || (value.Kind == "Variable") != (value.Variable is not null)
                 || (value.Kind == "MessageValue") != (value.Fact is not null)
                 || value.Operands.Count != NativeExpressionEditor.ArityOf(value.Kind)
-                || value.Literal is { } literal && (literal.Type is not ("String" or "Int32" or "Boolean" or "Null") || literal.Value is null))
+                || value.Literal is { } literal && (literal.Type is not ("String" or "Int32" or "Boolean" or "DateTime" or "Null") || literal.Value is null))
                 throw new JsonException("Expected a bounded typed expression tree with active operands only.");
-            if (value.Fact is { } fact && (fact.Kind is not ("Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlText" or "XmlCount" or "XmlExists" or "XmlString" or "XmlInt32" or "XmlBoolean")
+            if (value.Fact is { } fact && (fact.Kind is not ("Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlText" or "XmlCount" or "XmlExists" or "XmlString" or "XmlInt32" or "XmlBoolean" or "XmlMessageType")
                 || fact.MessageName is null || fact.MetadataKey is null || fact.Steps is null || fact.Steps.Count > 32
                 || fact.Steps.Any(step => step is null || step.Name is null || step.Namespace is null || step.FilterAttribute is null || step.FilterValue is null)))
                 throw new JsonException("Expected a bounded message fact with known kind and non-null XML path steps.");
@@ -232,7 +242,8 @@
         if (value.Kind == "Variable" && (string.IsNullOrWhiteSpace(value.Variable) || value.Variable.Length > 128
             || !(char.IsAsciiLetter(value.Variable[0]) || value.Variable[0] == '_') || value.Variable.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '_'))) return false;
         if (value.Literal is { } literal && (literal.Value.Length > 4096 || literal.Type == "Boolean" && literal.Value is not ("true" or "false")
-            || literal.Type == "Null" && literal.Value != "" || literal.Type == "Int32" && !int.TryParse(literal.Value, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _))) return false;
+            || literal.Type == "Null" && literal.Value != "" || literal.Type == "DateTime" && !UiDateTime.TryRead(literal.Value, out _)
+            || literal.Type == "Int32" && !int.TryParse(literal.Value, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _))) return false;
         if (value.Fact is { } fact && !CompleteFact(fact)) return false;
         return value.Operands.All(CompleteExpression);
     }
@@ -240,6 +251,7 @@
     {
         if (fact.MessageName.Length > 128 || fact.MessageName != fact.MessageName.Trim()) return false;
         if (fact.Kind is "Metadata" or "MetadataInt32" or "MetadataBoolean") return !string.IsNullOrWhiteSpace(fact.MetadataKey) && fact.MetadataKey.Length <= 2048 && fact.Steps.Count == 0;
+        if (fact.Kind == "XmlMessageType") return fact.MetadataKey.Length == 0 && fact.Steps.Count == 0;
         if (fact.MetadataKey.Length != 0 || fact.Steps.Count == 0
             || (fact.Kind is "XmlString" or "XmlInt32" or "XmlBoolean") && fact.Steps.Any(step => step.Attribute || step.Descendant || step.FilterAttribute.Length != 0)) return false;
         for (var index = 0; index < fact.Steps.Count; index++)
@@ -252,6 +264,13 @@
             catch (System.Xml.XmlException) { return false; }
         }
         return true;
+    }
+    private static bool ValidListen(NativeFlowNodeViewModel node)
+    {
+        var heads = node.Children.Select(branch => branch.Kind == "Sequence" && branch.Children.Count > 0 ? branch.Children[0] : null).ToArray();
+        return heads.Length is >= 2 and <= 16 && heads.All(head => head is { Kind: "Receive" or "Wait" })
+            && heads.Count(head => head!.Kind == "Wait") <= 1 && heads.Any(head => head!.Kind == "Receive")
+            && heads.All(head => head!.Kind != "Receive" || head.DurationSeconds == 0);
     }
     private static bool ValidVariableName(string? name) => !string.IsNullOrWhiteSpace(name) && name.Length <= 128
         && (char.IsAsciiLetter(name[0]) || name[0] == '_') && name.All(character => char.IsAsciiLetterOrDigit(character) || character == '_');
@@ -272,7 +291,7 @@
             nodes.Any(node => string.IsNullOrWhiteSpace(node.Id) || node.Id.Length > 128 || node.Settings.Count > 128
                 || (node.Kind is "If" or "While") && node.Expression is null && (node.Conditions.Count is < 1 or > 32)
                 || (node.Kind is "DeclareVariable" or "SetVariable") && (string.IsNullOrWhiteSpace(node.Variable) || node.Expression is null)
-                || node.Kind == "DeclareVariable" && node.VariableType is not ("String" or "Int32" or "Boolean")
+                || node.Kind == "DeclareVariable" && node.VariableType is not ("String" or "Int32" or "Boolean" or "DateTime")
                 || node.Expression is not null && (!CompleteExpression(node.Expression) || node.Conditions.Count != 0
                     || node.Kind is not ("DeclareVariable" or "SetVariable" or "If" or "While" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot"))
                 || (node.Kind is "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot") && node.Expression is null
@@ -281,7 +300,7 @@
                 || (node.Kind == "AppendXmlMessage") != (node.SourceMessage is not null)
                 || node.SourceMessage is { } source && (string.IsNullOrWhiteSpace(source) || source.Length > 128 || source != source.Trim())
                 || (node.Kind is "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules") && node.Children.Count > 0
-                || (node.Kind == "ApplyXmlRules") != (node.PolicyJson is not null)
+                || (node.Kind == "ApplyXmlRules") != (node.PolicyJson is not null) || node.StopWhenNoRuleMatches && node.Kind != "ApplyXmlRules"
                 || node.PolicyJson is { } policy && (string.IsNullOrWhiteSpace(policy) || policy.Length > 2_000_000)
                 || node.InputMessages is { } inputs && (node.Kind is not ("Render" or "Augment") || !_model.Durable || inputs.Count is < 1 or > 32
                     || node.Kind == "Augment" && inputs.Count != 1
@@ -289,7 +308,8 @@
                     || string.IsNullOrWhiteSpace(node.MessageName) || node.MessageName.Length > 128 || node.MessageName != node.MessageName.Trim())
                 || node.Kind is "Render" or "Augment" && (node.InputMessages is null) != (node.MessageName.Length == 0)
                 || node.SelectionExpression is { } selection && (!CompleteExpression(selection) || node.Kind != "Render" || node.InputMessages is null
-                    || node.Module != "render-dispatch" || node.Settings.Count != 1 || !node.Settings.ContainsKey("casesJson"))
+                    || node.Module != "render-dispatch" || node.Settings.Count > 1 || node.Settings.Count == 1 && !node.Settings.ContainsKey("casesJson")
+                    || node.Settings.Count == 0 && string.IsNullOrWhiteSpace(_model.RenderChoicesJson))
                 || (node.Kind == "SetMessageValue") != (node.Target is not null)
                 || node.Target is { } target && (!CompleteFact(target) || target.MessageName.Length == 0 || target.Kind is not ("Metadata" or "MetadataInt32" or "MetadataBoolean" or "XmlString" or "XmlInt32" or "XmlBoolean"))
                 || (node.Kind is "ForEach" or "While") && (node.MaxIterations is < 1 or > 10000)
@@ -305,13 +325,19 @@
                 || node.SettingExpressions is { } dynamicSettings && (node.Kind != "Deliver" || dynamicSettings.Count > 32 || dynamicSettings.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Key != pair.Key.Trim() || pair.Key.Length > 128 || !CompleteExpression(pair.Value)))
                 || (node.Kind is "SaveMessage" or "UseMessage" or "Reply" or "Receive" or "Deliver" or "CreateXmlMessage" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules") && string.IsNullOrWhiteSpace(node.MessageName)
                 || (node.Kind == "Terminate") != (node.TerminateMessage is not null) || node.TerminateMessage is { } termination && (string.IsNullOrWhiteSpace(termination) || termination.Length > 2000)
-                || node.Kind == "Wait" && node.DurationSeconds <= 0 || node.DurationSeconds is < 0 or > 31622400
+                || node.Kind == "Wait" && node.DurationExpression is null && node.DurationSeconds <= 0 && node.DurationMilliseconds <= 0 || node.DurationSeconds is < 0 or > 31622400
+                || node.DurationMilliseconds is < 0 or > 999 || node.DurationMilliseconds != 0 && (node.Kind != "Wait" || node.DurationSeconds >= 31622400)
+                || node.DurationExpression is not null && (node.Kind != "Wait" || node.DurationSeconds != 0 || node.DurationMilliseconds != 0 || !CompleteExpression(node.DurationExpression))
                 || node.Kind == "Receive" && (string.IsNullOrWhiteSpace(node.Channel) || node.CorrelationKeys.Any(string.IsNullOrWhiteSpace))
-                || !_model.Durable && (node.Kind is "Wait" or "Receive" or "Deliver" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate")
+                || node.Retry is { } deliverRetry && (node.Kind != "Deliver" || deliverRetry.Attempts is < 1 or > 100 || deliverRetry.IntervalSeconds is < 0 or > 604800)
+                || node.Kind == "Listen" && !ValidListen(node)
+                || !_model.Durable && (node.Kind is "Wait" or "Receive" or "Listen" or "Deliver" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" or "AppendXmlMessage" or "ApplyXmlRules" or "Terminate")
                 || _model.Durable && (string.IsNullOrWhiteSpace(_model.CorrelationMetadataKey) || string.IsNullOrWhiteSpace(_model.MessageIdMetadataKey))
                 || node.Conditions.Any(condition => (condition.Source is "Metadata" or "Payload" or "Literal") && string.IsNullOrWhiteSpace(condition.Path)))
             ? "Some nodes are incomplete or incompatible. Choose loaded modules, valid conditions and loop limits; remove inactive branches/children before execution." : null;
     }
+    private Dictionary<string, string> _sharedChoices = new() { ["casesJson"] = "[]" };
+    private async Task SharedChoicesChanged() { _model.RenderChoicesJson = _sharedChoices["casesJson"]; await Persist(); }
     private async Task Persist()
     {
         Value = _loaded = JsonSerializer.Serialize(_model, Options); ValidateDraft();

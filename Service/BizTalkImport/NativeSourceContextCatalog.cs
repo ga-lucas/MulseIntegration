@@ -35,6 +35,16 @@ internal sealed class NativeSourceContextCatalog
     private static readonly IReadOnlySet<string> PlatformSecrets = new HashSet<string>(StringComparer.Ordinal)
     { "FTP.Password", "FILE.Password", "nsoftware.BizTalk.FTP.Password", "nsoftware.BizTalk.SFTP.SSHPassword" };
 
+    /// <summary>
+    /// BizTalk system context properties that a source may only read, mapped to the native metadata key that carries the equivalent value. <c>BTS.MessageID</c> maps to the flow's
+    /// default message-id key, which every received native message must carry; a message built inside the flow has no such key, so reading it fails closed instead of inventing an id.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> ReadOnlySystemProperties = new Dictionary<string, string>(StringComparer.Ordinal)
+    { ["BTS.MessageID"] = "messageId" };
+
+    /// <summary>The native metadata key that a read-only system property resolves to; also the key the importer reports as an assumption.</summary>
+    internal static string MessageIdKey => ReadOnlySystemProperties["BTS.MessageID"];
+    public static bool IsReadOnlySystemProperty(string symbol) => ReadOnlySystemProperties.ContainsKey(symbol);
     public static bool IsPlatformProperty(string symbol) => PlatformProperties.Contains(symbol);
     public static bool IsPlatformSecret(string symbol) => PlatformSecrets.Contains(symbol);
     public static bool IsPlatformKey(string key) => key.StartsWith("{" + PlatformKeyNamespace, StringComparison.Ordinal);
@@ -124,6 +134,8 @@ internal sealed class NativeSourceContextCatalog
     {
         if (_catalogFailure is not null) throw new NotSupportedException(_catalogFailure);
         if (!_messages.Contains(message)) throw new NotSupportedException("Context access requires an unshadowed, uniquely declared service-level message; scope-local/undeclared message identities are not inferred.");
+        if (ReadOnlySystemProperties.TryGetValue(symbol, out var systemKey) && !_properties.ContainsKey(symbol))
+            return new() { Kind = NativeMessageFactKind.Metadata, MetadataKey = systemKey, MessageName = message };
         if (IsPlatformProperty(symbol) && !_properties.ContainsKey(symbol)) return new() { Kind = NativeMessageFactKind.Metadata, MetadataKey = PlatformKey(symbol), MessageName = message };
         var separator = symbol.LastIndexOf('.');
         var clrNamespace = separator < 0 ? "" : symbol[..separator];

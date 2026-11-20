@@ -73,6 +73,7 @@ public sealed class HttpDeliverModule(IHttpClientFactory httpClientFactory) : IR
         var configuredContentType = ModuleSettingReader.GetOptional(step.Settings, "contentType");
         var headersJson = ModuleSettingReader.GetOptional(step.Settings, "headersJson");
         var client = httpClientFactory.CreateClient(nameof(HttpDeliverModule));
+        var requestSent = false;
 
         foreach (var payload in batch.Payloads)
         {
@@ -104,7 +105,12 @@ public sealed class HttpDeliverModule(IHttpClientFactory httpClientFactory) : IR
                 }
             }
 
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            HttpResponseMessage response;
+            try { response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false); }
+            catch (Exception exception) when (!requestSent && exception is not OperationCanceledException && DeliveryFailureClassifier.IsConnectPhaseFailure(exception))
+            { throw new DeliveryNotSentException($"HTTP connection failed before any request data was sent: {exception.Message}", exception); }
+            requestSent = true;
+            using var responseScope = response;
             response.EnsureSuccessStatusCode();
 
             if (!captureResponse)

@@ -109,6 +109,26 @@
                 <div class="overview-stat"><dt>Updated (UTC)</dt><dd>@FormatUtc(_detail.Execution.UpdatedUtcTicks)</dd></div>
             </dl>
 
+            <button class="secondary-button" disabled="@(IsBusy || _isExplainingRun)" @onclick="ExplainRunAsync" data-testid="run-explain">Explain this run</button>
+            @if (_runExplainError is not null) { <p class="status-banner error" role="alert" data-testid="run-explain-error">@_runExplainError</p> }
+            @if (_runExplanation is not null)
+            {
+                <div data-testid="run-explanation">
+                    <h3>What this run's state means</h3>
+                    <p><strong>@_runExplanation.State</strong>: @_runExplanation.Meaning @(_runExplanation.NeedsPerson ? "A person needs to look at this run." : "")</p>
+                    <h4>What happened</h4>
+                    <ul>@foreach (var line in _runExplanation.WhatHappened) { <li>@line</li> }</ul>
+                    @if (_runExplanation.Deliveries.Count > 0)
+                    {
+                        <h4>Deliveries</h4>
+                        <ul data-testid="run-explain-deliveries">@foreach (var delivery in _runExplanation.Deliveries) { <li><strong>@delivery.Stage</strong> (@delivery.State): @delivery.Meaning</li> }</ul>
+                    }
+                    <h4>What to check</h4>
+                    <ul data-testid="run-explain-check">@foreach (var line in _runExplanation.WhatToCheck) { <li>@line</li> }</ul>
+                    <p class="field-hint" data-testid="run-explain-disclaimer">@_runExplanation.Disclaimer</p>
+                    <RunWordingPanel @key="_runExplanation.ExecutionId" ExecutionId="@_runExplanation.ExecutionId" Consent="_aiConsent" />
+                </div>
+            }
             @if (_detail.Execution.State == "Held")
             {
                 <button class="secondary-button" disabled="@IsBusy" @onclick="BeginExecutionClosure">Close held execution without replay</button>
@@ -237,6 +257,10 @@
     private string _closeEvidence = string.Empty;
     private string _closeConfirmation = string.Empty;
     private bool _isClosingExecution;
+    private bool _isExplainingRun;
+    private string? _runExplainError;
+    private RunExplanationViewModel? _runExplanation;
+    private readonly BizTalkAssistConsent _aiConsent = new();
     private bool CanCloseExecution => _showExecutionClosure && _detail?.Execution.State == "Held"
         && _closeConfirmation == "CLOSE WITHOUT REPLAY" && !string.IsNullOrWhiteSpace(_closeEvidence);
     private bool IsBusy => _isLoadingList || _isLoadingDetail || _isLoadingPayload || _isLoadingMessages || _isConfirmingDelivery || _isClosingExecution;
@@ -308,6 +332,8 @@
         CancelDeliveryConfirmation();
         CancelExecutionClosure();
         _detail = null;
+        _runExplanation = null;
+        _runExplainError = null;
         HidePayload();
         try
         {
@@ -320,6 +346,27 @@
         finally
         {
             _isLoadingDetail = false;
+        }
+    }
+
+    private async Task ExplainRunAsync()
+    {
+        if (_detail is null || _isExplainingRun) return;
+        var executionId = _detail.Execution.Id;
+        _isExplainingRun = true;
+        _runExplainError = null;
+        try
+        {
+            var explanation = await ApiClient.ExplainRunAsync(executionId, CancellationToken.None);
+            if (_detail?.Execution.Id == executionId) _runExplanation = explanation;
+        }
+        catch (Exception exception)
+        {
+            _runExplainError = $"Unable to explain this run: {exception.Message}";
+        }
+        finally
+        {
+            _isExplainingRun = false;
         }
     }
 

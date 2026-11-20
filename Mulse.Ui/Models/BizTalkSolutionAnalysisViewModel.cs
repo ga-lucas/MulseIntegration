@@ -20,6 +20,10 @@ public sealed record BizTalkSolutionAnalysisViewModel(
     public IReadOnlyList<BizTalkRulePolicyViewModel> RulePolicies { get; init; } = [];
     public IReadOnlyList<BizTalkDerivedMapChoiceViewModel> DerivedMapChoices { get; init; } = [];
     public string? EffectiveMapChoicesJson { get; init; }
+
+    public IReadOnlyList<BizTalkEvidenceRequestViewModel> EvidenceRequests { get; init; } = [];
+    public BizTalkAnalysisSummaryViewModel Summary { get; init; } = new();
+    public BizTalkAnalysisDeltaViewModel? Delta { get; init; }
 }
 
 public sealed record BizTalkDerivedMapChoiceViewModel(

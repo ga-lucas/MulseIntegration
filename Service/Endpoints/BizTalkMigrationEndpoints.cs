@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Service.BizTalkImport.Origin;
 using Service.Models;
 
 namespace Service.Endpoints;
@@ -30,26 +31,10 @@ public static class BizTalkMigrationEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status500InternalServerError);
 
-        app.MapPost("/api/biztalk-import/flows", async Task<Created<FlowResponse>> (CreateImportedBizTalkFlowRequest request, IBizTalkImportService bizTalkImportService, IFlowDefinitionService flowDefinitionService, CancellationToken cancellationToken) =>
+        app.MapPost("/api/biztalk-import/flows", async Task<Created<FlowResponse>> (CreateImportedBizTalkFlowRequest request, IBizTalkImportService bizTalkImportService, IFlowDefinitionService flowDefinitionService, HttpContext httpContext, CancellationToken cancellationToken) =>
             {
-                var analysis = await bizTalkImportService.AnalyzeAsync(new AnalyzeBizTalkSolutionRequest
-                {
-                    SourcePath = request.SourcePath,
-                    AdditionalSourcePaths = request.AdditionalSourcePaths,
-                    AdditionalBindingPaths = request.AdditionalBindingPaths,
-                    AdditionalRulePaths = request.AdditionalRulePaths,
-                    GenerateNativeFlow = request.GenerateNativeFlow,
-                    NativePolicyVersions = request.NativePolicyVersions,
-                    NativeHostConfigurationPath = request.NativeHostConfigurationPath,
-                    NativeConfigurationHelperPaths = request.NativeConfigurationHelperPaths,
-                    NativeMapChoicesJson = request.NativeMapChoicesJson,
-                    DeriveNativeMapChoices = request.DeriveNativeMapChoices
-                }, cancellationToken).ConfigureAwait(false);
-
-                var candidate = analysis.FlowCandidates.FirstOrDefault(flow => string.Equals(flow.SuggestedFlowId, request.SuggestedFlowId, StringComparison.OrdinalIgnoreCase))
-                    ?? throw new KeyNotFoundException($"No generated BizTalk draft flow with id '{request.SuggestedFlowId}' was found for source '{request.SourcePath}'.");
-
-                var created = await flowDefinitionService.CreateAsync(FlowMappings.MapPipeline(candidate.DraftFlow), cancellationToken).ConfigureAwait(false);
+                var candidate = await ResolveFlowCandidateAsync(request, bizTalkImportService, cancellationToken).ConfigureAwait(false);
+                var created = await CreateFromCandidateAsync(candidate, request.NewFlowId, flowDefinitionService, httpContext.RequestServices, cancellationToken).ConfigureAwait(false);
                 return TypedResults.Created($"/api/flows/{created.Id}", FlowMappings.MapFlow(created));
             })
             .WithName("ImportBizTalkDraftFlow")
@@ -57,6 +42,62 @@ public static class BizTalkMigrationEndpoints
             .WithDescription("Analyzes a BizTalk source, finds one generated draft flow by suggested id, and creates it in the runtime flow catalog as a disabled Mulse flow for migration review.")
             .WithTags("BizTalk Migration")
             .Produces<FlowResponse>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status500InternalServerError);
+
+        app.MapPost("/api/biztalk-import/flows/{flowId}/update-plan", async Task<Ok<BizTalkUpdatePlan>> (string flowId, CreateImportedBizTalkFlowRequest request, IBizTalkImportService bizTalkImportService, HttpContext httpContext, CancellationToken cancellationToken) =>
+            {
+                var flowDefinitionService = httpContext.RequestServices.GetRequiredService<IFlowDefinitionService>();
+                var runtimeConfigurationStore = httpContext.RequestServices.GetRequiredService<IRuntimeConfigurationStore>();
+                var existing = flowDefinitionService.GetById(flowId);
+                var candidate = await ResolveFlowCandidateAsync(request, bizTalkImportService, cancellationToken).ConfigureAwait(false);
+                return TypedResults.Ok(BizTalkUpdatePlanner.Plan(existing, candidate, runtimeConfigurationStore.TryGetConfigValue).Plan);
+            })
+            .WithName("PlanBizTalkFlowUpdate")
+            .WithSummary("Plan an in-place update of an imported BizTalk flow")
+            .WithDescription("Re-analyzes a BizTalk source and compares the result with a saved imported flow and the origin recorded when it was imported, piece by piece. Reports which pieces the importer changed, which you edited, and which conflict. Changes nothing.")
+            .WithTags("BizTalk Migration")
+            .Produces<BizTalkUpdatePlan>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
+
+        app.MapPost("/api/biztalk-import/flows/{flowId}/update", async Task<Ok<BizTalkUpdateResult>> (string flowId, UpdateImportedBizTalkFlowRequest request, IBizTalkImportService bizTalkImportService, HttpContext httpContext, CancellationToken cancellationToken) =>
+            {
+                var flowDefinitionService = httpContext.RequestServices.GetRequiredService<IFlowDefinitionService>();
+                var runtimeConfigurationStore = httpContext.RequestServices.GetRequiredService<IRuntimeConfigurationStore>();
+                var existing = flowDefinitionService.GetById(flowId);
+                var candidate = await ResolveFlowCandidateAsync(request.Import, bizTalkImportService, cancellationToken).ConfigureAwait(false);
+                var plan = BizTalkUpdatePlanner.Plan(existing, candidate, runtimeConfigurationStore.TryGetConfigValue).Plan;
+                switch (plan.Mode)
+                {
+                    case BizTalkUpdateMode.NewDraft or BizTalkUpdateMode.NoOrigin:
+                        if (string.IsNullOrWhiteSpace(request.Import.NewFlowId))
+                            throw new ArgumentException($"Flow '{flowId}' cannot be updated in place ({plan.Mode}): {plan.Reason} Supply Import.NewFlowId to save the new import as a separate disabled flow.");
+                        var draft = await CreateFromCandidateAsync(candidate, request.Import.NewFlowId, flowDefinitionService, httpContext.RequestServices, cancellationToken).ConfigureAwait(false);
+                        return TypedResults.Ok(new BizTalkUpdateResult(plan.Mode, FlowMappings.MapFlow(draft), [], [.. plan.Notes, $"Saved as new disabled flow '{draft.Id}'; flow '{flowId}' was not changed."]));
+                    case BizTalkUpdateMode.NothingToDo:
+                        return TypedResults.Ok(new BizTalkUpdateResult(plan.Mode, FlowMappings.MapFlow(existing), [], plan.Notes));
+                }
+
+                var applied = BizTalkUpdatePlanner.Apply(existing, candidate, runtimeConfigurationStore.TryGetConfigValue, request.ReplacePieces.ToArray(),
+                    (httpContext.RequestServices.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow());
+                // New config values go in first so the saved flow's references resolve; overwrites follow the flow save so a rejected save never loses an edited value.
+                foreach (var write in applied.ConfigWrites.Where(static write => !write.Overwrite))
+                    if (runtimeConfigurationStore.TryGetConfigValue(write.Name) is null)
+                        await runtimeConfigurationStore.SetConfigValueAsync(write.Name, write.Content, cancellationToken).ConfigureAwait(false);
+                var saved = await flowDefinitionService.ReplaceImportedAsync(flowId, applied.Pipeline, cancellationToken).ConfigureAwait(false);
+                foreach (var write in applied.ConfigWrites.Where(static write => write.Overwrite))
+                    await runtimeConfigurationStore.SetConfigValueAsync(write.Name, write.Content, cancellationToken).ConfigureAwait(false);
+                return TypedResults.Ok(new BizTalkUpdateResult(BizTalkUpdateMode.InPlace, FlowMappings.MapFlow(saved), applied.Replaced, applied.Plan.Notes));
+            })
+            .WithName("UpdateBizTalkFlow")
+            .WithSummary("Update an imported BizTalk flow in place from a fresh import")
+            .WithDescription("Replaces only the selected pieces of a saved imported flow (nodes, dispatch choices, flow settings, stored config values) and keeps everything else as saved. The flow stays disabled. When the node structure differs or no origin was recorded, saves the new import as a separate disabled flow under Import.NewFlowId instead.")
+            .WithTags("BizTalk Migration")
+            .Produces<BizTalkUpdateResult>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict)
@@ -148,11 +189,44 @@ public static class BizTalkMigrationEndpoints
             NativeHostConfigurationPath = request.NativeHostConfigurationPath,
             NativeConfigurationHelperPaths = request.NativeConfigurationHelperPaths,
             NativeMapChoicesJson = request.NativeMapChoicesJson,
-            DeriveNativeMapChoices = request.DeriveNativeMapChoices
+            DeriveNativeMapChoices = request.DeriveNativeMapChoices,
+            Evidence = request.Evidence
         }, cancellationToken).ConfigureAwait(false);
 
         return analysis.FlowCandidates.FirstOrDefault(flow => string.Equals(flow.SuggestedFlowId, request.SuggestedFlowId, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException($"No generated BizTalk draft flow with id '{request.SuggestedFlowId}' was found for source '{request.SourcePath}'.");
+    }
+
+    /// <summary>
+    /// Saves a candidate as a new disabled flow, optionally under another id. Stored config values it references are written only when not already set, so edits made
+    /// after an earlier import survive a re-import. Stamps the import time into the recorded origin; analysis itself stays deterministic.
+    /// </summary>
+    private static async Task<PipelineDefinition> CreateFromCandidateAsync(
+        BizTalkFlowCandidateResponse candidate,
+        string? newFlowId,
+        IFlowDefinitionService flowDefinitionService,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        if (candidate.StoredConfigValues.Count > 0)
+        {
+            var runtimeConfigurationStore = services.GetRequiredService<IRuntimeConfigurationStore>();
+            foreach (var (name, content) in candidate.StoredConfigValues)
+                if (runtimeConfigurationStore.TryGetConfigValue(name) is null)
+                    await runtimeConfigurationStore.SetConfigValueAsync(name, content, cancellationToken).ConfigureAwait(false);
+        }
+
+        var draft = candidate.DraftFlow;
+        if (draft.Migration is { } migration)
+        {
+            var now = (services.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow();
+            draft = draft with { Migration = migration with { Origin = (migration.Origin ?? new MigrationOrigin(new Dictionary<string, string>())) with { ImportedUtc = now } } };
+        }
+
+        var pipeline = FlowMappings.MapPipeline(draft);
+        if (!string.IsNullOrWhiteSpace(newFlowId))
+            pipeline = FlowMappings.CopyPipeline(pipeline, newFlowId.Trim(), false, pipeline.Category);
+        return await flowDefinitionService.CreateAsync(pipeline, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Zips every scaffolded module's source code into an in-memory archive keyed by its file name.</summary>

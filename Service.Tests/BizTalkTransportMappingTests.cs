@@ -213,6 +213,10 @@ public sealed class BizTalkTransportMappingTests : IDisposable
             N("Delay", "nested", P("Timeout", "TimeSpan.FromTicks(10000000)"), N("Expression", "nested action", P("Expression", "Custom.Run();"))),
             N("Delay", "long evidence", P("Timeout", new string('x', 5000))),
             N("Delay", "fractional", P("Timeout", "TimeSpan.FromMilliseconds(1500)")),
+            N("Delay", "sub-second", P("Timeout", "new System.TimeSpan(0,0,0,0,200)")),
+            N("Delay", "sub-second factory", P("Timeout", "TimeSpan.FromMilliseconds(999)")),
+            N("Delay", "sub-second ticks", P("Timeout", "TimeSpan.FromTicks(2500000)")),
+            N("Delay", "past limit by a millisecond", P("Timeout", "new TimeSpan(366,0,0,0,1)")),
             N("Delay", "extra syntax", P("Timeout", "TimeSpan.FromSeconds(2);;")),
             N("Delay", "at limit", P("Timeout", "TimeSpan.FromDays(366)")),
             N("Delay", "too long", P("Timeout", "TimeSpan.FromDays(367)")),
@@ -248,7 +252,14 @@ public sealed class BizTalkTransportMappingTests : IDisposable
             Assert.Equal(Mulse.Modules.ControlFlow.NativeFlowNodeKind.Wait, delay.Kind);
             Assert.Equal(seconds, delay.DurationSeconds);
         }
-        foreach (var name in new[] { "fractional", "extra syntax", "too long", "ticks over limit", "fractional ticks", "zero ticks",
+        foreach (var (name, seconds, milliseconds) in new[] { ("fractional", 1, 500), ("sub-second", 0, 200), ("sub-second factory", 0, 999), ("sub-second ticks", 0, 250) })
+        {
+            var delay = flow.AllNodes().Single(node => node.Name == name);
+            Assert.Equal(Mulse.Modules.ControlFlow.NativeFlowNodeKind.Wait, delay.Kind);
+            Assert.Equal(seconds, delay.DurationSeconds); Assert.Equal(milliseconds, delay.DurationMilliseconds);
+        }
+        Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("in-place sub-second pause"));
+        foreach (var name in new[] { "extra syntax", "too long", "past limit by a millisecond", "ticks over limit", "fractional ticks", "zero ticks",
             "negative ticks", "overflow ticks", "tick suffix syntax", "nested", "long evidence" })
         {
             var blocked = flow.AllNodes().Single(node => node.Name == name);

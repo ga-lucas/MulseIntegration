@@ -1,0 +1,224 @@
+@using Mulse.Ui.Models
+@using Microsoft.AspNetCore.Components.Forms
+
+<section class="flow-card evidence-request" data-request-id="@Request.Id" aria-label="@Request.Title">
+    <div class="flow-card-header">
+        <div>
+            <h3>@Request.Title</h3>
+            <p class="field-hint">@Request.Relevance</p>
+        </div>
+        @if (AllowAnswer)
+        {
+            <span class="evidence-status evidence-status-@Status.ToLowerInvariant()" data-status="@Status">@StatusText</span>
+        }
+    </div>
+
+    <p><strong>Why it is needed:</strong> @Request.Why</p>
+
+    @if (Request.HowToGet.Count > 0)
+    {
+        <details open="@(Status == "Open")">
+            <summary>How to get it</summary>
+            <ol class="evidence-steps">
+                @foreach (var step in Request.HowToGet)
+                {
+                    <li>@step</li>
+                }
+            </ol>
+        </details>
+    }
+
+    @if (Request.Impact.Count > 0)
+    {
+        <p><strong>What it affects:</strong></p>
+        <ul>
+            @foreach (var impact in Request.Impact)
+            {
+                <li>@impact</li>
+            }
+        </ul>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Request.Risk))
+    {
+        <p class="field-hint"><strong>Handle with care:</strong> @Request.Risk</p>
+    }
+
+    @if (Evidence.Count > 0)
+    {
+        <ul class="evidence-list">
+            @foreach (var item in Evidence)
+            {
+                <li>
+                    <strong>@item.Name</strong> <span class="muted">(@BizTalkEvidenceKinds.Describe(item.Kind), @item.Origin@(item.SizeBytes > 0 ? ", " + FormatSize(item.SizeBytes) : null))</span>
+                    @if (!string.IsNullOrEmpty(item.Path))
+                    {
+                        <span class="path-value">@item.Path</span>
+                    }
+                    <button class="secondary-button" disabled="@Busy" @onclick="() => OnRemove.InvokeAsync(item.Id)">Remove</button>
+                </li>
+            }
+        </ul>
+    }
+
+    @if (AssistConsent is not null && GetAssistEvidence is not null)
+    {
+        <details class="evidence-assist">
+            <summary>Get help (optional)</summary>
+            <BizTalkAssistPanel Request="Request" GetEvidence="GetAssistEvidence" Consent="AssistConsent" HasEvidence="@(Evidence.Count > 0)" Busy="Busy" />
+        </details>
+    }
+
+    @if (AllowAnswer && (Status == BizTalkRequestAnswers.NotAvailable || Status == BizTalkRequestAnswers.Skipped))
+    {
+        <p class="field-hint">@(Status == BizTalkRequestAnswers.Skipped ? "Skipped for now." : "Marked not available.")@(string.IsNullOrWhiteSpace(Note) ? null : " Note: " + Note)</p>
+        <button class="secondary-button" disabled="@Busy" @onclick="() => OnReopen.InvokeAsync()">Reopen</button>
+    }
+    else
+    {
+        <details>
+            <summary>Add evidence</summary>
+            <div class="evidence-form">
+                @if (Kinds.Count > 1)
+                {
+                    <label class="field-label">Kind
+                        <select class="mapping-input" @bind="_kind">
+                            @foreach (var kind in Kinds)
+                            {
+                                <option value="@kind">@BizTalkEvidenceKinds.Describe(kind)</option>
+                            }
+                        </select>
+                    </label>
+                }
+                <label class="field-label">How do you want to supply it?
+                    <select class="mapping-input" @bind="_origin">
+                        <option value="@BizTalkEvidenceOrigins.Path">A path on the service machine</option>
+                        <option value="@BizTalkEvidenceOrigins.Text">Paste the text</option>
+                        <option value="@BizTalkEvidenceOrigins.Upload">Upload a file (a .zip when there are several)</option>
+                    </select>
+                </label>
+                <label class="field-label">Name (optional)
+                    <input class="mapping-input" @bind="_name" @bind:event="oninput" placeholder="For example: production bindings" />
+                </label>
+                @if (_origin == BizTalkEvidenceOrigins.Path)
+                {
+                    <label class="field-label">Path
+                        <input class="mapping-input" @bind="_path" @bind:event="oninput" placeholder="C:\Exports\Bindings" />
+                    </label>
+                    <p class="field-hint">The path is read by the Mulse service, so it must exist on that machine. Use upload when the files are on yours.</p>
+                    <button class="run-button" disabled="@(Busy || string.IsNullOrWhiteSpace(_path))" @onclick="AddPathAsync">Add path</button>
+                }
+                else if (_origin == BizTalkEvidenceOrigins.Text)
+                {
+                    <label class="field-label">Text
+                        <textarea class="mapping-input" rows="6" @bind="_text" @bind:event="oninput"></textarea>
+                    </label>
+                    <button class="run-button" disabled="@(Busy || string.IsNullOrWhiteSpace(_text))" @onclick="AddTextAsync">Add pasted text</button>
+                }
+                else
+                {
+                    <label class="field-label">File
+                        <InputFile OnChange="UploadAsync" disabled="@Busy" />
+                    </label>
+                    <p class="field-hint">Up to 64 MB. When several files or folders are expected, zip them first.</p>
+                }
+                @if (_formError is not null)
+                {
+                    <p class="status-banner error" role="alert">@_formError</p>
+                }
+            </div>
+        </details>
+
+        @if (AllowAnswer)
+        {
+        <details>
+            <summary>Skip this, or say it is not available</summary>
+            <label class="field-label">Reason (optional)
+                <input class="mapping-input" @bind="_answerNote" @bind:event="oninput" placeholder="For example: we do not have server access yet" />
+            </label>
+            <div class="action-row">
+                <button class="secondary-button" disabled="@Busy" @onclick="() => OnAnswer.InvokeAsync(new BizTalkRequestAnswer(BizTalkRequestAnswers.Skipped, _answerNote))">Skip for now</button>
+                <button class="secondary-button" disabled="@Busy" @onclick="() => OnAnswer.InvokeAsync(new BizTalkRequestAnswer(BizTalkRequestAnswers.NotAvailable, _answerNote))">Not available</button>
+            </div>
+            <p class="field-hint">Either way the flow stays blocked where this evidence is needed. The answer is only remembered here so the wizard stops asking.</p>
+        </details>
+        }
+    }
+</section>
+
+@code {
+    private const long MaxUploadBytes = 64L * 1024 * 1024;
+
+    [Parameter, EditorRequired] public BizTalkEvidenceRequestViewModel Request { get; set; } = default!;
+    [Parameter] public string Status { get; set; } = "Open";
+    [Parameter] public string? Note { get; set; }
+    [Parameter] public IReadOnlyList<BizTalkSessionEvidence> Evidence { get; set; } = [];
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool AllowAnswer { get; set; } = true;
+    [Parameter] public EventCallback<BizTalkEvidenceAdd> OnAdd { get; set; }
+    [Parameter] public EventCallback<string> OnRemove { get; set; }
+    [Parameter] public EventCallback<BizTalkRequestAnswer> OnAnswer { get; set; }
+    [Parameter] public EventCallback OnReopen { get; set; }
+    [Parameter] public BizTalkAssistConsent? AssistConsent { get; set; }
+    [Parameter] public Func<IReadOnlyList<BizTalkAssistEvidenceViewModel>>? GetAssistEvidence { get; set; }
+
+    private string _kind = string.Empty;
+    private string _origin = BizTalkEvidenceOrigins.Path;
+    private string _name = string.Empty;
+    private string _path = string.Empty;
+    private string _text = string.Empty;
+    private string _answerNote = string.Empty;
+    private string? _formError;
+
+    private IReadOnlyList<string> Kinds => Request.Accepts.Count > 0 ? Request.Accepts : BizTalkEvidenceKinds.All;
+    private string SelectedKind => Kinds.Contains(_kind, StringComparer.Ordinal) ? _kind : Kinds[0];
+
+    private string StatusText => Status switch
+    {
+        "Supplied" => "Supplied, re-analyze to apply",
+        BizTalkRequestAnswers.NotAvailable => "Not available",
+        BizTalkRequestAnswers.Skipped => "Skipped",
+        _ => "Open"
+    };
+
+    private async Task AddPathAsync()
+    {
+        _formError = null;
+        await OnAdd.InvokeAsync(new BizTalkEvidenceAdd(SelectedKind, BizTalkEvidenceOrigins.Path, _name, _path, null, null));
+        _path = string.Empty;
+        _name = string.Empty;
+    }
+
+    private async Task AddTextAsync()
+    {
+        _formError = null;
+        await OnAdd.InvokeAsync(new BizTalkEvidenceAdd(SelectedKind, BizTalkEvidenceOrigins.Text, _name, null, _text, null));
+        _text = string.Empty;
+        _name = string.Empty;
+    }
+
+    private async Task UploadAsync(InputFileChangeEventArgs args)
+    {
+        _formError = null;
+        try
+        {
+            var file = args.File;
+            await using var stream = file.OpenReadStream(MaxUploadBytes);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            await OnAdd.InvokeAsync(new BizTalkEvidenceAdd(SelectedKind, BizTalkEvidenceOrigins.Upload, string.IsNullOrWhiteSpace(_name) ? file.Name : _name, null, null, buffer.ToArray()));
+            _name = string.Empty;
+        }
+        catch (IOException exception)
+        {
+            _formError = $"Unable to read the file: {exception.Message}";
+        }
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024.0):0.#} MB"
+    };
+}

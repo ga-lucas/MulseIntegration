@@ -384,6 +384,69 @@ public sealed class NativeDurableControlFlowTests
         Assert.Equal(3, NativeFlowDefinition.Read(JsonSerializer.Serialize(blocked, JsonSerializerOptions.Web), allowBlocked: true).AllNodes().Count());
     }
 
+    private const string SharedChoices = "[{\"value\":\"a\",\"module\":\"shared-a\"},{\"value\":\"b\",\"module\":\"shared-b\"}]";
+    private static NativeFlowNode Selecting(string id, string identity, string? ownChoices = null) => new()
+    {
+        Id = id, Kind = NativeFlowNodeKind.Render, Module = "render-dispatch", InputMessages = ["source"], MessageName = id + "-out",
+        SelectionExpression = Text(identity), Settings = ownChoices is null ? new() : new() { ["casesJson"] = ownChoices }
+    };
+    private static NativeFlowDefinition SharedFlow(string? shared, params NativeFlowNode[] selecting) => new()
+    {
+        Durable = true, RenderChoicesJson = shared,
+        Nodes = [new() { Kind = NativeFlowNodeKind.CreateXmlMessage, MessageName = "source", Expression = new() { Literal = NativeScalar.From("<source/>") } }, .. selecting]
+    };
+
+    [Fact]
+    public async Task SelectionNodesWithoutOwnChoicesUseTheSharedFlowTableAndAnOwnTableOverridesIt()
+    {
+        var own = "[{\"value\":\"a\",\"module\":\"own-a\"}]";
+        var flow = NativeFlowDefinition.Read(JsonSerializer.Serialize(SharedFlow(SharedChoices, Selecting("one", "a"), Selecting("two", "b"), Selecting("three", "a", own)), JsonSerializerOptions.Web));
+        Assert.Equal(SharedChoices, flow.RenderChoicesJson);
+        var clock = new Clock(); var invoker = new Invoker();
+        await Run(new InMemoryFlowOrchestrationStateStore(), clock, invoker, flow, Context(clock), Input("one"));
+        Assert.Equal(["shared-a", "shared-b", "own-a"], invoker.Calls.Select(call => call.Split(':')[0]));
+    }
+
+    [Theory]
+    [InlineData("<r xmlns='urn:x'/>", "urn:x#r")]
+    [InlineData("<r/>", "r")]
+    public async Task TheMessageTypeFactPicksTheSharedChoiceFromTheDocumentRoot(string xml, string messageType)
+    {
+        var choices = "[{\"value\":\"" + messageType + "\",\"module\":\"typed\"},{\"value\":\"other\",\"module\":\"wrong\"}]";
+        var selecting = Selecting("one", "unused");
+        selecting.SelectionExpression = new() { Kind = NativeExpressionKind.MessageValue, Fact = new() { Kind = NativeMessageFactKind.XmlMessageType, MessageName = "source" } };
+        var definition = SharedFlow(choices, selecting);
+        definition.Nodes[0].Expression = new() { Literal = NativeScalar.From(xml) };
+        var flow = NativeFlowDefinition.Read(JsonSerializer.Serialize(definition, JsonSerializerOptions.Web));
+        var clock = new Clock(); var invoker = new Invoker();
+        await Run(new InMemoryFlowOrchestrationStateStore(), clock, invoker, flow, Context(clock), Input("one"));
+        Assert.Equal(["typed"], invoker.Calls.Select(call => call.Split(':')[0]));
+    }
+
+    [Fact]
+    public async Task UnlistedIdentityInTheSharedTableFailsClosedWithoutRendering()
+    {
+        var flow = NativeFlowDefinition.Read(JsonSerializer.Serialize(SharedFlow(SharedChoices, Selecting("one", "missing")), JsonSerializerOptions.Web));
+        var clock = new Clock(); var invoker = new Invoker();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Run(new InMemoryFlowOrchestrationStateStore(), clock, invoker, flow, Context(clock), Input("one")));
+        Assert.Empty(invoker.Calls);
+    }
+
+    [Fact]
+    public void SharedRenderChoicesAreValidatedAndRequiredByNodesWithoutTheirOwn()
+    {
+        static void Invalid(NativeFlowDefinition flow) => Assert.Throws<ArgumentException>(() => NativeFlowDefinition.Read(JsonSerializer.Serialize(flow, JsonSerializerOptions.Web)));
+        Invalid(SharedFlow(null, Selecting("one", "a")));
+        Invalid(SharedFlow("[]", Selecting("one", "a")));
+        Invalid(SharedFlow("not json", Selecting("one", "a", "[{\"value\":\"a\",\"module\":\"x\"}]")));
+        Invalid(SharedFlow("[{\"value\":\"a\",\"module\":\"render-dispatch\"}]"));
+        var extra = Selecting("one", "a"); extra.Settings["other"] = "x";
+        Invalid(SharedFlow(SharedChoices, extra));
+        var unused = NativeFlowDefinition.Read(JsonSerializer.Serialize(SharedFlow(SharedChoices), JsonSerializerOptions.Web));
+        Assert.Equal(SharedChoices, unused.RenderChoicesJson);
+        Assert.DoesNotContain("renderChoicesJson", JsonSerializer.Serialize(SharedFlow(null, Selecting("one", "a", "[{\"value\":\"a\",\"module\":\"x\"}]")), JsonSerializerOptions.Web));
+    }
+
     [Fact]
     public async Task CorruptCursorCannotSkipEffectsOrSilentlyReset()
     {

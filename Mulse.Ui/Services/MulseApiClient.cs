@@ -1,10 +1,11 @@
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Mulse.Ui.Models;
+using Mulse.ServiceDefaults.Security;
 
 namespace Mulse.Ui.Services;
 
-public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? clientFactory = null) : IMulseApiClient
+public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? clientFactory = null, IUserCopilotCredential? copilotCredential = null) : IMulseApiClient
 {
     public Task<IReadOnlyList<ModuleViewModel>> GetModulesAsync(CancellationToken cancellationToken)
         => GetListAsync<ModuleViewModel>("/api/modules", cancellationToken);
@@ -36,6 +37,14 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         }
 
         using var response = await httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<HistoryExecutionViewModel[]>(response, cancellationToken, "execution history").ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<HistoryExecutionViewModel>> GetRecentExecutionsAsync(int take, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(take, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(take, 200);
+        using var response = await httpClient.GetAsync($"/api/history/executions?take={take}", cancellationToken).ConfigureAwait(false);
         return await ReadRequiredAsync<HistoryExecutionViewModel[]>(response, cancellationToken, "execution history").ConfigureAwait(false);
     }
 
@@ -123,6 +132,73 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         return await ReadRequiredAsync<NativeFlowTestResponseViewModel>(response, cancellationToken, "native test result").ConfigureAwait(false);
     }
 
+    public async Task<NativeFlowCompareResponseViewModel> CompareNativeFlowAsync(NativeFlowCompareRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/flow-designer/native/compare", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<NativeFlowCompareResponseViewModel>(response, cancellationToken, "comparison result").ConfigureAwait(false);
+    }
+
+    private const string ScenarioRoot = "/api/flow-designer/native/compare/scenarios";
+
+    public async Task<IReadOnlyList<ComparisonScenarioSummaryViewModel>> ListComparisonScenariosAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync(ScenarioRoot, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<List<ComparisonScenarioSummaryViewModel>>(response, cancellationToken, "scenario list").ConfigureAwait(false);
+    }
+
+    public async Task<ComparisonScenarioViewModel> GetComparisonScenarioAsync(string id, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync($"{ScenarioRoot}/{Uri.EscapeDataString(id)}", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ComparisonScenarioViewModel>(response, cancellationToken, "scenario").ConfigureAwait(false);
+    }
+
+    public async Task<ComparisonScenarioSummaryViewModel> SaveComparisonScenarioAsync(SaveComparisonScenarioRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync(ScenarioRoot, request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ComparisonScenarioSummaryViewModel>(response, cancellationToken, "saved scenario").ConfigureAwait(false);
+    }
+
+    public async Task DeleteComparisonScenarioAsync(string id, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.DeleteAsync($"{ScenarioRoot}/{Uri.EscapeDataString(id)}", cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException(problem?.Detail ?? problem?.Title ?? $"The API returned status code {(int)response.StatusCode}.");
+        }
+    }
+
+    public async Task<NativeFlowCompareResponseViewModel> RunComparisonScenarioAsync(string id, string flowJson, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"{ScenarioRoot}/{Uri.EscapeDataString(id)}/run", new { FlowJson = flowJson }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<NativeFlowCompareResponseViewModel>(response, cancellationToken, "comparison result").ConfigureAwait(false);
+    }
+
+    public async Task<FlowExplanationViewModel> ExplainNativeFlowAsync(string flowJson, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/assist/explain/flow", new { FlowJson = flowJson }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowExplanationViewModel>(response, cancellationToken, "flow explanation").ConfigureAwait(false);
+    }
+
+    public async Task<NodeExplanationViewModel> ExplainNativeNodeAsync(string flowJson, string nodeId, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/assist/explain/node", new { FlowJson = flowJson, NodeId = nodeId }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<NodeExplanationViewModel>(response, cancellationToken, "step explanation").ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<AssistGlossaryEntryViewModel>> SearchAssistGlossaryAsync(string? search, CancellationToken cancellationToken)
+    {
+        var url = string.IsNullOrWhiteSpace(search) ? "/api/assist/glossary" : "/api/assist/glossary?search=" + Uri.EscapeDataString(search.Trim());
+        using var response = await httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<List<AssistGlossaryEntryViewModel>>(response, cancellationToken, "glossary").ConfigureAwait(false);
+    }
+
+    public async Task<ModulePromptViewModel> BuildModulePromptAsync(string flowJson, string moduleId, string? description, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/assist/module-prompt", new { FlowJson = flowJson, ModuleId = moduleId, Description = description }, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ModulePromptViewModel>(response, cancellationToken, "module prompt").ConfigureAwait(false);
+    }
+
     public async Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken)
     {
         using var response = await httpClient.PostAsJsonAsync("/api/flow-designer/xml-mapping/schemas", request, cancellationToken).ConfigureAwait(false);
@@ -151,6 +227,18 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
     {
         using var response = await httpClient.PostAsJsonAsync("/api/biztalk-import/flows", request, cancellationToken).ConfigureAwait(false);
         return await ReadRequiredAsync<FlowViewModel>(response, cancellationToken, "imported BizTalk flow response").ConfigureAwait(false);
+    }
+
+    public async Task<BizTalkUpdatePlanViewModel> PlanBizTalkFlowUpdateAsync(string flowId, CreateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"/api/biztalk-import/flows/{Uri.EscapeDataString(flowId)}/update-plan", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<BizTalkUpdatePlanViewModel>(response, cancellationToken, "BizTalk flow update plan").ConfigureAwait(false);
+    }
+
+    public async Task<BizTalkUpdateResultViewModel> UpdateBizTalkFlowAsync(string flowId, UpdateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"/api/biztalk-import/flows/{Uri.EscapeDataString(flowId)}/update", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<BizTalkUpdateResultViewModel>(response, cancellationToken, "BizTalk flow update result").ConfigureAwait(false);
     }
 
     public async Task<DownloadedFileViewModel> DownloadBizTalkScaffoldedModulesAsync(CreateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken)
@@ -340,6 +428,196 @@ public sealed class MulseApiClient(HttpClient httpClient, IHttpClientFactory? cl
         using var response = await httpClient.PostAsJsonAsync("/api/workspace/flows/delete-all", new { Confirmation = confirmation }, cancellationToken).ConfigureAwait(false);
         var result = await ReadRequiredAsync<DeletedFlowsResult>(response, cancellationToken, "deleted flow count").ConfigureAwait(false);
         return result.DeletedCount;
+    }
+
+    public async Task<AiAuthoringSettingsViewModel> GetAiAuthoringSettingsAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/authoring/settings", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringSettingsViewModel>(response, cancellationToken, "AI authoring settings").ConfigureAwait(false);
+    }
+
+    public async Task<AiAuthoringSettingsViewModel> SetAiAuthoringSettingsAsync(UpdateAiAuthoringSettingsViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PutAsJsonAsync("/api/authoring/settings", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringSettingsViewModel>(response, cancellationToken, "AI authoring settings").ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<AiAuthoringModelViewModel>> GetCopilotModelsAsync(CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/copilot/models");
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, request, cancellationToken, requireCopilot: true).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringModelViewModel[]>(response, cancellationToken, "Copilot model list").ConfigureAwait(false);
+    }
+
+    public async Task<AiAuthoringTestViewModel> TestAiAuthoringAsync(CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/test");
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, request, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringTestViewModel>(response, cancellationToken, "AI connection test").ConfigureAwait(false);
+    }
+
+    public async Task<AiAuthoringResponseViewModel> ChatAuthoringAsync(AiAuthoringRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/chat") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<AiAuthoringResponseViewModel>(response, cancellationToken, "AI authoring response").ConfigureAwait(false);
+    }
+
+    public async Task<ConnectionAnalysisViewModel> AnalyzeConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/connection/analyze", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ConnectionAnalysisViewModel>(response, cancellationToken, "connection analysis").ConfigureAwait(false);
+    }
+
+    public async Task<ConnectionAssistanceResponseViewModel> AssistConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/connection") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ConnectionAssistanceResponseViewModel>(response, cancellationToken, "connection assistance").ConfigureAwait(false);
+    }
+
+    public async Task<BizTalkAssistDisclosureViewModel> PreviewBizTalkAssistAsync(BizTalkAssistRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/biztalk-assist/preview", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<BizTalkAssistDisclosureViewModel>(response, cancellationToken, "BizTalk assist preview").ConfigureAwait(false);
+    }
+
+    public async Task<BizTalkAssistResponseViewModel> BizTalkAssistAsync(BizTalkAssistRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/biztalk-assist") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<BizTalkAssistResponseViewModel>(response, cancellationToken, "BizTalk assist response").ConfigureAwait(false);
+    }
+
+    public async Task<CompareExplainDisclosureViewModel> PreviewCompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/compare-explain/preview", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<CompareExplainDisclosureViewModel>(response, cancellationToken, "explanation preview").ConfigureAwait(false);
+    }
+
+    public async Task<CompareExplainResponseViewModel> CompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/compare-explain") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<CompareExplainResponseViewModel>(response, cancellationToken, "explanation").ConfigureAwait(false);
+    }
+
+    public async Task<OperationalDigestViewModel> GetOperationalDigestAsync(int hours, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync($"/api/assist/digest?hours={Math.Clamp(hours, 1, 168)}", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<OperationalDigestViewModel>(response, cancellationToken, "operational digest").ConfigureAwait(false);
+    }
+
+    public async Task<FlowReviewViewModel> GetFlowReviewAsync(string flowId, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/assist/review/" + Uri.EscapeDataString(flowId), cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowReviewViewModel>(response, cancellationToken, "flow review").ConfigureAwait(false);
+    }
+
+    public async Task<FlowRunbookViewModel> BuildFlowRunbookAsync(string flowId, RunbookRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/assist/runbook/" + Uri.EscapeDataString(flowId), request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowRunbookViewModel>(response, cancellationToken, "flow runbook").ConfigureAwait(false);
+    }
+
+    public async Task<MapReviewViewModel> GetMapReviewAsync(string flowId, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/assist/map-review/" + Uri.EscapeDataString(flowId), cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<MapReviewViewModel>(response, cancellationToken, "map review").ConfigureAwait(false);
+    }
+
+    public async Task<BlockerTriageViewModel> GetBlockerTriageAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/assist/triage", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<BlockerTriageViewModel>(response, cancellationToken, "blocker triage").ConfigureAwait(false);
+    }
+
+    public async Task<ConfigReviewViewModel> GetConfigReviewAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/assist/config-review", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<ConfigReviewViewModel>(response, cancellationToken, "config values review").ConfigureAwait(false);
+    }
+
+    public async Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync($"/api/assist/explain/failures?take={Math.Clamp(take, 1, 200)}", cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FailurePatternReportViewModel>(response, cancellationToken, "failure patterns").ConfigureAwait(false);
+    }
+
+    public async Task<RunExplanationViewModel> ExplainRunAsync(string executionId, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/assist/explain/run/" + Uri.EscapeDataString(executionId), cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<RunExplanationViewModel>(response, cancellationToken, "run explanation").ConfigureAwait(false);
+    }
+
+    public async Task<FlowWordingDisclosureViewModel> PreviewFlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/flow-wording/preview", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowWordingDisclosureViewModel>(response, cancellationToken, "wording preview").ConfigureAwait(false);
+    }
+
+    public async Task<FlowWordingResponseViewModel> FlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/flow-wording") { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowWordingResponseViewModel>(response, cancellationToken, "flow wording").ConfigureAwait(false);
+    }
+
+    public async Task<RunWordingDisclosureViewModel> PreviewRunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PostAsJsonAsync("/api/authoring/run-wording/" + Uri.EscapeDataString(executionId) + "/preview", request, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<RunWordingDisclosureViewModel>(response, cancellationToken, "run wording preview").ConfigureAwait(false);
+    }
+
+    public async Task<FlowWordingResponseViewModel> RunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+    {
+        using var authoringClient = clientFactory?.CreateClient("mulse-ai-authoring");
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/authoring/run-wording/" + Uri.EscapeDataString(executionId)) { Content = JsonContent.Create(request) };
+        await AttachCopilotCredentialAsync(authoringClient ?? httpClient, message, cancellationToken).ConfigureAwait(false);
+        using var response = await (authoringClient ?? httpClient).SendAsync(message, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<FlowWordingResponseViewModel>(response, cancellationToken, "run wording").ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<AiActivityEntryViewModel>> GetAiActivityAsync(string? flowId, int take, CancellationToken cancellationToken)
+    {
+        var url = "/api/assist/activity?take=" + take + (string.IsNullOrWhiteSpace(flowId) ? "" : "&flowId=" + Uri.EscapeDataString(flowId.Trim()));
+        using var response = await httpClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        return await ReadRequiredAsync<List<AiActivityEntryViewModel>>(response, cancellationToken, "AI activity").ConfigureAwait(false);
+    }
+
+    private async Task AttachCopilotCredentialAsync(HttpClient destinationClient, HttpRequestMessage request, CancellationToken cancellationToken, bool requireCopilot = false)
+    {
+        if (copilotCredential is null)
+        {
+            if (requireCopilot) throw new InvalidOperationException("Connect your GitHub account under Configuration > My GitHub connection before loading Copilot models.");
+            return;
+        }
+        if (!requireCopilot)
+        {
+            var settings = await GetAiAuthoringSettingsAsync(cancellationToken).ConfigureAwait(false);
+            if (settings.Provider != "GitHubCopilot") return;
+        }
+        var token = await copilotCredential.GetTokenAsync(cancellationToken).ConfigureAwait(false);
+        if (token is null) throw new InvalidOperationException("Connect your GitHub account under Configuration > AI assistance before using Copilot.");
+        if (!CopilotUserCredential.IsValid(token)) throw new InvalidOperationException("Your GitHub credential is invalid. Reconnect your account.");
+        var destination = new Uri(destinationClient.BaseAddress ?? throw new InvalidOperationException("The Mulse API base URL is missing."), request.RequestUri!);
+        if (destination.Scheme != Uri.UriSchemeHttps && !(destination.Scheme == Uri.UriSchemeHttp && destination.IsLoopback))
+            throw new InvalidOperationException("Per-user GitHub credentials require an HTTPS Mulse API URL (HTTP is allowed only on loopback).");
+        request.Headers.Add(CopilotUserCredential.HeaderName, token);
     }
 
     private sealed record DeletedFlowsResult(int DeletedCount);

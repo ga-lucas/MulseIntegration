@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Mulse.Modules.Triggers;
+using Service.Ai;
 using Service.Endpoints;
 
 namespace Service.Tests;
@@ -39,6 +40,9 @@ public sealed class HttpInboundAuthorizationTests
         using var workspace = new WorkspacePersistenceTests.DatabaseFixture("Sqlite");
         builder.Services.AddSingleton<IRuntimeConfigurationStore>(workspace.Store());
         builder.Services.AddSingleton<ProcessingCoordinator>();
+        builder.Services.AddSingleton<Service.Modules.IModuleCatalog>(new ReadOnlyCatalog());
+        builder.Services.AddAiAuthoring(builder.Configuration, builder.Environment);
+        builder.Services.AddSingleton<IAiAuthoringSettingsStore>(new MemoryAiSettingsStore());
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -48,6 +52,7 @@ public sealed class HttpInboundAuthorizationTests
         app.MapHistoryEndpoints();
         app.MapProcessingEndpoints();
         app.MapHttpInboundEndpoints();
+        app.MapAiAuthoringEndpoints();
         await app.StartAsync();
         try
         {
@@ -65,6 +70,29 @@ public sealed class HttpInboundAuthorizationTests
 
             using var allowedRequest = CreateManagementRequest("mulse-api-access", "mulse-service");
             using var allowedResponse = await http.SendAsync(allowedRequest);
+
+            foreach (var (method, path) in new[]
+            {
+                (HttpMethod.Get, "/api/authoring/settings"), (HttpMethod.Put, "/api/authoring/settings"),
+                (HttpMethod.Post, "/api/authoring/test"), (HttpMethod.Post, "/api/authoring/chat"),
+                (HttpMethod.Post, "/api/authoring/copilot/models"),
+                (HttpMethod.Post, "/api/authoring/connection/analyze"), (HttpMethod.Post, "/api/authoring/connection")
+            })
+            {
+                using var anonymousRequest = new HttpRequestMessage(method, path);
+                using var anonymousResponse = await http.SendAsync(anonymousRequest);
+                Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
+                using var forbiddenRequest = CreateManagementRequest("other-role", "mulse-service");
+                forbiddenRequest.Method = method;
+                forbiddenRequest.RequestUri = new Uri(path, UriKind.Relative);
+                using var forbiddenResponse = await http.SendAsync(forbiddenRequest);
+                Assert.Equal(HttpStatusCode.Forbidden, forbiddenResponse.StatusCode);
+            }
+            using var authoringRequest = CreateManagementRequest("mulse-api-access", "mulse-service");
+            authoringRequest.RequestUri = new Uri("/api/authoring/settings", UriKind.Relative);
+            using var authoringResponse = await http.SendAsync(authoringRequest);
+            Assert.Equal(HttpStatusCode.OK, authoringResponse.StatusCode);
+            Assert.Contains("no-store", authoringResponse.Headers.CacheControl!.ToString());
 
             using var inboundResponse = await http.PostAsync("/api/inbound/existing-source", new StringContent("payload"));
             using var anonymousStorage = await http.GetAsync("/api/workspace/storage");

@@ -1,5 +1,6 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml.Linq;
 using Mulse.Modules.ControlFlow;
 using Mulse.Modules.Decisions;
 using Mulse.Modules.Orchestration;
@@ -23,6 +24,13 @@ public sealed partial class BizTalkImportService
     private static readonly System.Text.RegularExpressions.Regex NsoftwareTransportPattern = new(@"^nsoftware\.S?FTP( \d{4})?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private static bool ContainsTransformCall(IEnumerable<NativeFlowNode> nodes)
         => nodes.Any(node => node.Kind == NativeFlowNodeKind.InvokeTransform || ContainsTransformCall(node.Children) || ContainsTransformCall(node.Otherwise));
+    private const string DateTimeWarning = "Date and time values are imported as UTC with the invariant culture: DateTime.Now and DateTime.UtcNow both read the UTC clock (the BizTalk host's local time zone and culture are unknown and not applied), DateTime.Parse treats text without an offset as UTC, and the Year/Month/Day/Hour/Minute/Second parts are UTC parts. The default for an uninitialized DateTime is DateTime.MinValue as UTC. Review every date-time value and literal in the editor (the editor shows server-local time with a UTC toggle).";
+    private static string UnsupportedVariableHint(string? type) => type switch
+    {
+        "System.DateTime" or "System.TimeSpan" => " Native DateTime variables cover Now, DateTime.Parse, the six-argument constructor, Year/Month/Day/Hour/Minute/Second, AddDays/AddHours/AddMinutes, Compare, comparison operators and a Delay on later.Subtract(earlier); TimeSpan variables and any other date/time member are not translated. If this computes a batch window (collect until a daily BatchTime or an N:D/H/M interval), the 'durable-batch-augment' module in message/policy mode replaces the whole loop; for a fixed delay use a native Wait.",
+        "System.Type" => " A System.Type variable only holds a map type chosen at run time; use 'Derive native map choices' or a map-dispatch step instead of translating it.",
+        _ => ""
+    };
     private static bool ContainsNode(IEnumerable<NativeFlowNode> nodes, Func<NativeFlowNode, bool> predicate)
         => nodes.Any(node => predicate(node) || ContainsNode(node.Children, predicate) || ContainsNode(node.Otherwise, predicate));
     private static bool IsHl7Multipart(OdxNode type)
@@ -45,6 +53,8 @@ public sealed partial class BizTalkImportService
         try
         {
             var source = OdxProgramReader.ReadFile(paths[0]);
+            var flatFile = ReadFlatFileChoices(mapChoices, schemas);
+            var hl7Schema = ReadHl7SchemaText(mapChoices);
             var services = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "ServiceDeclaration").ToArray();
             if (services.Length != 1) throw new ArgumentException("Native translation requires exactly one source service declaration.");
             var owners = bindings.SelectMany(binding => binding.Services
@@ -82,14 +92,18 @@ public sealed partial class BizTalkImportService
                 return elementDeclarations.Where(declaration => ancestors.Contains(parents[declaration.Id].Id)).Select(declaration => declaration.Name).ToHashSet(StringComparer.Ordinal);
             }
             var scopeScalarDeclarations = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "VariableDeclaration" && parents.GetValueOrDefault(node.Id)?.ShapeType == "Scope").ToArray();
-            var scalarTypes = variableDeclarations.Concat(scopeScalarDeclarations).Where(node => declarationCounts[node.Name] == 1 && node.Properties.GetValueOrDefault("Type") is "System.String" or "System.Int32" or "System.Boolean")
+            var scalarTypes = variableDeclarations.Concat(scopeScalarDeclarations).Where(node => declarationCounts[node.Name] == 1 && node.Properties.GetValueOrDefault("Type") is "System.String" or "System.Int32" or "System.Boolean" or "System.DateTime")
                 .GroupBy(node => node.Name, StringComparer.Ordinal).Where(group => group.Count() == 1)
                 .ToDictionary(group => group.Key, group => group.Single().Properties["Type"] switch
-                { "System.Int32" => NativeScalarType.Int32, "System.Boolean" => NativeScalarType.Boolean, _ => NativeScalarType.String }, StringComparer.Ordinal);
+                { "System.Int32" => NativeScalarType.Int32, "System.Boolean" => NativeScalarType.Boolean, "System.DateTime" => NativeScalarType.DateTime, _ => NativeScalarType.String }, StringComparer.Ordinal);
             var dynamicPorts = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "PortDeclaration" && NativeExpression.ValidName(node.Name)
                     && node.Children.Any(child => child.ShapeType == "PhysicalBindingAttribute" && child.Properties.GetValueOrDefault("IsDynamic") == "True"))
                 .GroupBy(node => node.Name, StringComparer.Ordinal).Where(group => group.Count() == 1).Select(group => group.Key)
                 .Where(port => !scalarTypes.ContainsKey(NativeSourceExpressionReader.DynamicPortVariable(port, "Address")) && !scalarTypes.ContainsKey(NativeSourceExpressionReader.DynamicPortVariable(port, "TransportType")))
+                .ToHashSet(StringComparer.Ordinal);
+            var directBoundPorts = FlattenNativeSource(source.Roots).Where(node => node.ShapeType == "PortDeclaration" && node.Name.Length > 0
+                    && node.Children.Any(child => child.ShapeType == "DirectBindingAttribute" && child.Properties.GetValueOrDefault("DirectBindingType") == "MessageBox"))
+                .GroupBy(node => node.Name, StringComparer.Ordinal).Where(group => group.Count() == 1).Select(group => group.Key)
                 .ToHashSet(StringComparer.Ordinal);
             var hiddenDeclarations = new List<NativeFlowNode>();
             void DeclareHidden(string name)
@@ -109,7 +123,7 @@ public sealed partial class BizTalkImportService
                 && string.IsNullOrWhiteSpace(node.Properties.GetValueOrDefault("InitialValue"))
                 && node.Properties.GetValueOrDefault("UseDefaultConstructor", "False") == "False"
                 && node.Properties.GetValueOrDefault("ParamDirection", "In") == "In").Select(node => node.Name).ToHashSet(StringComparer.Ordinal);
-            var transformMessages = messageDeclarations.Where(node => declarationCounts[node.Name] == 1 && NativeExpression.ValidName(node.Name))
+            var transformMessages = messageDeclarations.Concat(variableDeclarations.Where(node => documents.Contains(node.Name))).Where(node => declarationCounts[node.Name] == 1 && NativeExpression.ValidName(node.Name))
                 .Select(node => node.Name).ToHashSet(StringComparer.Ordinal);
             var transformCatalog = NativeSourceMessageCatalog.Read(messageDeclarations.Where(node => transformMessages.Contains(node.Name)), schemas);
             var multipartTypes = FlattenNativeSource(source.Roots).Where(shape => shape.ShapeType == "MultipartMessageType" && IsHl7Multipart(shape))
@@ -140,8 +154,18 @@ public sealed partial class BizTalkImportService
             }
             void Warn(string text) { if (!warnings.Contains(text)) warnings.Add(text); }
             var activeExceptionNames = new HashSet<string>(StringComparer.Ordinal);
+            var dateTimeNames = FlattenNativeSource(source.Roots).Where(declaration => declaration.ShapeType == "VariableDeclaration"
+                && declaration.Properties.GetValueOrDefault("Type") is "System.DateTime" or "System.TimeSpan").Select(declaration => declaration.Name).ToHashSet(StringComparer.Ordinal);
             NativeFlowNode Block(OdxNode node, string reason, List<NativeFlowNode>? children = null)
             {
+                // Without a date-time model the reader reports the first unknown member (e.g. 'dtEnd' or 'System.DateTime.Compare') as a missing schema field; name the real cause instead.
+                if (reason.Contains("no exact distinguished schema-field declaration", StringComparison.Ordinal))
+                {
+                    var text = string.Join(" ", node.Properties.Where(property => property.Key is "Expression" or "Timeout").Select(property => property.Value));
+                    if (text.Contains("System.DateTime", StringComparison.Ordinal) || text.Contains("System.TimeSpan", StringComparison.Ordinal)
+                        || dateTimeNames.Any(name => System.Text.RegularExpressions.Regex.IsMatch(text, @"(?<![A-Za-z_0-9.])" + System.Text.RegularExpressions.Regex.Escape(name) + @"(?![A-Za-z_0-9])", System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))))
+                        reason = "Statement uses date and time values (System.DateTime/System.TimeSpan)." + UnsupportedVariableHint("System.DateTime");
+                }
                 diagnostics.Add(new("BT-NATIVE-UNRESOLVED", MigrationDiagnosticSeverity.Blocking, paths[0],
                     $"{node.ShapeType} '{node.Name}' at line {node.SourceLine}: {reason}", "Implement/review the explicit native blocker; no source statement is executed or silently omitted."));
                 return new() { Id = "source-" + node.Id, Name = node.Name.Length == 0 ? node.ShapeType : node.Name,
@@ -150,6 +174,10 @@ public sealed partial class BizTalkImportService
             NativeFlowNode DynamicSend(OdxNode node, NativeFlowNode translated, string port, string message, SendPortAnalysis send)
             {
                 if (send.IsTwoWay) return Block(node, $"Dynamic send port '{send.Name}' is two-way; native request/response over a runtime-selected transport is not inferred.");
+                var pipelineNeedsStep = !TransmitPipelineNeedsNoStep(send, Warn);
+                var pipeline = pipelineNeedsStep ? BuildTransmitPipelineChain(send, translated.Id, message, Warn, flatFile, hl7Schema) : null;
+                var chainBlockers = pipeline?.Blockers.ToList() ?? [];
+                if (pipeline is not null) message = pipeline.FinalMessage;
                 NativeExpression Variable(string name) => new() { Kind = NativeExpressionKind.Variable, Variable = name };
                 var addressVariable = NativeSourceExpressionReader.DynamicPortVariable(port, "Address");
                 var transportVariable = NativeSourceExpressionReader.DynamicPortVariable(port, "TransportType");
@@ -169,7 +197,9 @@ public sealed partial class BizTalkImportService
                     => AddRequirement(requirements, candidate.SuggestedFlowId, $"deliveries[{translated.Id + suffix}].delivers[0].deliver.settings.{key}", kind, description, appliedToDraft: true);
                 var allowed = send.DynamicTransportTypes;
                 var branches = new List<(string Transport, List<NativeFlowNode> Nodes)>();
-                bool Allowed(string transport) => allowed.Count == 0 || allowed.Contains(transport, StringComparer.OrdinalIgnoreCase);
+                // A MIME wrapper is only expressed for email delivery; every other transport then ends the flow explicitly instead of sending an unwrapped message.
+                var mimeSmtpOnly = pipeline is { MimeAttachment: true } && chainBlockers.Count == 0;
+                bool Allowed(string transport) => (!mimeSmtpOnly || transport == "SMTP") && (allowed.Count == 0 || allowed.Contains(transport, StringComparer.OrdinalIgnoreCase));
                 if (Allowed("FILE"))
                     branches.Add(("FILE", [Part("-file-dir", "Path", "Directory"), Part("-file-name", "Path", "FileName"),
                         Deliver("-file", "file-system-deliver", new() { ["namingMode"] = "Fixed", ["overwriteExisting"] = "false" },
@@ -195,25 +225,37 @@ public sealed partial class BizTalkImportService
                             ["host"] = Requirement("-smtp", "host", "Config", $"SMTP host for dynamic send port '{send.Name}'."),
                             ["port"] = "25",
                             ["from"] = Requirement("-smtp", "from", "Config", $"SMTP sender address for dynamic send port '{send.Name}'."),
-                            ["subject"] = $"Imported BizTalk delivery {send.Name}", ["attachPayload"] = "true"
+                            ["subject"] = $"Imported BizTalk delivery {send.Name}", ["attachPayload"] = "true",
+                            ["attachmentNameMetadataKey"] = "{" + NativeSourceContextCatalog.PlatformKeyNamespace + "MIME}FileName"
                         }, new() { ["to"] = Variable(NativeSourceExpressionReader.DynamicPortVariable(port, "MailAddress")) })]));
-                if (branches.Count == 0) return Block(node, $"Dynamic send port '{send.Name}' allows no transport with a native adapter ({string.Join(", ", allowed)}).");
+                if (branches.Count == 0) return Block(node, mimeSmtpOnly ? $"Dynamic send port '{send.Name}' uses a MIME/S-MIME encoder, which is only translated for SMTP delivery, but the port allows no SMTP handler." : $"Dynamic send port '{send.Name}' allows no transport with a native adapter ({string.Join(", ", allowed)}).");
                 var supported = string.Join(", ", branches.Select(branch => branch.Transport));
                 List<NativeFlowNode> chain = [new() { Id = translated.Id + "-unsupported", Name = "No native adapter", Kind = NativeFlowNodeKind.Terminate,
-                    TerminateMessage = $"Dynamic send port '{port}' has no native adapter for the assigned transport type; native adapters exist for: {supported}." }];
+                    TerminateMessage = $"Dynamic send port '{port}' has no native adapter for the assigned transport type; native adapters exist for: {supported}." + (mimeSmtpOnly ? " This port's pipeline wraps the message in MIME, which is only translated for SMTP." : "") }];
                 foreach (var (transport, nodes) in Enumerable.Reverse(branches))
                     chain = [new() { Id = translated.Id + "-when-" + transport.ToLowerInvariant(), Name = transport, Kind = NativeFlowNodeKind.If,
                         Expression = new() { Kind = NativeExpressionKind.Equal, Operands = [Variable(transportVariable), new() { Literal = NativeScalar.From(transport) }] },
                         Children = nodes, Otherwise = chain }];
                 translated.Kind = NativeFlowNodeKind.Sequence; translated.Children = chain;
                 Warn($"Dynamic send port '{port}' is translated to an explicit native transport dispatch on the assigned TransportType (exact, case-sensitive FILE/FTP/HTTP/SMTP, limited to the binding's dynamic handlers). Address parsing uses the 'address-part-transform' UDF (Compatibility Pack): FILE splits the last separator, FTP expects ftp://host[:port]/dir/file (default port 21), SMTP strips mailto:. Adapter properties assigned on the outbound message (for example FTP.*, SMTP.* or nsoftware.* values such as TLS mode, subject, sender or host) are NOT translated and stay visible as blockers; the deliver nodes carry reviewed static defaults (FTP encryptionMode=Auto, passive, no overwrite; FILE overwriteExisting=false; SMTP host/from/subject as configuration). A FTP computed remote file name is still expanded as a template by ftp-deliver. Any other or unassigned transport type terminates the flow explicitly.");
-                var unsupportedAllowed = allowed.Where(transport => !branches.Any(branch => branch.Transport.Equals(transport, StringComparison.OrdinalIgnoreCase))).ToArray();
+                string[] unsupportedAllowed = mimeSmtpOnly ? [] : allowed.Where(transport => !branches.Any(branch => branch.Transport.Equals(transport, StringComparison.OrdinalIgnoreCase))).ToArray();
                 if (unsupportedAllowed.Length > 0)
                     Warn($"Dynamic send port '{send.Name}' also allows transports with no native adapter ({string.Join(", ", unsupportedAllowed)}); those values terminate the flow.");
-                if (!string.IsNullOrWhiteSpace(send.TransmitPipeline))
+                if (mimeSmtpOnly)
                 {
+                    if (ApplyMimeAttachment(pipeline!, branches[0].Nodes[^1], Warn) is { } mimeReason) chainBlockers.Add(mimeReason);
+                    Warn($"Dynamic send port '{send.Name}' wraps the message in MIME (its pipeline's MIME/S-MIME encoder); only the SMTP branch is translated, and any other assigned transport type ends the flow explicitly rather than sending an unwrapped message. Review which transports BizTalk could really select for this port.");
+                }
+                if (pipelineNeedsStep)
+                {
+                    var sendId = translated.Id;
                     translated.Id += "-delivery";
-                    return Block(node, $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the dynamic deliveries at that output. No serializer, component equivalence or pass-through is inferred.", [translated]);
+                    if (pipeline is not null && chainBlockers.Count == 0)
+                        return new() { Id = sendId, Name = translated.Name, Kind = NativeFlowNodeKind.Sequence, Children = [.. pipeline.Nodes, translated] };
+                    var reason = pipeline is null
+                        ? $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}' whose components are not known (no per-port configuration in the binding and no pipeline file in the import). Add the pipeline project to the import, or configure named-message augment/render nodes on a separate output message and point the dynamic deliveries at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(send)
+                        : $"Send port '{send.Name}' uses transmit pipeline '{send.TransmitPipeline}', which has no proven native equivalent for: {string.Join("; ", chainBlockers)}. The translated components are shown as children; configure the remaining step explicitly. No serializer or pass-through is inferred." + PipelineBlockDetail(send);
+                    return Block(node, reason, [.. pipeline?.Nodes ?? [], translated]);
                 }
                 return translated;
             }
@@ -223,6 +265,51 @@ public sealed partial class BizTalkImportService
             var correlationTypes = FlattenNativeSource(source.Roots).Where(shape => shape.ShapeType == "CorrelationType" && shape.Name.Length > 0).ToArray();
             var inertCorrelations = new Dictionary<int, string>();
             var inertCorrelationRefs = new HashSet<int>();
+            // A set initialized by the activating Receive and followed by later Receives maps to native Receive correlation keys, which pin the keys' metadata values from the initial message.
+            var followCandidates = new List<(OdxNode Declaration, (string[] Keys, OdxNode Initializer, List<OdxNode> Followers) Follow)>();
+            var correlationFailures = new Dictionary<int, string>();
+            var followedCorrelations = new Dictionary<int, string>();
+            var followedCorrelationRefs = new HashSet<int>();
+            var siblingCorrelationTypes = new Lazy<IReadOnlyList<(string Name, OdxNode Type)>>(() => ReadSiblingCorrelationTypes(paths[0]));
+            var followerKeys = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            (string[] Keys, OdxNode Initializer, List<OdxNode> Followers) ReadFollowedCorrelation(OdxNode declaration)
+            {
+                var typeName = declaration.Properties.GetValueOrDefault("Type", "");
+                var matchingTypes = correlationTypes.Where(type => typeName == type.Name || typeName.EndsWith("." + type.Name, StringComparison.Ordinal)).ToArray();
+                if (matchingTypes.Length == 0) matchingTypes = siblingCorrelationTypes.Value.Where(type => type.Name == typeName).Select(type => type.Type).ToArray();
+                if (declaration.Name.Length == 0 || declaration.Properties.GetValueOrDefault("ParamDirection", "In") != "In" || matchingTypes.Length != 1)
+                    throw new NotSupportedException("Correlation set is a service parameter or its type is not declared exactly once in the supplied source; it needs explicit native channel and correlation-key bindings.");
+                OdxNode? initializer = null;
+                var followers = new List<OdxNode>();
+                foreach (var reference in declaration.Children)
+                {
+                    if (reference.ShapeType != "StatementRef" || reference.Children.Count != 0
+                        || !sourceShapes.TryGetValue(reference.Properties.GetValueOrDefault("Ref", ""), out var target) || target.ShapeType != "Receive")
+                        throw new NotSupportedException("Correlation set is initialized by a non-Receive statement or has statements that could not be proven; only Receive-initialized, Receive-followed sets are translated.");
+                    var initializes = reference.Properties.GetValueOrDefault("Initializes");
+                    if (initializes == "True")
+                    {
+                        if (initializer is not null) throw new NotSupportedException("Correlation set is initialized by more than one Receive; it needs explicit native correlation-key bindings.");
+                        initializer = target;
+                    }
+                    else if (initializes == "False" && !followers.Contains(target)) followers.Add(target);
+                    else throw new NotSupportedException("Correlation set statement initialization or duplication could not be proven.");
+                }
+                if (initializer is null || followers.Count == 0 || initializer.Properties.GetValueOrDefault("Activate") != "True" || parents.GetValueOrDefault(initializer.Id)?.ShapeType != "ServiceBody"
+                    || followers.Any(follower => follower.Properties.GetValueOrDefault("Activate") == "True"))
+                    throw new NotSupportedException("A followed correlation set must be initialized by the service's activating Receive and followed only by non-activating Receives; other shapes need explicit native correlation-key bindings.");
+                var initialMessage = initializer.Properties.GetValueOrDefault("MessageName", "");
+                var keys = new List<string>();
+                foreach (var property in matchingTypes[0].Children)
+                {
+                    if (property.ShapeType != "PropertyRef" || property.Children.Count != 0)
+                        throw new NotSupportedException("Correlation type has an unsupported member; only property references are translated.");
+                    var key = contextCatalog.Resolve(initialMessage, property.Properties.GetValueOrDefault("Ref", "")).MetadataKey;
+                    if (!keys.Contains(key, StringComparer.Ordinal)) keys.Add(key);
+                }
+                if (keys.Count == 0 || keys.Count > 128) throw new NotSupportedException("Correlation type has no property references or too many to pin natively.");
+                return ([.. keys], initializer, followers);
+            }
             foreach (var declaration in FlattenNativeSource(source.Roots).Where(shape => shape.ShapeType == "CorrelationDeclaration"))
             {
                 var typeName = declaration.Properties.GetValueOrDefault("Type", "");
@@ -235,9 +322,27 @@ public sealed partial class BizTalkImportService
                         && sourceShapes.TryGetValue(reference.Properties.GetValueOrDefault("Ref", ""), out var target) && target.ShapeType == "Send") senders.Add(target.Name);
                     else inert = false;
                 }
-                if (!inert) continue;
+                if (!inert)
+                {
+                    try { followCandidates.Add((declaration, ReadFollowedCorrelation(declaration))); }
+                    catch (NotSupportedException exception) { correlationFailures[declaration.Id] = exception.Message; }
+                    continue;
+                }
                 inertCorrelations[declaration.Id] = senders.Count == 0 ? "declared, unused" : "initialized by Send " + string.Join(", ", senders.Distinct(StringComparer.Ordinal).Select(name => "'" + name + "'")) + ", never followed";
                 foreach (var reference in declaration.Children) inertCorrelationRefs.Add(reference.Id);
+            }
+            var followerUse = followCandidates.SelectMany(item => item.Follow.Followers.Select(follower => follower.SourceId)).GroupBy(id => id, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            foreach (var (declaration, follow) in followCandidates)
+            {
+                if (follow.Followers.Any(follower => followerUse[follower.SourceId] > 1))
+                {
+                    correlationFailures[declaration.Id] = "A following Receive belongs to more than one correlation set; combine them explicitly in native Receive correlation keys.";
+                    continue;
+                }
+                followedCorrelations[declaration.Id] = "initialized by Receive '" + follow.Initializer.Name + "', followed by Receive " + string.Join(", ", follow.Followers.Select(follower => "'" + follower.Name + "'"))
+                    + "; native correlation keys: " + string.Join(", ", follow.Keys);
+                foreach (var reference in declaration.Children) followedCorrelationRefs.Add(reference.Id);
+                foreach (var follower in follow.Followers) followerKeys[follower.SourceId] = follow.Keys;
             }
             NativeFlowNode Convert(OdxNode node)
             {
@@ -286,10 +391,11 @@ public sealed partial class BizTalkImportService
                         if (BizTalkRulePolicyAnalyzer.CountPotentialConflicts(policy, default) != 0)
                             throw new NotSupportedException("Selected policy has potentially conflicting matches; native import does not guess BRE agenda/priority conflict resolution.");
                         messageCatalog.ValidatePolicyMessage(message, policy);
+                        warnings.Add($"Policy '{policyName}' {selectedVersion}: BizTalk leaves the fact unchanged when no rule matches and carries on. The native node is set to stop instead, so an unknown value is never processed silently; clear 'Stop when no rule matches' on the node to continue like BizTalk.");
                         warnings.Add($"Policy '{policyName}' {selectedVersion} is an explicitly selected native test target, not proof of the deployed version. Only proven conflict-free single-pass XML fact behavior is compiled; full flow activation remains disabled.");
                         return new() { Id = "source-" + node.Id, Name = node.Name, Children = [
                             new() { Id = "source-" + parameter.Id, Name = parameter.Name },
-                            new() { Id = "source-" + node.Id + "-rules", Name = policyName + " " + selectedVersion + " (native test target)", Kind = NativeFlowNodeKind.ApplyXmlRules, MessageName = message, PolicyJson = proposal }
+                            new() { Id = "source-" + node.Id + "-rules", Name = policyName + " " + selectedVersion + " (native test target)", Kind = NativeFlowNodeKind.ApplyXmlRules, MessageName = message, PolicyJson = proposal, StopWhenNoRuleMatches = true }
                         ] };
                     }
                     catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
@@ -338,7 +444,7 @@ public sealed partial class BizTalkImportService
                     case "CorrelationType": case "PartDeclaration": case "MultipartMessageType":
                     case "DirectBindingAttribute" when node.Properties.GetValueOrDefault("DirectBindingType") == "MessageBox":
                         if (node.ShapeType == "DirectBindingAttribute")
-                            Warn("Ports bound directly to the MessageBox (publish/subscribe) are kept as named declarations. A Receive on such a port keeps its channel and translated filter as native conditions, but nothing here publishes or subscribes: the host must deliver messages with the port name as 'channel' metadata and the filter properties as metadata. Outbound direct-bound Sends stay blocked until a native publish route is configured.");
+                            Warn("Ports bound directly to the MessageBox (publish/subscribe) are kept as named declarations. A Receive on such a port keeps its channel and translated filter as native conditions, but nothing here publishes or subscribes: the host must deliver messages with the port name as 'channel' metadata and the filter properties as metadata. Outbound direct-bound Sends become flow-link deliveries whose channel you choose.");
                         // Contract/wiring declarations carry no execution semantics; wiring is resolved from bindings (Send) or channel names (Receive).
                         translated.Name = node.ShapeType + ": " + translated.Name;
                         return translated;
@@ -365,15 +471,46 @@ public sealed partial class BizTalkImportService
                         {
                             var rawTimeout = node.Properties.GetValueOrDefault("Timeout", "").Trim();
                             var timeout = rawTimeout.EndsWith(';') ? rawTimeout[..^1].TrimEnd() : rawTimeout;
-                            var seconds = ReadConstantTimeoutSeconds(timeout);
-                            if (children.Count != 0 || seconds is null or <= 0 or > 31622400)
+                            var totalMilliseconds = ReadConstantTimeoutMilliseconds(timeout);
+                            if (totalMilliseconds is null && children.Count == 0)
+                            {
+                                try
+                                {
+                                    var computed = new NativeSourceExpressionReader(timeout, scalarTypes, messages, messageCatalog, contextCatalog: contextCatalog, configuration: configuration).ReadSubtractDurationSeconds();
+                                    translated.Kind = NativeFlowNodeKind.Wait; translated.DurationExpression = computed;
+                                    Warn(DateTimeWarning);
+                                    Warn("A Delay computed from dateTime.Subtract(dateTime) is imported as a Wait whose duration is evaluated once, in whole seconds truncated toward zero; a negative duration waits 0 seconds. Sub-second parts of the source TimeSpan are dropped.");
+                                    return translated;
+                                }
+                                catch (NotSupportedException) { /* Not the dynamic form; the constant-TimeSpan blocker below states the limit. */ }
+                            }
+                            if (children.Count != 0 || totalMilliseconds is null or <= 0 or > 31622400000L)
                             {
                                 var evidence = rawTimeout.Length > 1024 ? rawTimeout[..1024] + " [truncated]" : rawTimeout;
-                                return Block(node, "Source delay timeout is not a supported positive whole-second TimeSpan within the native wait limit, or contains nested behavior; configure it explicitly (source expression: " + evidence + ").", children);
+                                return Block(node, "Source delay timeout is not a supported positive whole-millisecond TimeSpan within the native wait limit, or contains nested behavior; configure it explicitly (source expression: " + evidence + ").", children);
                             }
-                            translated.Kind = NativeFlowNodeKind.Wait; translated.DurationSeconds = seconds.Value;
+                            translated.Kind = NativeFlowNodeKind.Wait;
+                            translated.DurationSeconds = (int)(totalMilliseconds.Value / 1000); translated.DurationMilliseconds = (int)(totalMilliseconds.Value % 1000);
+                            if (translated.DurationSeconds == 0)
+                                Warn("A Delay shorter than one second is imported as an in-place sub-second pause (a throttle). A Delay of one second or more parks the instance until the flow's next run, so it is a minimum, not an exact delay.");
                             return translated;
                         }
+                    case "MessagePartRef" when parents.GetValueOrDefault(node.Id)?.ShapeType == "Transform":
+                        translated.Name = "Map message: " + node.Properties.GetValueOrDefault("MessageRef", node.Name);
+                        return translated;
+                    case "Transform":
+                    {
+                        var shape = ReadTransformShape(node, messages, out var shapeProblem);
+                        if (shape is null) return Block(node, shapeProblem);
+                        if (mapChoices is null || !Mulse.Modules.Mapping.RenderDispatchDefinition.Read(mapChoices, allowEmpty: true).Any(choice => string.Equals(choice.Value, shape.ClassName, StringComparison.Ordinal)))
+                            return Block(node, $"Transform shape applies map class '{shape.ClassName}', which has no native renderer choice. Enable 'Derive native map choices' with the map's project in the source paths (see the derived map choices report for why a map could not be converted), or add a choice whose value is exactly this class name. No CLR map is loaded and nothing is guessed.");
+                        translated.Kind = NativeFlowNodeKind.Render; translated.Children = [];
+                        translated.Module = Mulse.Modules.Mapping.RenderDispatchDefinition.ModuleId;
+                        translated.InputMessages = [.. shape.Inputs]; translated.MessageName = shape.Output;
+                        translated.SelectionExpression = new() { Literal = NativeScalar.From(shape.ClassName) };
+                        Warn("A static Transform shape is imported as a render-dispatch step whose selector is the map class name, using the flow's shared choice table (the converted .btm map). Inputs are read in source order and the output replaces the construct message. The converted map is not a verified equivalent of the deployed BizTalk map: preview it with synthetic inputs against trusted expected output.");
+                        return translated;
+                    }
                     case "MessageRef" when parents.GetValueOrDefault(node.Id)?.ShapeType is "OperationDeclaration" or "PartDeclaration":
                         translated.Name = "Operation message: " + node.Properties.GetValueOrDefault("Ref", node.Name);
                         return translated;
@@ -401,11 +538,13 @@ public sealed partial class BizTalkImportService
                             if (!variableDeclarations.Concat(scopeScalarDeclarations).Any(declaration => declaration.Id == node.Id) || !scalarTypes.TryGetValue(node.Name, out var type)
                                 || node.Children.Count != 0 || node.Properties.GetValueOrDefault("UseDefaultConstructor", "False") != "False"
                                 || node.Properties.GetValueOrDefault("ParamDirection", "In") != "In")
-                                throw new NotSupportedException("Only unique service-level or scope-level scalar variables with explicit or language-default initializers are supported; other constructors are not inferred.");
+                                throw new NotSupportedException("Only unique service-level or scope-level scalar variables with explicit or language-default initializers are supported; other constructors are not inferred." + UnsupportedVariableHint(node.Properties.GetValueOrDefault("Type")));
                             translated.Kind = NativeFlowNodeKind.DeclareVariable; translated.Variable = node.Name; translated.VariableType = type;
+                            if (type == NativeScalarType.DateTime) Warn(DateTimeWarning);
                             var initializer = node.Properties.GetValueOrDefault("InitialValue");
                             translated.Expression = string.IsNullOrWhiteSpace(initializer)
-                                ? new() { Literal = type switch { NativeScalarType.Int32 => NativeScalar.From(0), NativeScalarType.Boolean => NativeScalar.From(false), _ => NativeScalar.From(null) } }
+                                ? new() { Literal = type switch { NativeScalarType.Int32 => NativeScalar.From(0), NativeScalarType.Boolean => NativeScalar.From(false),
+                                    NativeScalarType.DateTime => NativeScalar.From(DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc)), _ => NativeScalar.From(null) } }
                                 : new NativeSourceExpressionReader(initializer, scalarTypes, messages, messageCatalog, contextCatalog: contextCatalog, configuration: configuration).ReadCondition();
                             return translated;
                         }
@@ -424,7 +563,11 @@ public sealed partial class BizTalkImportService
                             if (ContainsNode(translated.Children, child => child.Target is { } target && NativeSourceContextCatalog.IsPlatformKey(target.MetadataKey)))
                                 Warn("Adapter and HL7 assembler properties written with message-context syntax (BTAHL7Schemas.*, FTP.*, FILE.*, SMTP.*, MIME.FileName, nsoftware.BizTalk.FTP.* and SFTP.*) are stored as importer-defined metadata keys '{" + NativeSourceContextCatalog.PlatformKeyNamespace + "<namespace>}<name>' typed from the assigned value. No native delivery module reads them: BizTalk adapters and the HL7 assembler applied them at send time (host, credentials, remote file/path, TLS mode, subject, delimiters, encoding). Configure the equivalent Deliver and render settings in the editor. Credential values assigned from message fields are copied into message metadata (and checkpoints) like the message itself; literal credentials are blocked.");
                             if (ContainsNode(translated.Children, child => child.Kind == NativeFlowNodeKind.CreateXmlRoot && child.Expression?.Literal?.Value == NativeSourceExpressionReader.MultipartRootName))
-                                Warn("HL7vXGeneric multipart messages are imported as one native XML message: an '" + NativeSourceExpressionReader.MultipartRootName + "' root holding the MSHSegment document root followed by the BodySegments document root. The empty ZSegments part is dropped, and part-level context (for example MIME.FileName on BodySegments) is not translated. The hl7-xml-render module flattens this shape; BTAHL7 assembler behavior is not claimed. A whole-message multipart copy also copies the source message's metadata, whereas BizTalk starts the copy with a new context.");
+                                Warn("HL7vXGeneric multipart messages are imported as one native XML message: an '" + NativeSourceExpressionReader.MultipartRootName + "' root holding the MSHSegment document root followed by the BodySegments document root. The empty ZSegments part is dropped, and part-level context other than MIME.FileName on BodySegments is not translated. The hl7-xml-render module flattens this shape; BTAHL7 assembler behavior is not claimed. A whole-message multipart copy also copies the source message's metadata, whereas BizTalk starts the copy with a new context.");
+                            if (ContainsNode(translated.Children, child => child.Id.Contains("-partcontext-", StringComparison.Ordinal)))
+                                Warn("MIME.FileName written on the BodySegments part of an HL7 multipart message is stored as message-level metadata '{" + NativeSourceContextCatalog.PlatformKeyNamespace + "MIME}FileName' (assumption: BizTalk's body part and the whole message share that file name when the message is sent). The SMTP deliver's 'attachmentNameMetadataKey' setting names the key it reads; confirm the attachment name of a real BizTalk email. Other part-level context stays blocked.");
+                            if (ContainsNode(translated.Children, child => child.Kind == NativeFlowNodeKind.Render && child.Module == "xml-child-select"))
+                                Warn("Copying the MSHSegment or BodySegments part of an HL7 multipart message into a message is imported as an 'xml-child-select' step (Compatibility Pack) that takes child 1 (MSH) or child 2 (body) of the '" + NativeSourceExpressionReader.MultipartRootName + "' wrapper. That is right for multipart messages built by imported flows (the wrapper this importer defines); it is not proven for a multipart message that another system publishes, so check the incoming message shape and the part number in the node editor. The copy starts with no metadata, as BizTalk starts a copied part with a new context (assumed; the setting can copy the source metadata instead).");
                             if (translated.Children.Any(child => child.SelectionExpression is not null))
                                 warnings.Add($"Transform '{node.Name}' uses explicitly configured exact native renderer replacements with ordered named arguments; no CLR map is loaded and source parity is not implied. Full flow activation remains disabled.");
                             return translated;
@@ -452,11 +595,33 @@ public sealed partial class BizTalkImportService
                         var filterPredicates = node.Children.Where(child => child.ShapeType == "DNFPredicate").ToArray();
                         if (filterPredicates.Length > 0)
                         {
-                            try { translated.Conditions = TranslateReceiveFilter(filterPredicates, message, contextCatalog); }
+                            bool readAsGroups;
+                            try { translated.Conditions = TranslateReceiveFilter(filterPredicates, message, contextCatalog, out readAsGroups); }
                             catch (NotSupportedException exception) { return Block(node, "Receive filter is not translated: " + exception.Message); }
+                            if (readAsGroups)
+                                Warn("A Receive filter with mixed AND/OR groupings was read as BizTalk disjunctive normal form: each predicate's Grouping joins it to the next predicate, OR separates groups, AND binds within a group, and the last predicate's Grouping is ignored. Confirm the result against the Receive shape's filter in the BizTalk designer.");
                             Warn("Receive filters become native receive conditions on promoted-metadata keys. Native comparisons are case-insensitive (BizTalk filters are case-sensitive), and Exists requires a non-blank value (BizTalk tests presence). The host must supply the channel and these metadata keys, and unmatched messages are rejected rather than routed elsewhere; review each filter.");
                         }
                         translated.Kind = NativeFlowNodeKind.Receive; translated.MessageName = message; translated.Channel = channel;
+                        if (followerKeys.TryGetValue(node.SourceId, out var pinnedKeys))
+                        {
+                            translated.CorrelationKeys = [.. pinnedKeys];
+                            Warn("A Receive that follows a correlation set accepts only messages whose metadata values for the set's promoted-property keys equal the values pinned from the initial (activating) message; mismatches are rejected, not routed elsewhere. BizTalk checks the property promotion at design time; here the host must supply these metadata keys (the XSD property-schema names) on every message, and the promotion itself is not verified.");
+                        }
+                        return translated;
+                    case "Listen":
+                        {
+                            var heads = children.Select(branch => branch.Kind == NativeFlowNodeKind.Sequence && branch.Children.Count > 0 ? branch.Children[0] : null).ToArray();
+                            if (node.Children.Count is < 2 or > 16 || node.Children.Any(branch => branch.ShapeType != "ListenBranch"))
+                                return Block(node, "Listen requires 2 to 16 ordered branches, each starting with a Receive or a Delay.", children);
+                            if (heads.Any(head => head is null || head.Kind is not (NativeFlowNodeKind.Receive or NativeFlowNodeKind.Wait)) || heads.Count(head => head!.Kind == NativeFlowNodeKind.Wait) > 1 || heads.All(head => head!.Kind == NativeFlowNodeKind.Wait))
+                                return Block(node, "Listen branches must each start with a translated Receive or a translated Delay (at most one Delay, which acts as the timeout), with at least one Receive; a branch trigger is blocked or unsupported.", children);
+                            translated.Kind = NativeFlowNodeKind.Listen;
+                            Warn("A Listen waits for the first matching Receive branch in source order, or runs its Delay branch when that timeout passes; the timeout is fixed when the Listen is entered and survives restarts. A message arriving after the timeout, or one that matches no branch, is rejected rather than queued. BizTalk's simultaneous-arrival tie-breaking is not reproduced.");
+                            return translated;
+                        }
+                    case "ListenBranch":
+                        translated.Kind = NativeFlowNodeKind.Sequence;
                         return translated;
                     case "Send":
                         if (children.Count > 0) return Block(node, "Send contains unsupported nested behavior.", children);
@@ -469,6 +634,16 @@ public sealed partial class BizTalkImportService
                         var port = node.Properties.GetValueOrDefault("PortName", "");
                         var matches = owners.SelectMany(owner => owner.Service.LogicalPorts.Where(logical => logical.Name == port)
                             .SelectMany(logical => logical.SendPortNames.Select(name => (owner.Binding, Name: name)))).ToArray();
+                        if (matches.Length == 0 && directBoundPorts.Contains(port))
+                        {
+                            // BizTalk publishes to the MessageBox and any subscriber receives it. The native equivalent is a named channel; which flow listens is the user's choice.
+                            var linkChannel = AddRequirement(requirements, candidate.SuggestedFlowId, $"deliveries[{translated.Id}].delivers[0].deliver.settings.channel", "Config",
+                                $"Flow-link channel for the MessageBox-bound port '{port}'. BizTalk publishes the message and every matching subscription receives it; choose the channel that a flow-link-fetch source in the subscribing flow listens on, or change this node to another deliver module.", appliedToDraft: true);
+                            Warn("Sends on ports bound directly to the MessageBox are imported as flow-link deliveries with an unset channel (a placeholder that fails closed until you choose one). BizTalk publish/subscribe delivers to every subscription whose filter matches, and subscribers are found at runtime; a flow-link channel reaches only the flows whose flow-link-fetch source names it, with no filter. Review which BizTalk subscribers exist (receive port filters, send port filters and activating receives) and create one flow-link-fetch source per subscriber flow.");
+                            translated.Kind = NativeFlowNodeKind.Deliver; translated.Module = "flow-link-deliver"; translated.MessageName = outboundMessage;
+                            translated.Settings = new(StringComparer.OrdinalIgnoreCase) { ["channel"] = linkChannel };
+                            return translated;
+                        }
                         if (matches.Length != 1) return Block(node, "Outbound logical port has no unique explicit physical binding. Direct subscriptions/dynamic routes are not guessed.");
                         var physical = matches[0].Binding.SendPorts.Where(send => send.Name == matches[0].Name).ToArray();
                         if (physical.Length != 1) return Block(node, "Bound physical send port is missing or ambiguous.");
@@ -487,14 +662,32 @@ public sealed partial class BizTalkImportService
                         translated.Kind = NativeFlowNodeKind.Deliver; translated.Module = settings.Module;
                         translated.Settings = new(settings.Settings, StringComparer.OrdinalIgnoreCase); translated.MessageName = outboundMessage;
                         if (physical[0].IsTwoWay) translated.Settings["expectsResponse"] = "true";
-                        if (physical[0].RetryCount > 0 || !string.IsNullOrWhiteSpace(physical[0].TransmitPipeline))
+                        var pipelineNeedsStep = !TransmitPipelineNeedsNoStep(physical[0], Warn);
+                        var chain = pipelineNeedsStep ? BuildTransmitPipelineChain(physical[0], translated.Id, outboundMessage, Warn, flatFile, hl7Schema) : null;
+                        if (chain is not null) translated.MessageName = chain.FinalMessage;
+                        var chainBlockers = chain?.Blockers.ToList() ?? [];
+                        if (chain is not null && chainBlockers.Count == 0 && ApplyMimeAttachment(chain, translated, Warn) is { } mimeReason) chainBlockers.Add(mimeReason);
+                        if (physical[0].RetryCount > 0)
                         {
+                            if (physical[0].RetryCount > NativeDeliverRetry.MaxAttempts || physical[0].RetryIntervalMinutes < 0 || physical[0].RetryIntervalMinutes * 60L > NativeDeliverRetry.MaxIntervalSeconds)
+                                return Block(node, $"Send port '{physical[0].Name}' retries {physical[0].RetryCount} time(s) every {physical[0].RetryIntervalMinutes} minute(s), which is outside the native retry limits ({NativeDeliverRetry.MaxAttempts} attempts, {NativeDeliverRetry.MaxIntervalSeconds / 60} minutes apart); configure the retry explicitly.");
+                            translated.Retry = new() { Attempts = physical[0].RetryCount, IntervalSeconds = physical[0].RetryIntervalMinutes * 60 };
+                            Warn($"Send port '{physical[0].Name}' retries {physical[0].RetryCount} time(s), {physical[0].RetryIntervalMinutes} minute(s) apart. The native Deliver node has an equivalent retry policy, but it repeats a send only when the transport proves nothing was sent (connection refused, name not found, login rejected). BizTalk also retried after a timeout or dropped connection; the native node holds those for reconciliation unless 'also retry ambiguous failures' is turned on (it can send the same data twice). Attempts are not parked exactly: the next attempt runs on the flow's next run after the interval. A BizTalk backup transport, if configured on the port, is not imported.");
+                            if (!SupportsNotSentClassification(settings.Module))
+                                Warn($"Send port '{physical[0].Name}' uses transport module '{settings.Module}', which cannot prove that a failed send sent nothing, so its retry only runs if 'also retry ambiguous failures' is turned on.");
+                        }
+                        if (pipelineNeedsStep)
+                        {
+                            var sendId = translated.Id;
                             translated.Id += "-delivery";
-                            var reason = physical[0].RetryCount > 0
-                                ? "Physical send retry semantics require reviewed native effect reconciliation; no automatic resend is inferred. " : "";
-                            if (!string.IsNullOrWhiteSpace(physical[0].TransmitPipeline))
-                                reason += $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}'. Review its full component order and configuration; configure named-message augment/render nodes on a separate output message, then point the child delivery at that output. No serializer, component equivalence or pass-through is inferred.";
-                            return Block(node, reason, [translated]);
+                            if (chain is not null && chainBlockers.Count == 0)
+                                return new() { Id = sendId, Name = translated.Name, Kind = NativeFlowNodeKind.Sequence, Children = [.. chain.Nodes, translated] };
+                            var reason = chain is null
+                                    ? $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}' whose components are not known (no per-port configuration in the binding and no pipeline file in the import). Add the pipeline project to the import, or configure named-message augment/render nodes on a separate output message and point the child delivery at that output. No serializer, component equivalence or pass-through is inferred." + PipelineBlockDetail(physical[0])
+                                    : chainBlockers.Count > 0
+                                        ? $"Send port '{physical[0].Name}' uses transmit pipeline '{physical[0].TransmitPipeline}', which has no proven native equivalent for: {string.Join("; ", chainBlockers)}. The translated components are shown as children; configure the remaining step explicitly. No serializer or pass-through is inferred." + PipelineBlockDetail(physical[0])
+                                        : "";
+                            return Block(node, reason, [.. chain?.Nodes ?? [], translated]);
                         }
                         return translated;
                     case "CallRules":
@@ -513,8 +706,14 @@ public sealed partial class BizTalkImportService
                     case "StatementRef" when inertCorrelationRefs.Contains(node.Id):
                         translated.Name = "StatementRef (not enforced): " + node.Name;
                         return translated;
+                    case "CorrelationDeclaration" when followedCorrelations.TryGetValue(node.Id, out var followedEvidence):
+                        translated.Name = "CorrelationDeclaration (enforced by Receive correlation keys): " + node.Name + " - " + followedEvidence;
+                        return translated;
+                    case "StatementRef" when followedCorrelationRefs.Contains(node.Id):
+                        translated.Name = "StatementRef (enforced by Receive correlation keys): " + node.Name;
+                        return translated;
                     case "CorrelationDeclaration":
-                        return Block(node, "Correlation set is followed by a Receive, is initialized by a non-Send statement, or its type or statements could not be proven; it needs explicit native channel and correlation-key bindings.", children);
+                        return Block(node, correlationFailures.GetValueOrDefault(node.Id, "Correlation set is followed by a Receive, is initialized by a non-Send statement, or its type or statements could not be proven; it needs explicit native channel and correlation-key bindings."), children);
                     case "LongRunningTransaction": case "AtomicTransaction": case "TransactionAttribute":
                         if (children.Count != 0) return Block(node, $"{node.ShapeType} contains unsupported nested behavior.", children);
                         var transactionSettings = string.Join("; ", node.Properties.Where(pair => pair.Key is not ("Name" or "Signal" or "ReportToAnalyst")).OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value));
@@ -527,8 +726,15 @@ public sealed partial class BizTalkImportService
             }
             var definition = new NativeFlowDefinition { Durable = true, Nodes = source.Roots.Select(Convert).ToList() };
             definition.Nodes.InsertRange(0, hiddenDeclarations);
+            if (mapChoices is not null && definition.AllNodes().Any(node => node.SelectionExpression is not null))
+            {
+                definition.RenderChoicesJson = mapChoices;
+                warnings.Add("Every dynamic transform in this flow selects from ONE shared choice table (the flow's renderChoicesJson), not its own copy. The table covers every policy map name found for the solution, so a transform can select a map that BizTalk would only ever choose for a different policy field; an unlisted name fails closed. Editing a choice changes every transform in the flow. A map referenced as a config value is shared by every flow that uses it.");
+            }
             if (configuration is not null)
                 warnings.Add("Explicit host configuration and pure getter source files are native test snapshots, not proof of deployed assembly identity or inherited machine configuration. Referenced getter results are pinned as editable scalar literals; absent keys retain the proven empty-string return. No configuration file or helper assembly is read at execution time.");
+            if (JsonSerializer.Serialize(definition, NativeJson).Contains("\"metadataKey\":\"" + NativeSourceContextCatalog.MessageIdKey + "\"", StringComparison.Ordinal))
+                warnings.Add("A source read of BTS.MessageID is mapped to the received message's '" + NativeSourceContextCatalog.MessageIdKey + "' metadata (the flow's message-id key, editable under Execution and message settings; if you change that key, update these reads too). BizTalk assigns a new GUID to every message; native flows use the id supplied when the message was received, so its format can differ. A message built inside the flow has no id and the read fails closed.");
             if (definition.AllNodes().Any(node => node.Expression?.RequiresInstance == true || node.NamespaceExpression?.RequiresInstance == true))
                 warnings.Add("Source instance identity reads use the stable new native instance GUID, not a legacy BizTalk instance ID. This identity survives waits and restart; review any external identity contract before activation.");
             var json = JsonSerializer.Serialize(definition, NativeJson);
@@ -565,7 +771,65 @@ public sealed partial class BizTalkImportService
         }
     }
 
-    private static int? ReadConstantTimeoutSeconds(string expression)
+    // Correlation types may be declared in another orchestration of the same BizTalk project; only the explicitly included XLang items of the one owning .btproj are read.
+    private static IReadOnlyList<(string Name, OdxNode Type)> ReadSiblingCorrelationTypes(string orchestrationPath)
+    {
+        var result = new List<(string, OdxNode)>();
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(orchestrationPath))!;
+            var owners = new List<List<BizTalkArtifactResponse>>();
+            foreach (var projectPath in Directory.EnumerateFiles(directory, "*.btproj", SearchOption.TopDirectoryOnly))
+            {
+                var artifacts = new List<BizTalkArtifactResponse>();
+                AddArtifacts(XDocument.Load(projectPath), directory, directory, "XLang", "Orchestration", artifacts);
+                if (artifacts.Any(artifact => string.Equals(artifact.FullPath, Path.GetFullPath(orchestrationPath), StringComparison.OrdinalIgnoreCase))) owners.Add(artifacts);
+            }
+            if (owners.Count != 1) return result;
+            foreach (var artifact in owners[0].Where(artifact => !string.Equals(artifact.FullPath, Path.GetFullPath(orchestrationPath), StringComparison.OrdinalIgnoreCase)).Take(256))
+            {
+                try
+                {
+                    foreach (var module in FlattenNativeSource(OdxProgramReader.ReadFile(artifact.FullPath).Roots).Where(shape => shape.ShapeType == "Module" && shape.Name.Length > 0))
+                        foreach (var type in module.Children.Where(child => child.ShapeType == "CorrelationType" && child.Name.Length > 0))
+                            result.Add((module.Name + "." + type.Name, type));
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException or ArgumentException or NotSupportedException or InvalidOperationException) { /* An unreadable sibling cannot prove a type; the set stays blocked. */ }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException) { /* No readable owning project: no sibling evidence. */ }
+        return result;
+    }
+
+    /// <summary>
+    /// True when a send port's transmit pipeline needs no native step: none is set, or it is one of BizTalk's two stock transmit pipelines with no per-port component configuration.
+    /// PassThruTransmit does no processing. XMLTransmit is the XML assembler with default settings; its effect on the output text is not reproduced, so it is warned. Any other pipeline stays blocked.
+    /// </summary>
+    private static bool TransmitPipelineNeedsNoStep(SendPortAnalysis send, Action<string> warn)
+    {
+        var name = send.TransmitPipeline.Split(',')[0].Trim();
+        if (name.Length == 0) return true;
+        if (send.Operational.HasSendPipelineConfiguration) return false;
+        if (name.Equals("Microsoft.BizTalk.DefaultPipelines.PassThruTransmit", StringComparison.OrdinalIgnoreCase))
+        {
+            warn("Send ports using the stock PassThruTransmit pipeline (which does no processing) are imported without a pipeline step.");
+            return true;
+        }
+        if (name.Equals("Microsoft.BizTalk.DefaultPipelines.XMLTransmit", StringComparison.OrdinalIgnoreCase))
+        {
+            warn("Send ports using the stock XMLTransmit pipeline (the XML assembler with default settings, no per-port configuration) are imported without a pipeline step: the message is delivered as the native XML text. The assembler can add an XML declaration or convert the character set; native output is not checked against that, so compare a delivered file with a real BizTalk output (XML declaration, encoding, byte-order mark) before use.");
+            return true;
+        }
+        return false;
+    }
+
+    private static string PipelineBlockDetail(SendPortAnalysis send)
+        => send.Operational.HasSendPipelineConfiguration ? " The port carries its own pipeline component configuration, so even a stock pipeline is not assumed to be unmodified." : "";
+
+    private static bool SupportsNotSentClassification(string module) =>
+        module is "http-deliver" or "ftp-deliver" or "sftp-deliver" or "smtp-email-deliver";
+
+    private static long? ReadConstantTimeoutMilliseconds(string expression)
     {
         if (expression.Length > 4096) return null;
         const System.Text.RegularExpressions.RegexOptions options = System.Text.RegularExpressions.RegexOptions.CultureInvariant;
@@ -574,36 +838,27 @@ public sealed partial class BizTalkImportService
         if (ticks.Success)
         {
             if (!long.TryParse(ticks.Groups["ticks"].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
-                || value % TimeSpan.TicksPerSecond != 0) return null;
-            return (int)Math.Min(int.MaxValue, value / TimeSpan.TicksPerSecond);
+                || value % TimeSpan.TicksPerMillisecond != 0) return null;
+            return value / TimeSpan.TicksPerMillisecond;
         }
         var ctor = System.Text.RegularExpressions.Regex.Match(expression, @"^new\s+(?:System\.)?TimeSpan\s*\(\s*(?<args>[0-9]{1,9}(?:\s*,\s*[0-9]{1,9}){2,4})\s*\)$", options, timeout);
-        long seconds;
+        long milliseconds;
         if (ctor.Success)
         {
             var args = ctor.Groups["args"].Value.Split(',').Select(value => long.Parse(value.Trim(), System.Globalization.CultureInfo.InvariantCulture)).ToArray();
             var offset = args.Length == 3 ? 0 : 1;
-            var milliseconds = args.Length == 5 ? args[4] : 0;
-            if (milliseconds % 1000 != 0) return null;
-            seconds = (offset == 1 ? args[0] * 86400 : 0) + args[offset] * 3600 + args[offset + 1] * 60 + args[offset + 2] + milliseconds / 1000;
+            var partial = args.Length == 5 ? args[4] : 0;
+            milliseconds = ((offset == 1 ? args[0] * 86400 : 0) + args[offset] * 3600 + args[offset + 1] * 60 + args[offset + 2]) * 1000 + partial;
         }
         else
         {
             var factory = System.Text.RegularExpressions.Regex.Match(expression, @"^(?:System\.)?TimeSpan\.From(Seconds|Minutes|Hours|Days|Milliseconds)\s*\(\s*([0-9]{1,9})\s*\)$", options, timeout);
             if (!factory.Success) return null;
             var number = long.Parse(factory.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
-            if (factory.Groups[1].Value == "Milliseconds")
-            {
-                if (number % 1000 != 0) return null;
-                seconds = number / 1000;
-            }
-            else
-            {
-                var multiplier = factory.Groups[1].Value switch { "Minutes" => 60L, "Hours" => 3600L, "Days" => 86400L, _ => 1L };
-                seconds = number * multiplier;
-            }
+            var multiplier = factory.Groups[1].Value switch { "Milliseconds" => 1L, "Minutes" => 60000L, "Hours" => 3600000L, "Days" => 86400000L, _ => 1000L };
+            milliseconds = number * multiplier;
         }
-        return (int)Math.Min(int.MaxValue, seconds);
+        return milliseconds;
     }
 
     private static IEnumerable<OdxNode> FlattenNativeSource(IEnumerable<OdxNode> nodes)

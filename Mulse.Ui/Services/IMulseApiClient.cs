@@ -17,6 +17,10 @@ public interface IMulseApiClient
     Task<IReadOnlyList<HistoryExecutionViewModel>> GetHistoryExecutionsAsync(string? flowId, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support execution history.");
 
+    /// <summary>The most recent executions of every flow, newest first. <paramref name="take"/> is between 1 and 200.</summary>
+    Task<IReadOnlyList<HistoryExecutionViewModel>> GetRecentExecutionsAsync(int take, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support execution history.");
+
     Task<HistoryExecutionDetailViewModel> GetHistoryExecutionAsync(string executionId, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support execution history.");
 
@@ -47,6 +51,75 @@ public interface IMulseApiClient
     Task<NativeFlowTestResponseViewModel> TestNativeFlowAsync(NativeFlowTestRequestViewModel request, CancellationToken cancellationToken)
         => throw new NotSupportedException("This API client does not support isolated native testing.");
 
+    Task<NativeFlowCompareResponseViewModel> CompareNativeFlowAsync(NativeFlowCompareRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support comparing with real output.");
+
+    Task<IReadOnlyList<ComparisonScenarioSummaryViewModel>> ListComparisonScenariosAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support saved comparison scenarios.");
+
+    Task<ComparisonScenarioViewModel> GetComparisonScenarioAsync(string id, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support saved comparison scenarios.");
+
+    Task<ComparisonScenarioSummaryViewModel> SaveComparisonScenarioAsync(SaveComparisonScenarioRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support saved comparison scenarios.");
+
+    Task DeleteComparisonScenarioAsync(string id, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support saved comparison scenarios.");
+
+    Task<NativeFlowCompareResponseViewModel> RunComparisonScenarioAsync(string id, string flowJson, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support saved comparison scenarios.");
+
+    Task<FlowExplanationViewModel> ExplainNativeFlowAsync(string flowJson, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support flow explanations.");
+
+    Task<NodeExplanationViewModel> ExplainNativeNodeAsync(string flowJson, string nodeId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support flow explanations.");
+
+    Task<IReadOnlyList<AssistGlossaryEntryViewModel>> SearchAssistGlossaryAsync(string? search, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the glossary.");
+
+    Task<ModulePromptViewModel> BuildModulePromptAsync(string flowJson, string moduleId, string? description, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support module prompts.");
+
+    Task<OperationalDigestViewModel> GetOperationalDigestAsync(int hours, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the operational digest.");
+
+    Task<FlowReviewViewModel> GetFlowReviewAsync(string flowId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the pre-enable review.");
+
+    Task<FlowRunbookViewModel> BuildFlowRunbookAsync(string flowId, RunbookRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support flow runbooks.");
+
+    Task<BlockerTriageViewModel> GetBlockerTriageAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support blocker triage.");
+
+    Task<ConfigReviewViewModel> GetConfigReviewAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the config values review.");
+
+    Task<MapReviewViewModel> GetMapReviewAsync(string flowId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the map review.");
+
+    Task<FailurePatternReportViewModel> GetFailurePatternsAsync(int take, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support failure patterns.");
+
+    Task<RunExplanationViewModel> ExplainRunAsync(string executionId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support run explanations.");
+
+    Task<FlowWordingDisclosureViewModel> PreviewFlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI wording of flow explanations.");
+
+    Task<FlowWordingResponseViewModel> FlowWordingAsync(FlowWordingRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI wording of flow explanations.");
+
+    Task<IReadOnlyList<AiActivityEntryViewModel>> GetAiActivityAsync(string? flowId, int take, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support the AI activity list.");
+
+    Task<RunWordingDisclosureViewModel> PreviewRunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI wording of run explanations.");
+
+    Task<FlowWordingResponseViewModel> RunWordingAsync(string executionId, RunWordingRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI wording of run explanations.");
+
     Task<XmlSchemaTreeViewModel> AnalyzeXmlMappingSchemasAsync(XmlSchemaAnalysisRequestViewModel request, CancellationToken cancellationToken);
 
     Task<NativeMapConversionViewModel> ImportNativeXmlMappingAsync(XmlMappingImportRequestViewModel request, CancellationToken cancellationToken);
@@ -56,6 +129,10 @@ public interface IMulseApiClient
     Task<XmlRulePreviewResultViewModel> PreviewXmlRulesAsync(XmlRulePreviewRequestViewModel request, CancellationToken cancellationToken);
 
     Task<FlowViewModel> ImportBizTalkDraftFlowAsync(CreateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken);
+
+    Task<BizTalkUpdatePlanViewModel> PlanBizTalkFlowUpdateAsync(string flowId, CreateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken);
+
+    Task<BizTalkUpdateResultViewModel> UpdateBizTalkFlowAsync(string flowId, UpdateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken);
 
     Task<DownloadedFileViewModel> DownloadBizTalkScaffoldedModulesAsync(CreateImportedBizTalkFlowRequestViewModel request, CancellationToken cancellationToken);
 
@@ -125,4 +202,37 @@ public interface IMulseApiClient
     Task<WorkspaceRestorePreviewViewModel> RestoreWorkspaceAsync(RestoreWorkspaceRequestViewModel request, CancellationToken cancellationToken);
 
     Task<int> DeleteAllFlowsAsync(string confirmation, CancellationToken cancellationToken);
+
+    Task<AiAuthoringSettingsViewModel> GetAiAuthoringSettingsAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring.");
+
+    Task<AiAuthoringSettingsViewModel> SetAiAuthoringSettingsAsync(UpdateAiAuthoringSettingsViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring settings.");
+
+    Task<IReadOnlyList<AiAuthoringModelViewModel>> GetCopilotModelsAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support Copilot model discovery.");
+
+    Task<AiAuthoringTestViewModel> TestAiAuthoringAsync(CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring connection tests.");
+
+    Task<AiAuthoringResponseViewModel> ChatAuthoringAsync(AiAuthoringRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI authoring.");
+
+    Task<ConnectionAnalysisViewModel> AnalyzeConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support connection analysis.");
+
+    Task<ConnectionAssistanceResponseViewModel> AssistConnectionAsync(ConnectionAssistanceRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support connection assistance.");
+
+    Task<BizTalkAssistDisclosureViewModel> PreviewBizTalkAssistAsync(BizTalkAssistRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support BizTalk import assistance.");
+
+    Task<BizTalkAssistResponseViewModel> BizTalkAssistAsync(BizTalkAssistRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support BizTalk import assistance.");
+
+    Task<CompareExplainDisclosureViewModel> PreviewCompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI explanations of comparison differences.");
+
+    Task<CompareExplainResponseViewModel> CompareExplainAsync(CompareExplainRequestViewModel request, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This API client does not support AI explanations of comparison differences.");
 }

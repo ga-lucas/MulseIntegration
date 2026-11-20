@@ -12,6 +12,8 @@ public sealed class XmlRulesAugmentModule : IOrchestrationAugmentModule
             new("factMode", "Policy input / output", "XML mode edits a fact document. Metadata mode preserves the original body, reads condition fields from metadata and writes assigned fields back to metadata.", false, ModuleSettingInputKind.Select, "PayloadXml",
                 [new("PayloadXml", "XML fact document"), new("Metadata", "Metadata facts; preserve message body")]),
             new("metadataPrefix", "Fact metadata prefix", "Metadata mode reads/writes prefix + field local name, for example rules.GroupID and rules.MapName. Blank uses unprefixed keys. Existing assigned keys are overwritten; namespace collisions fail.", false, ModuleSettingInputKind.Text, "rules."),
+            new("onNoMatch", "When no rule matches", "Stop fails the flow so an unknown value is never processed silently. Continue leaves the message unchanged, as BizTalk did.", false, ModuleSettingInputKind.Select, "Stop",
+                [new("Stop", "Stop (fail)"), new("Continue", "Continue unchanged")]),
             new("policyJson", "XML rule policy", "Configure the policy with the visual XML rule editor. Imported policies are native proposals, not verified BizTalk equivalents.", true, ModuleSettingInputKind.TextArea)
         ],
         new ModuleRecommendationProfile([ModuleDataFormat.Xml, ModuleDataFormat.Json], capabilities: [ModuleCapability.Transformation, ModuleCapability.Decision]));
@@ -22,6 +24,8 @@ public sealed class XmlRulesAugmentModule : IOrchestrationAugmentModule
         var sourceId = ModuleSettingReader.GetOptional(step.Settings, "sourceId");
         var mode = ModuleSettingReader.GetOptional(step.Settings, "factMode") ?? "PayloadXml";
         if (mode is not ("PayloadXml" or "Metadata")) throw new ArgumentException("XML rule factMode must be PayloadXml or Metadata.");
+        var onNoMatch = ModuleSettingReader.GetOptional(step.Settings, "onNoMatch") ?? "Stop";
+        if (onNoMatch is not ("Stop" or "Continue")) throw new ArgumentException("XML rule onNoMatch must be Stop or Continue.");
         var prefix = step.Settings.GetValueOrDefault("metadataPrefix", "rules.");
         if (prefix.Length > 128) throw new ArgumentException("XML rule metadataPrefix exceeds 128 characters.");
         var output = new List<IntegrationPayload>();
@@ -34,7 +38,7 @@ public sealed class XmlRulesAugmentModule : IOrchestrationAugmentModule
                 continue;
             }
             var facts = mode == "Metadata" ? MetadataFacts(policy, payload.Metadata, prefix, cancellationToken) : payload.GetText();
-            var result = XmlRuleRuntime.Evaluate(policy, facts, cancellationToken);
+            var result = XmlRuleRuntime.Evaluate(policy, facts, cancellationToken, requireMatch: onNoMatch == "Stop");
             var metadata = new Dictionary<string, string>(payload.Metadata, StringComparer.OrdinalIgnoreCase);
             if (mode == "Metadata")
                 foreach (var assignment in result.Assignments) metadata[prefix + assignment.Name] = assignment.Value;

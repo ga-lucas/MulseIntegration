@@ -30,6 +30,8 @@ public sealed class MainLayoutTests
             Assert.Contains("aria-label=\"Collapse main menu\"", expanded);
             Assert.Contains("aria-expanded=\"true\"", expanded);
             Assert.DoesNotContain("sidebar-collapsed", expanded);
+            Assert.Matches("<details class=\"ai-nav-group\"(?![^>]*\\bopen\\b)[^>]*>", expanded);
+            Assert.Matches("(?s)<summary[^>]*aria-label=\"AI assistance\".*?</summary>\\s*<div class=\"ai-submenu\"[^>]*>.*?href=\"/ai-assistance\".*?href=\"/github-copilot\".*?</div>\\s*</details>", expanded);
 
             typeof(MainLayout).GetMethod("ToggleMenu", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(layout, null);
             await layout.SetParametersAsync(ParameterView.Empty);
@@ -45,7 +47,7 @@ public sealed class MainLayoutTests
             Assert.Contains("aria-label=\"Toggle dark mode\"", collapsed);
             Assert.Contains("href=\"#main-content\"", collapsed);
             Assert.Matches("<a[^>]*href=\"/modules\"[^>]*class=\"active\"", collapsed);
-            foreach (var destination in new[] { ("/", "Dashboard"), ("/config-values", "Config values"), ("/modules", "Modules"), ("/module-packages", "Module Packages"), ("/backup-restore", "Backup &amp; Restore") })
+            foreach (var destination in new[] { ("/", "Dashboard"), ("/flows", "Flows"), ("/config-values", "Config values"), ("/modules", "Modules"), ("/module-packages", "Module Packages"), ("/ai-assistance", "Provider settings"), ("/github-copilot", "My GitHub connection"), ("/backup-restore", "Backup &amp; Restore") })
             {
                 Assert.Contains($"href=\"{destination.Item1}\"", collapsed);
                 Assert.Contains($"aria-label=\"{destination.Item2}\"", collapsed);
@@ -57,6 +59,39 @@ public sealed class MainLayoutTests
             Assert.DoesNotContain("sidebar-collapsed", rendered.ToHtmlString());
             Assert.Contains("Current workspace", rendered.ToHtmlString());
             Assert.Contains("aria-label=\"Collapse main menu\"", rendered.ToHtmlString());
+        });
+    }
+
+    [Theory]
+    [InlineData("/ai-assistance")]
+    [InlineData("/github-copilot?connected=true")]
+    public async Task AiGroupOpensOnDirectLinksAndNavigationWithSelectedChild(string destination)
+    {
+        var activator = new CapturingActivator();
+        var navigation = new TestNavigation();
+        navigation.NavigateTo(destination);
+        await using var services = new ServiceCollection().AddLogging()
+            .AddSingleton<IComponentActivator>(activator)
+            .AddSingleton<NavigationManager>(navigation).AddSingleton<IJSRuntime>(new NoJs()).BuildServiceProvider();
+        await using var renderer = new HtmlRenderer(services, services.GetRequiredService<ILoggerFactory>());
+        await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var rendered = await renderer.RenderComponentAsync<MainLayout>();
+            var layout = Assert.IsType<MainLayout>(activator.Layout);
+            Assert.Matches("<details class=\"ai-nav-group\"[^>]*\\bopen\\b[^>]*>", rendered.ToHtmlString());
+            Assert.Matches($"<a[^>]*href=\"{destination.Split('?')[0]}\"[^>]*class=\"active\"", rendered.ToHtmlString());
+
+            navigation.NavigateTo("/modules");
+            await layout.SetParametersAsync(ParameterView.Empty);
+            Assert.Matches("<details class=\"ai-nav-group\"(?![^>]*\\bopen\\b)[^>]*>", rendered.ToHtmlString());
+
+            navigation.NavigateTo(destination);
+            await layout.SetParametersAsync(ParameterView.Empty);
+            typeof(MainLayout).GetMethod("ToggleMenu", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(layout, null);
+            await layout.SetParametersAsync(ParameterView.Empty);
+            Assert.Contains("sidebar-collapsed", rendered.ToHtmlString());
+            Assert.Matches("<details class=\"ai-nav-group\"[^>]*\\bopen\\b[^>]*>", rendered.ToHtmlString());
+            Assert.Matches($"<a[^>]*href=\"{destination.Split('?')[0]}\"[^>]*class=\"active\"", rendered.ToHtmlString());
         });
     }
 

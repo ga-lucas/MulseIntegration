@@ -26,7 +26,13 @@ public sealed record CreateImportedBizTalkFlowRequest
     public string? NativeMapChoicesJson { get; init; }
     public bool DeriveNativeMapChoices { get; init; }
 
+    /// <summary>Inline evidence; must match what was passed to analyze (see <see cref="AnalyzeBizTalkSolutionRequest.Evidence"/>).</summary>
+    public IReadOnlyList<BizTalkEvidenceItem> Evidence { get; init; } = [];
+
     /// <summary>The suggested flow id of the generated draft flow to import.</summary>
     [Required]
     public required string SuggestedFlowId { get; init; }
+
+    /// <summary>Optional id to save the imported flow under instead of <see cref="SuggestedFlowId"/>, for example a side-by-side draft next to an existing import.</summary>
+    public string? NewFlowId { get; init; }
 }

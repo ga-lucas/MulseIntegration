@@ -22,6 +22,7 @@ what needs human review - to make BizTalk migrations less painful.
 - [Excel files](#excel-files)
 - [BizTalk migration](#biztalk-migration)
 - [UI workspace](#ui-workspace)
+- [AI flow authoring](#ai-flow-authoring)
 - [API reference](#api-reference)
 - [Troubleshooting and limitations](#troubleshooting-and-limitations)
 
@@ -66,7 +67,7 @@ happens at this boundary, not during Fetch. Notification retries do not resend d
 |---|---|
 | `Mulse.Modules` | Core abstractions (`IFetchModule`, optional `IFetchOutcomeModule`, `IParseModule`, `IOrchestrationAugmentModule`, `IRenderModule`, `IDeliverModule`), the typed module SDK, the decision-rule engine, and the built-in module set. |
 | `Service` | The ASP.NET Core API/runtime: flow execution engine (`FlowRuntime`), module catalog/plugin loader, flow CRUD + run endpoints, config/secret value store, BizTalk import service, and the hot-reloadable module system. |
-| `Mulse.Ui` | Blazor Server dashboard, visual flow designer with sample-file drops and path-based BizTalk import, config values/encryption, module/package administration, and workspace backup/restore. |
+| `Mulse.Ui` | Blazor Server dashboard (health and run statistics), flows page, visual flow designer with sample-file drops and path-based BizTalk import, config values/encryption, module/package administration, and workspace backup/restore. |
 | `Mulse.CompatibilityPack` | Additional built-in XML/XSD, flat-file and envelope parsing; XSLT/SOAP rendering; metadata promotion, route selection, SMTP, document repository, file watcher and HTTP inbound/reply modules. |
 | `Mulse.Hl7` | Hot-loadable plugin providing HL7 parse/render modules. |
 | `Mulse.Dbms.SqlServer` | Hot-loadable plugin providing SQL Server lookup (fetch) and execute (deliver) modules. |
@@ -152,11 +153,12 @@ compatible. Modules execute with the Service process's permissions; loading is n
 
 | Mode | Behavior |
 |---|---|
-| `OnDemand` | Runs when an enabled flow is invoked from the dashboard or `POST /api/flows/{flowId}/run`. |
+| `OnDemand` | Runs when an enabled flow is invoked from the Flows page or `POST /api/flows/{flowId}/run`. |
 | `Interval` | Polls on a positive `trigger.interval` such as `00:05:00`; scheduler checks every five seconds. `runOnStartup` controls the initial interval run, not all trigger modes. |
 | `Push` | Registers the first fetch node implementing `IPushTriggeredFetchModule`; other fetches still execute normally. Registrations reconcile about every five seconds. |
 
-Manual Run also works for enabled Interval/Push flows. It does not enable a disabled flow. Execution is
+Manual Run also works for enabled Interval/Push flows. It does not enable a disabled flow; the Flows page's
+**Run flow** button is unavailable until the flow is enabled. Execution is
 serialized per flow inside one Service instance; this is not a cross-process lock. Interval scheduling
 is in-memory and recalculated after restart rather than a durable calendar scheduler.
 
@@ -293,7 +295,7 @@ Pending batches block processing-definition edits, deletion, bulk deletion, work
 to the config/secret references used by their flow. Enable/category changes and unrelated configuration remain
 available. Avoid config or plugin-code changes during execution; this is not transactional snapshot isolation.
 
-**Pending batches / orchestration checkpoints**, on each dashboard card and existing-flow designer, refreshes
+**Pending batches / orchestration checkpoints**, on each flow card and existing-flow designer, refreshes
 safe counts, correlation, instance, update time and collecting/released status. The backing read-only endpoint
 is `GET /api/flows/{flowId}/checkpoints`; it excludes bodies, filenames, receipt contents and source credentials.
 A released checkpoint blocks new fetches while delivery/source-notification retries resume existing work. If
@@ -1012,7 +1014,7 @@ translations, and no artifact is marked fully translated. **Every flow carrying 
 blocked from enable/run**, regardless of submitted statuses or diagnostic counts. Creating or updating
 an enabled import, enabling an import, or running it returns HTTP 409; scheduled processing, push
 registration, and processing retries are blocked too. Saved provenance cannot be replaced through a
-flow update (409); omitting it preserves the saved report. Dashboard and designer controls explain the
+flow update (409); omitting it preserves the saved report. Flows page and designer controls explain the
 block. There is no manual approval override.
 
 Apply a candidate to the canvas, review its transport paths/credentials, mappings, retry/compensation
@@ -1431,6 +1433,22 @@ without an ID token use the client ID and may receive a Keycloak logout confirma
 `https://localhost:7021/signout-callback-oidc` is registered as a valid post-logout redirect URI for
 `mulse-ui`. After changing authentication configuration, restart the UI and sign in afresh.
 
+**When the identity provider is unavailable.** Mulse separates "the sign-in service is down" from "your login or
+token is not valid":
+
+- The UI answers a sign-in that cannot reach the provider with a plain "Sign-in is temporarily unavailable" page
+  (HTTP 503 with `Retry-After`), not the generic error page. Nothing is changed and running flows are not affected.
+- Sign-out always ends the local Mulse session first. If the provider cannot be reached to end its own session,
+  you are still signed out of Mulse and sent to the home page.
+- The Service answers a bearer token it cannot check because the provider's signing keys are unreachable with
+  HTTP 503, `Retry-After: 5` and a problem body, instead of a misleading 401 `invalid_token`. A request with no token
+  is still 401. Once the keys have been fetched they are cached, so a short outage does not affect callers.
+- The UI's own service-to-service token is cached. If a refresh fails while the cached token is still valid it keeps
+  being used; otherwise API calls report "The sign-in service (identity provider) could not be reached" and the UI
+  does not retry for 10 seconds. A rejected client secret is reported separately and names the settings to check
+  (`MulseApi:ClientId`, `MulseApi:ClientSecret`) without echoing the secret.
+- Calls to the provider time out after 15 seconds.
+
 The `/api/inbound/{route}` endpoint intentionally remains anonymous for compatibility with existing senders.
 It is not protected by the administrator login, and an IP allowlist is not yet implemented. Until inbound
 authentication and network restrictions are added, expose that route only behind a firewall or trusted
@@ -1468,7 +1486,7 @@ a durable HTTP/flow-link inbox and a delivery intent/outcome journal. Provider-s
 #### Execution and message history
 
 Open **Workspace > History** to inspect retained executions, stage events, inbox messages and delivery
-outcomes. Each dashboard flow card and saved-flow designer also has a **History** button that opens
+outcomes. Each flow card and saved-flow designer also has a **History** button that opens
 `/history/{flowId}` with that flow's execution filter already applied. Inbox messages remain workspace-wide,
 as indicated on the history page. Payloads are fetched/decrypted only after **Inspect payload**; metadata/detail lists do not
 include message bodies. The management API remains authenticated, and history responses use `no-store`.
@@ -1707,7 +1725,7 @@ the **Service machine**, not the browser machine. Prefer explicit absolute paths
 or the database to refresh examples without backing up/reconciling pending work.
 
 A fresh workspace includes `sample-file-pipeline` and `sample-multi-source-join-pipeline`, both on-demand.
-For a basic smoke test, open the first sample in the dashboard, inspect its source/output paths, and
+For a basic smoke test, open the first sample on the Flows page, inspect its source/output paths, and
 choose **Run**. With the shipped data it reads `Service\SampleData\Inbox\customer-order.json`, parses JSON,
 adds an envelope, logs the output and writes to `Service\SampleData\Outbox`. Existing workspaces may not
 contain these seed flows. The sample leaves input in place, so running it again produces another output;
@@ -1738,9 +1756,11 @@ those separately before letting a flow modify source data.
 
 ## UI workspace
 
-The admin UI menu links to the dashboard and groups **Config values**, **Modules**, **Module Packages**,
+The admin UI menu links to the **Dashboard** (a summary of flow health and recent run outcomes, based on the last 200 runs in UTC, with a needs-attention list), **Flows**, and **History**, and groups **Config values**, **Modules**, **Module Packages**,
 and **Backup & Restore** under Configuration. Open the flow designer using create/configure links from
-the dashboard rather than a menu entry. `/modules` hosts the searchable module catalog with kind and source-package filters.
+the Flows page rather than a menu entry. **Configuration > AI assistance** is a single expandable menu group
+containing **Provider settings** and **My GitHub connection**; it opens automatically on either AI page.
+`/modules` hosts the searchable module catalog with kind and source-package filters.
 Each module links to its owning package and shows its source kind and assembly path. `/module-packages`
 lists the available modules in each loaded package, collapsed by default under **Show/hide modules**,
 with links back to a package-filtered catalog and load/unload/reload controls. Unloaded packages do not
@@ -1748,7 +1768,7 @@ execute code to enumerate module details; load one explicitly to inspect its mod
 
 ### Authoring a flow
 
-1. Choose **Create flow** from the dashboard, give it a stable ID and optional display name, and keep it
+1. Choose **Create flow** from the dashboard or Flows page, give it a stable ID and optional display name, and keep it
    disabled while authoring. IDs are technical references; names are for people.
 2. Click or drag **Source** for a linked fetch/parse pair, or add fetch/parse nodes separately. Choose
    modules and configure real input locations. Click an output handle then an input handle, or drag
@@ -1763,7 +1783,7 @@ execute code to enumerate module details; load one explicitly to inspect its mod
    one delivery route; "zero deliveries" in lifecycle semantics means none applicable at execution time.
 5. Choose **Create flow** or **Save flow** in the bottom bar. There is no automatic save. Resolve missing
    config/secret references on **Config values**, load dependencies, review settings, then enable and
-   manually run from the dashboard before switching to automatic triggers.
+   manually run from the Flows page before switching to automatic triggers.
 
 Sample analysis and canvas editing do not connect to live sources. **Run** does: even a logging-only
 output can still execute configured fetch/augment behavior or source cleanup. Use safe test data and
@@ -1799,14 +1819,14 @@ other node properties preserves the saved compensation.
 
 | Task | UI entry point |
 |---|---|
-| Flow CRUD, categories, copies, enable/disable and manual run | Dashboard cards, their title/configure links, and Flow overview. |
+| Flow CRUD, categories, copies, enable/disable and manual run | Flows page cards, their title/configure links, and Flow overview. |
 | Source graph, lookup dependencies, stage modules and settings | Toolbox, canvas handles and node Properties. |
 | Parsed/XML field maps and transforms | Mapping Designer; click/drag fields and connections, choose transforms and edit their arguments. |
 | Joins, decisions, metadata, durable batching/state and renderer dispatch | Specialized node Properties editors and descriptor-driven settings. |
 | Ordered renderer pipelines and outbound ODX adapters | Ordered renderer pipeline / Durable ODX program Properties: stage add/remove/reorder, named send selection, module settings and response capture. |
 | Native synchronous sequences, branches and bounded loops | Native control flow Properties: nested node editor, condition builder, module selection/settings and iteration limits. |
 | Flow/step retry and best-effort delivery compensation | Flow overview and node Properties. |
-| Checkpoint inspection and confirmed early batch release | Dashboard > Pending batches / orchestration checkpoints. |
+| Checkpoint inspection and confirmed early batch release | Flows page > Pending batches / orchestration checkpoints. |
 | Config/secrets, encryption, module catalog and hot reload | Configuration pages; refresh modules in an open Designer afterward. |
 | Encrypted backup, restore preview and confirmed bulk deletion | Backup & Restore. |
 
@@ -1912,7 +1932,7 @@ flow list shows the ID as well. Names survive duplication, enable/disable, categ
 Search flows by name, ID, category, module, or source-node ID. Combine saved user-defined categories with
 status, trigger, module, and unresolved-configuration filters, sort by ID, and browse ten flows per page.
 Use **Categorize** to assign or clear a category; categories are saved in runtime state and retained
-when enabling a flow or saving it in the designer. Each dashboard flow has a stronger boundary and
+when enabling a flow or saving it in the designer. Each flow on the Flows page has a stronger boundary and
 status stripe, a separate header/action area, metadata, labeled Augment/Render/Deliver tiles, and a
 checkpoint footer in both light and dark themes. Status remains written in text, not color alone.
 
@@ -1950,7 +1970,7 @@ Assembly paths refer to the API server, so move DLLs separately and update paths
 Restore requires typing `RESTORE WORKSPACE`.
 
 **Delete all flows** requires typing `DELETE ALL FLOWS`. It deletes all definitions, pending retries,
-and checkpoints, regardless of dashboard filters, while retaining config values and packages.
+and checkpoints, regardless of Flows page filters, while retaining config values and packages.
 Neither deletion nor restoration cancels in-progress runs or reverses completed deliveries; stop
 running workloads first when replacing a workspace. These controls manage the current workspace;
 multiple isolated workspaces are not yet implemented.
@@ -1986,6 +2006,30 @@ its DLL changes. Built-in packages cannot be unloaded or replaced.
 
 API clients can `PATCH /api/module-packages/{packageId}/enabled` with `{ "enabled": true }`, or
 `{ "enabled": false, "confirmation": "UNLOAD PACKAGE" }` to unload.
+
+### Edit history in the flow designer
+
+The Flow Designer keeps an edit history for everything you change on the page, including the nested
+editors (native flow steps, XML and parsed-data mappings, render pipelines, ODX send settings, join
+editors, node positions, connections and AI-applied proposals).
+
+- **Undo / Redo** in the top bar step through the history. **Ctrl/Cmd+Z** undoes and **Ctrl+Y** or
+  **Ctrl/Cmd+Shift+Z** redoes. The shortcuts are ignored while the cursor is in a text box, select or
+  editable field, so normal text editing keeps the browser's own undo.
+- **Reset** returns the draft to the state it had when the designer loaded (or was last saved) and is
+  itself undoable, so you can bring your changes back with Undo.
+- **Reload** (existing flows only) discards the draft and the history and loads the saved flow from
+  the server. When there are unsaved changes it asks for confirmation inline. If the server cannot be
+  reached the draft is kept. Reload re-runs the automatic layout, so manual positions are lost.
+- The **Unsaved changes** pill shows while the draft differs from the last saved state. Saving moves
+  that baseline but keeps the undo history.
+- Rapid typing in the same field within one second is coalesced into a single step. The history keeps
+  at most 100 steps and roughly 50 million characters of snapshots; the oldest steps are dropped first.
+- Restoring a step never saves and never enables a flow. Imported BizTalk flows stay disabled
+  until you enable them deliberately, and the existing save guard still applies.
+- The viewport, selection, open panels, sample data and warnings are not part of the history. Edits
+  inside nested editors are captured when their change or click event completes.
+- History replaces the single-step undo of AI proposals; applying a proposal is one history step.
 
 ### Appearance and designer panels
 
@@ -2057,6 +2101,285 @@ Connected nodes remain; fetch/parse references are detached, and incomplete sour
 repaired before saving. Use the Properties panel's **Remove route** or **Remove source (with its fetches)**
 when you intentionally want grouped removal. Deletions affect the draft until you **Save flow**.
 
+## Pre-enable flow review
+
+On the **Flows** page every flow card has a **Review** button, and clicking **Enable** on a disabled flow
+shows the same review first. The review applies fixed rules to the stored flow (no AI provider is needed,
+and nothing is sent anywhere) and lists findings as **Blockers**, **Warnings** and **Notes**:
+
+- Blockers: the flow was imported and has not been reviewed, a module it uses is not installed, or it refers
+  to a config value or secret that has no stored value.
+- Warnings: a password-like setting typed in plain text, a placeholder left in a setting, a source that is also a
+  destination, a delivery with no retry, a flow with no delivery, and native control-flow steps that need a person's check.
+- Notes: unlimited retry and a source that is never cleaned up.
+
+Each finding names where to look and how to fix it. Findings carry names and counts only, never setting values.
+The review also lists what it did **not** check (for example whether the mappings do what the business needs).
+A clean review enables the flow straight away; with findings you choose **Enable anyway** or **Cancel**, and
+blockers remove the enable choice. If the review cannot be loaded the panel says so, nothing was checked,
+and you decide. The review is advisory: it never enables a flow by itself, and imported flows still fail closed.
+The API is `GET /api/assist/review/{flowId}`.
+
+## Change summary on save
+
+After you save an existing flow in the Designer, a collapsed "What changed in this save" note lists the differences
+from the previously saved version in plain words: flow name, enabled state, trigger, retry, and for each step what
+was added, removed, renamed or reconfigured. It is built in code from the designer's own history, with no AI and no
+extra prompt. Setting values are never listed, only which settings were added, removed or changed. Moving nodes on the
+canvas is ignored. Risky changes (enabling the flow, switching to an automatic trigger, a new delivery step, removing
+a retry, confirmation or undo step, changing a step's module) open the note with a short "Worth a second look" list.
+The note disappears on your next edit. It is advisory only and never blocks a save.
+
+## Blocker triage for imported flows
+
+When some flows were imported from another system, the Flows page shows **See what blocks them**. It groups the importer's findings across all imported flows by cause and ranks the groups by how many flows each touches. Each group says what it means and what to do, is tagged as needing **information from the source system**, a **decision**, a **stub or formula**, or a **module that does not exist yet**, and shows how many flows it would unblock on its own (flows where it is the only blocker). The headline names the single step that unblocks the most flows.
+
+It needs no AI provider and changes nothing. It uses only finding codes and counts, never messages, paths or values, and clearing a group does not make a flow correct: imported flows still have to be rebuilt with native steps and saved before they can run. The API is `GET /api/assist/triage`.
+
+## Map review for imported flows
+
+On the Flows page, an imported flow that has maps shows **Check maps**. It opens a checklist for each map the import recorded, maps with blockers first, and within a map blockers, then warnings, then notes:
+
+- **Not read** (blocker): the map could not be opened or its format was not recognised, so nothing is known about it.
+- **Functoid links** (blocker): links that pass through functoids that were not translated, with the functoid type ids and how often each is used. A map with functoids but no such links gets a warning.
+- **Scripts** (blocker): how many script blocks, in which language, and which BizTalk API names they mention. The script text is never copied or shown.
+- **Schemas** (warnings): a source or target schema that was not found or matches more than one file, and a map whose source and target are the same.
+- **No links** (warning), and notes for maps where most links need rework or where direct links and constants can be carried over by a starter transform.
+
+It needs no AI provider and changes nothing. It shows map names, counts, functoid type ids and API names only, never paths, script text or hashes. Functoid type ids are not translated to names, and a map with nothing to report is not shown to be correct: compare its output with output captured from the real system. The API is `GET /api/assist/map-review/{flowId}`.
+
+## Flow runbook
+
+On the Flows page, **Runbook** opens a quiet panel for one flow. Type a purpose, a contact and any notes (only you know these), then **Generate runbook**. Mulse writes the rest from the stored definition: overview and schedule, inputs, processing (including native steps), outputs, dependencies (modules, and the config values and secrets the flow refers to, with whether each has a stored value), failure behavior (retry per step, and whether a retry could send twice), and the current pre-enable review counts. The result is shown as Markdown you can select and copy into your own documentation.
+
+It needs no AI provider and saves nothing. It lists names, module ids and counts only, never setting values, config values or secrets. It describes what the definition says, not that the flow is correct. The API is `POST /api/assist/runbook/{flowId}` with an optional `{ purpose, contact, notes }` body.
+
+## Config values check
+
+On the Config values page, **Check for problems** looks across all saved flows and the stored values and lists what it finds, blockers first:
+
+- **Missing** (blocker): a flow refers to a name that has no stored value. Up to three similar stored names are suggested (same name apart from case or separators, or a near typo), preferring ones nothing uses.
+- **Empty value**: a stored value is blank (a warning when a flow uses it).
+- **Similar names**: stored names that differ only by case or separators.
+- **Same value**: different names hold identical values. The value is never shown.
+- **Unused**: stored but not referenced by any saved flow.
+
+It needs no AI provider and changes nothing. It shows names, flow ids and counts only, never config values or secrets. Unused is advisory: a value may be used by something outside saved flows. The API is `GET /api/assist/config-review`.
+
+## Settings checks while editing
+
+Module setting fields (in the flow editors and the designer) show a short, quiet note under a value when it is probably a mistake. The notes appear as you type, before the flow is saved, and never block typing or saving:
+
+- **A credential typed in as plain text.** A setting that holds a password, token, key or connection string (a password-type setting, or a key such as `password`, `apiKey` or `connectionString`; keys such as `tokenUrl` or `passwordFile` are not flagged) is saved and exported with the flow. **Move to a stored secret...** suggests a name, stores the value on the Config values page and replaces the setting with `{{secret:name}}`. It never overwrites an existing stored value: the stored names are read again first, and a name that is already used is refused.
+- **A placeholder that was never filled in** (`TODO`, `CHANGEME`, `<value>`).
+- **An incomplete reference** such as `{{secret:abc`, which would be used as plain text.
+
+It needs no AI provider and makes no calls until you choose to move a value. The notes never repeat the value. If the value cannot be stored, the setting is left unchanged and you are pointed to the Config values page. The same credential and placeholder rules are applied again by the pre-enable review for saved flows. Not checked yet: path style, match patterns and retry rules.
+
+## Working without AI
+
+AI assistance is optional and off by default. With nothing set up, importing, editing, saving, reviewing, running
+and enabling flows all work, as do the glossary, flow explanations, run explanations, failure patterns, digest and
+compare results: they are built without a model. Surfaces that can use a model show a short "AI is not set up"
+hint (or an inert preview) and never send anything. If the saved AI settings file cannot be read (for example after
+moving machines), AI turns itself off, the AI page shows a one-line notice, and saving new settings there replaces
+the unreadable file. Nothing else is affected.
+
+## AI flow authoring
+
+The Designer's **AI assistant** uses Microsoft's experimental native Blazor AI components (`ChatPage` and
+`UIAgent`) with a Service-side model provider. No React frontend or separate agent server is required.
+Assistance is disabled by default and is not part of flow execution or recovery.
+
+1. Open **Configuration > AI assistance**. Select **OpenAI**, **OpenAI-compatible / local Ollama**, or
+   **GitHub Copilot** (setup below). Enter the model and backend credential; OpenAI-compatible providers also
+   accept an API base endpoint. A blank replacement key/token preserves
+   the saved key only for the same provider/endpoint; changing either requires its credential again.
+   **Clear saved credential** explicitly removes it. Save, then **Test saved connection**.
+   HTTPS is required except loopback HTTP in development. Ollama commonly uses `http://localhost:11434/v1`.
+2. Open or create a flow, enter its ID, then open **AI assistant**. Starting the assistant explicitly opts
+   into sending your prompt, recent conversation and a redacted snapshot of the **current unsaved draft**
+   to the configured provider. No request is sent merely by opening the panel.
+3. Describe a flow or ask for an explanation/change. The backend supplies loaded module descriptions and
+   validates proposals without invoking modules, fetching data, resolving stored secrets or executing flows.
+4. Review the proposed fields and approve **Apply to canvas (do not save)**. The resulting draft is disabled
+   with Run on startup cleared. Inspect settings in Properties before using the ordinary **Save flow** action.
+   Enabling/running remains a separate operator action. Saving an edited existing flow disabled pauses future
+   scheduling for that flow; applying to the canvas alone does not affect the running Service.
+5. **Undo AI proposal** restores the prior unsaved definition until you save or make further changes.
+   Proposals made against an older draft are rejected instead of overwriting intervening edits.
+
+Ordinary options such as filename wildcard patterns (`searchPattern`/`filePattern`) and bounded numeric
+settle/delay/timeout/count settings may be shared, including legacy modules that declare those numbers as text.
+Reference placeholders and module-declared boolean/select/small numeric options may also be shared. Paths and
+endpoints are hidden by default. Before starting a conversation, you may select **Include environment-specific
+settings (paths and endpoints)**; the choice is fixed for that conversation and resets off when closed/reopened.
+Credential/password fields, connection strings, unknown free text, and URLs with user credentials, query strings
+or fragments remain withheld even with that option. Secret/config references are never resolved for the model.
+This conservative classification is not a guarantee of detecting secrets placed in incorrectly named ordinary
+settings; use secret references, not embedded credentials. Opted-in values may appear in replies and be retained
+by the provider; starting a fresh conversation cannot retract previously sent information.
+Proposed setting values are hidden in the change summary;
+inspect them after applying, before saving. Do not paste
+credentials, private code, personal data or customer payloads into chat. Sample uploads, message histories and
+other customers' flows are not automatically attached. Categories are organizational, not isolation boundaries.
+Provider data-retention policies still apply. Conversations live only in the open assistant session and are
+not stored in execution history; closing it or navigating to another flow starts a new conversation.
+
+#### Sample-based connection assistance (initial JSON support)
+
+Before starting general chat, choose **AI assistant > Assist a connection with sample data** in the designer.
+Select a parsed source and renderer. This initial version requires one parsed source, one `json-render` route,
+no existing augments and no dependent fetches. It adds one source-filtered mapping augment to the ordered
+chain; it does not create an arbitrary per-edge branch. Other pairs require the manual mapping editor for now.
+
+Add up to eight named scenarios. Paste parsed JSON input (an object or array of objects), not raw Excel/XML,
+and expected mapping output (an array of objects passed to the JSON renderer). Select **Analyze samples locally
+and review disclosure**. The Mulse Service combines observed field types, optional/null fields and array shapes
+without contacting a provider. Conflicting types, all-null fields and arrays with no observed item shape require
+richer or normalized samples. Inferred structure is not a production schema guarantee.
+
+Review the exact shape/example context, then explicitly request a proposal. Sample values are excluded unless
+you check the separate input/output sharing choices for that scenario; field names/types and your instructions
+are shared. Draft settings, scenario names, histories and resolved secrets are not attached. Samples are held
+in the open panel/request memory, not persisted in flow history. Sharing controls do not automatically sanitize
+values or detect secrets; provider retention policies apply to approved information.
+
+Supported proposals copy fields or build nested object/repeating-array templates. Constants, conversion transforms,
+conditions and custom plugin generation are not implemented here yet. Every scenario runs through the pure mapping
+engine, without invoking parsers, plugins, fetches or deliveries. JSON differences or failures block Apply; previews
+check mapping output, not complete rendered files. Review and apply only after all scenarios match; the resulting
+draft stays disabled and unsaved, and **Undo AI proposal** restores the prior draft unless newer edits intervened.
+Editing samples invalidates disclosure review, and draft changes invalidate generation/application.
+
+Limits: 32,768 characters per input/output; 16 JSON nesting levels; 20,000 values across scenarios; 256 inferred
+paths per side; 150,000 characters of provider disclosure; 131,072 characters per returned preview. Raw-file
+parsing, schema-only evidence, other pairs and downloadable C# stubs remain in the
+[connection assistance plan](docs/connection-assistance-plan.md).
+
+OpenAI/OpenAI-compatible credentials are write-only through the authoring settings API and protected on the Service.
+GitHub Copilot uses separate per-user UI connections described below. These credentials are separate
+from ordinary Config Values and workspace backups; preserve the Service's data-protection keys and authoring
+settings when moving the installation. UI overrides and their key ring default to `Service\Data\ai-authoring`
+(`AiAuthoring:SettingsDirectory` changes this directory). Restrict filesystem access: the key ring is sensitive.
+Windows additionally uses DPAPI, so moving to another account/machine may require re-entering the credential;
+elsewhere, possession of both settings and keys permits decryption. Deployment defaults use the `AiAuthoring`
+section's `Enabled`, `Provider`, `Model`, `Endpoint`, `MaxOutputTokens` and `ApiKey` settings (environment variables
+such as `AiAuthoring__ApiKey` or user secrets). Do not put keys in checked-in configuration or frontend assets.
+Model calls are bounded and cancelable. Mulse does not automatically retry authoring requests; OpenAI transport
+retries are disabled, while GitHub Copilot's internal authentication/network behavior is owned by its SDK runtime.
+Responses are displayed after validation, not as partially editable streamed model JSON. Invalid proposals
+remain unapplied and show validation errors. The assistant has no tool for saving/enabling/running flows,
+loading plugins, changing configuration values, migration approval, storage management or arbitrary code execution.
+Existing save-time validation and durable-work editing guards still apply.
+
+The preview UI dependency is pinned because its API is experimental. `Microsoft.Extensions.AI` provides the
+model abstraction; this first version uses a bounded proposal exchange, not autonomous multi-agent execution,
+AG-UI remote-agent hosting or persistent/resumable agent sessions. No live model is needed for the automated tests.
+
+### GitHub Copilot provider
+
+Mulse uses the official `GitHub.Copilot.SDK` (pinned to 1.0.33), not an OpenAI endpoint or an extracted
+Visual Studio credential. To use your Copilot access:
+
+**Default: device-code sign-in for private installations.** UI hostnames can differ freely: no public inbound
+access, per-installation callback registration, client secret or central authentication broker is needed.
+The UI makes outbound HTTPS requests to `github.com` and `api.github.com`; the Service needs outbound access
+for GitHub/Copilot model requests. The user's browser must reach GitHub and the private Mulse UI, for example
+through a VPN. Keep Mulse behind its normal authentication/network controls; do not expose it to enable Copilot.
+
+**Publisher setup (once for Mulse, not once per installation):** GitHub still requires a registered app identity.
+The Mulse publisher must register a GitHub OAuth App and enable **Device Flow**, then distribute its **public
+client ID** with Mulse. This build has no publisher registration/client ID bundled, so Connect remains unavailable
+until that ID is provided. Mulse cannot register the app automatically or borrow Visual Studio's/CLI's app ID.
+If GitHub's registration form requires homepage/callback fields, use publisher-controlled URLs; the device flow
+does not send a `redirect_uri` or invoke that callback. All installations can reuse the same publisher client ID;
+GitHub's app-level limits, organization approval and revocation also apply to that shared registration. A customer
+may optionally supply their own registration instead. See [GitHub device-flow documentation](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow).
+
+**Deployment configuration:**
+
+1. Set **the UI's** `GitHubCopilot:ClientId` (environment variable `GitHubCopilot__ClientId`) to the publisher's
+   public client ID, or include it in the packaged UI configuration. Leave `GitHubCopilot:SignInMode` at its
+   default `Device`; no `ClientSecret` is needed or sent. Restart the UI after changing sign-in configuration.
+2. Connect your GitHub account as described below. In **Configuration > AI assistance**, select **GitHub Copilot**,
+   click **Load available models**, choose a model, enable assistance and save. Loading works before saving
+   the provider or choosing a model, including while assistance is disabled. These provider/model settings
+   are shared; credentials are not. Deployment
+   equivalents are `AiAuthoring__Provider=GitHubCopilot` and `AiAuthoring__Model=<available-model-id>` on the
+   Service, with `AiAuthoring__Enabled=true`. Leave `AiAuthoring__Endpoint` unset.
+3. Keep HTTPS for browser access and `MulseApi:BaseUrl` between UI and Service (HTTP is allowed only for
+   loopback Service addresses). Authoring transport redacts headers and does not follow redirects or
+   automatically retry. Device authorization also uses no-redirect, no-retry outbound transport.
+
+**Each user:** sign in to Mulse normally, open **Configuration > AI assistance > My GitHub connection**, choose **Connect GitHub**,
+open `https://github.com/login/device` and enter the displayed code. Authorize the app on GitHub and keep the
+Mulse account page open: it checks automatically, respecting GitHub's polling interval and `slow_down` responses.
+Only enter a code generated by your own sign-in; never approve codes supplied by someone else. The server-only
+device credential never reaches the browser; the displayed user code is short-lived. Pending attempts are held
+in UI process memory and do not survive a UI restart. Navigation stops page polling; return before expiry to
+resume if the attempt is still available, or Connect again. Canceling an in-flight poll also invalidates that
+attempt. Disconnect/reconnect fences late responses so they cannot restore an old connection.
+
+In **AI assistance**, **Load available models** queries the official SDK using only your connected account's
+credential and displays model names and exact IDs in a dropdown. It requests no chat completion, changes no
+settings and has no cross-user catalog cache. Models explicitly disabled by policy are omitted. Use **Refresh
+available models** after changes to your access; disconnected, expired, empty-catalog and network failures are
+shown explicitly. A saved model missing from your list remains marked as unavailable rather than being silently
+replaced. Your choice is shared Service configuration, so other users' accounts may have different access.
+OpenAI/OpenAI-compatible providers retain their manual model/deployment-name field.
+
+Save the selected model, then use **Test saved connection** and the Designer assistant. Testing makes a real model
+request and can consume that user's allowance. Personal GitHub accounts and accounts with organization-provided Copilot access are
+supported, subject to GitHub entitlement, organization approval, SSO and model policies. Authorizing the app does
+not itself provide Copilot access. The requested `read:user` scope identifies the account; Mulse does not request
+private repository access.
+
+**Optional callback OAuth:** retained only for deployments that explicitly set `GitHubCopilot__SignInMode=Callback`.
+Configure their own `GitHubCopilot__ClientId`, secret-store `GitHubCopilot__ClientSecret`, and registered callback
+`https://<UI-host>/signin-github-copilot`. Never commit the secret. The browser must reach that exact UI address;
+GitHub does not need inbound access to Mulse even in this mode, but each different callback hostname needs a
+matching app registration. Device mode registers no GitHub callback handler and ignores any old client secret.
+
+The GitHub connection is bound to the existing Mulse login's issuer and stable subject. GitHub authorization
+never replaces the Mulse login, and each authoring request uses only its requesting user's connection. No
+shared-account fallback is offered: old `AiAuthoring:ApiKey` values for Copilot are ignored, rejected on new
+writes and removed from stored overrides when Copilot settings are saved. Remove obsolete deployment secrets.
+Existing Visual Studio, GitHub CLI and Copilot CLI logins are not inherited. See the SDK's
+[OAuth guidance](https://github.com/github/copilot-sdk/blob/v1.0.33/docs/setup/github-oauth.md).
+
+Connections are encrypted with **the UI's ASP.NET Core data-protection keys**, stored under UI content-root
+`Data\github-copilot` (override with `GitHubCopilot:SettingsDirectory`) and excluded from workspace backups.
+Persist both these files and the UI's key ring across restarts/moves; restrict their filesystem access to the
+UI service account. Containers need persistent key storage too. This is separate from the Service's authoring
+key ring. Use one UI writer process; the file store does not coordinate writes between replicas.
+Tokens never enter browser storage, Mulse authentication cookies, settings responses or model prompts; they
+are forwarded only on authenticated server-to-server authoring requests. Keep this credential header
+(`X-Mulse-Copilot-Token`) out of reverse-proxy, tracing and custom HTTP logs as well.
+
+**Reconnect GitHub** replaces your connection; **Disconnect GitHub** deletes it locally and cancels pending
+sign-in attempts without affecting another Mulse user. It blocks subsequent requests, not requests already
+sent. To revoke access at GitHub too, remove the OAuth App in **GitHub Settings > Applications**. Expired or
+revoked tokens require reconnecting; automatic refresh-token rotation is not implemented. Corrupt/unreadable
+connections fail closed and can be removed with Disconnect before reconnecting.
+
+The SDK build targets download and checksum-verify their pinned native runtime, and copy it into build/publish
+output under `runtimes`. Deploy those files along with the Service; the host needs permission to launch child
+processes and write to its temporary directory, plus network access to GitHub/Copilot. A separate CLI install
+is not needed for the standard build. Offline builds can use the SDK's documented release-mirror/preinstalled
+runtime build settings; do not omit runtime assets when publishing. Unsupported host/container environments
+must be validated before deployment.
+
+Each request owns a separate SDK **Empty-mode** runtime with an empty tool allow-list, denied permissions,
+no repository/configuration discovery, no skills/MCP/custom agents and no cross-session store. The configured
+output-token limit is passed through the SDK's pinned experimental model-capability API. Mulse stops the owned
+runtime after completion or cancellation; canceling cannot undo provider charges already incurred. SDK session
+artifacts use isolated `mulse-copilot-<random-id>` directories under the Service account's OS temp directory and
+are deleted after runtime shutdown. A crash or cleanup failure can leave those directories behind; restrict
+access and remove orphaned directories only after confirming their runtime is no longer active. Failures are
+logged without prompts or credentials. Existing draft redaction, validation, explicit apply, disabled drafts
+and separate save/run safeguards are unchanged.
+
 ## API reference
 
 Use the Development-only `/openapi/v1.json` document for complete request/response schemas. API bodies
@@ -2070,6 +2393,7 @@ UI URL. Main surfaces:
 | Source recovery | `POST /api/flows/{flowId}/source-outcomes/retry` (no body; exhausted callback recovery only). |
 | Catalog/packages | `GET /api/modules`; `GET`/`POST /api/module-packages`; `GET`/`PUT`/`DELETE /api/module-packages/{packageId}`; `PATCH .../enabled`, `POST .../reload`. |
 | Sample design | `POST /api/flow-designer/analyze`, `POST /api/flow-designer/flows`. |
+| AI authoring | `GET`/`PUT /api/authoring/settings` (credential status only, key write-only); `POST /api/authoring/copilot/models` (current user's authenticated model catalog, no-store, array of `{id,name}`, no saved provider/model required); `POST /api/authoring/test`; `POST /api/authoring/chat` (current draft and bounded conversation, no flow mutation). |
 | BizTalk import | `POST /api/biztalk-import/analyze`, `POST /api/biztalk-import/flows`, `POST /api/biztalk-import/rules/preview`, and scaffolded-module download endpoints. |
 | Config values | `GET /api/config-values`, `GET /api/config-values/references`, `GET /api/config-values/usages`; `PUT`/`DELETE /api/config-values/{reference}`. |
 | Workspace | `GET`/`PUT /api/workspace/encryption`; `POST /api/workspace/backup`, `/api/workspace/restore/preview`, `/api/workspace/restore`, `/api/workspace/flows/delete-all`. |

@@ -14,7 +14,7 @@ public sealed class FlowWorkspaceRenderingTests
     [Fact]
     public async Task Dashboard_RendersFiltersAndAllFlowsWithoutPaginationOrModuleAdministration()
     {
-        var html = await RenderAsync<Home>();
+        var html = await RenderAsync<Mulse.Ui.Components.Pages.Flows>();
         Assert.Contains("Search flows", html);
         Assert.Contains("All categories", html);
         Assert.Contains("Uncategorized", html);
@@ -49,10 +49,27 @@ public sealed class FlowWorkspaceRenderingTests
         Assert.DoesNotContain("Reload package", html);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Dashboard_RunRequiresEnabledFlowAndAvailableDependencies(bool enabled, bool missingModules)
+    {
+        var html = await RenderAsync<Mulse.Ui.Components.Pages.Flows>(missingModules: missingModules, flowsEnabled: enabled);
+        var buttons = System.Text.RegularExpressions.Regex.Matches(html, "<button[^>]*>\\s*Run flow\\s*</button>");
+        Assert.Equal(12, buttons.Count);
+        foreach (System.Text.RegularExpressions.Match button in buttons)
+        {
+            Assert.Equal(!enabled || missingModules, System.Text.RegularExpressions.Regex.IsMatch(button.Value, @"\bdisabled\b"));
+            if (!enabled) Assert.Contains("Enable this flow before running it", button.Value);
+        }
+        Assert.Equal(!enabled, html.Contains("is-disabled", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task ImportedFlows_ShowReportsAndDisableEnableRunControls()
     {
-        var dashboard = await RenderAsync<Home>(migration: true);
+        var dashboard = await RenderAsync<Mulse.Ui.Components.Pages.Flows>(migration: true);
         Assert.Contains("verified translation support", dashboard);
         Assert.Contains("execution blocked", dashboard);
         Assert.Matches("<button[^>]*disabled[^>]*>\\s*Enable", dashboard);
@@ -242,7 +259,7 @@ public sealed class FlowWorkspaceRenderingTests
     [Fact]
     public async Task Dashboard_ShowsMissingDependenciesAndBlocksEnableAndRun()
     {
-        var html = await RenderAsync<Home>(missingModules: true);
+        var html = await RenderAsync<Mulse.Ui.Components.Pages.Flows>(missingModules: true);
         Assert.Contains("Unknown or unloaded modules", html);
         Assert.Contains("Fetch: missing-plugin", html);
         Assert.Contains("href=\"/module-packages\"", html);
@@ -553,9 +570,9 @@ public sealed class FlowWorkspaceRenderingTests
     }
 
     private static async Task<string> RenderAsync<TComponent>(bool missingModules = false, bool packages = false, string? flowId = null, bool migration = false,
-        string storageProvider = "Sqlite", bool storageFailure = false, string processingState = "Running", int unfinished = 9000) where TComponent : IComponent
+        string storageProvider = "Sqlite", bool storageFailure = false, string processingState = "Running", int unfinished = 9000, bool flowsEnabled = false) where TComponent : IComponent
     {
-        using var httpClient = new HttpClient(new WorkspaceHandler(missingModules, packages, migration, storageProvider, storageFailure, processingState, unfinished)) { BaseAddress = new Uri("http://localhost") };
+        using var httpClient = new HttpClient(new WorkspaceHandler(missingModules, packages, migration, storageProvider, storageFailure, processingState, unfinished, flowsEnabled)) { BaseAddress = new Uri("http://localhost") };
         await using var services = new ServiceCollection().AddLogging()
             .AddSingleton<NavigationManager>(new TestNavigationManager())
             .AddSingleton<Microsoft.JSInterop.IJSRuntime>(new StaticRenderJsRuntime())
@@ -585,7 +602,7 @@ public sealed class FlowWorkspaceRenderingTests
     }
 
     private sealed class WorkspaceHandler(bool missingModules, bool packages, bool migration = false,
-        string storageProvider = "Sqlite", bool storageFailure = false, string processingState = "Running", int unfinished = 9000) : HttpMessageHandler
+        string storageProvider = "Sqlite", bool storageFailure = false, string processingState = "Running", int unfinished = 9000, bool flowsEnabled = false) : HttpMessageHandler
     {
         private FlowMigrationReportViewModel? Report => migration ? new("BizTalk", @"C:\migration\Orders.btproj", "Orders", [], [], []) : null;
 
@@ -615,7 +632,7 @@ public sealed class FlowWorkspaceRenderingTests
                     [new("augment", new Dictionary<string, string>())],
                     [new(new("render", new Dictionary<string, string>()), [new(new("deliver", new Dictionary<string, string>()))])]),
                 "/api/flows" => Enumerable.Range(1, 12).Select(index => new FlowViewModel(
-                    $"flow-{index:00}", false, "OnDemand", null, false, ["input"], ["parsed"], ["file-fetch"], ["json-parse"], [], [], [], [], [], [], [], Category: "Sales", MissingModules: missingModules ? ["Fetch: missing-plugin"] : [], Name: $"Customer orders {index}", Migration: Report)).ToArray(),
+                    $"flow-{index:00}", flowsEnabled, "OnDemand", null, false, ["input"], ["parsed"], ["file-fetch"], ["json-parse"], [], [], [], [], [], [], [], Category: "Sales", MissingModules: missingModules ? ["Fetch: missing-plugin"] : [], Name: $"Customer orders {index}", Migration: Report)).ToArray(),
                 "/api/modules" => new[]
                 {
                     new ModuleViewModel("file-fetch", "File fetch", "Fetch", "Reads files", [], [], [], [], "builtin.core", "BuiltIn", "C:\\runtime\\Mulse.Modules.dll"),

@@ -1,0 +1,116 @@
+@using Microsoft.AspNetCore.Components.AI
+@implements IDisposable
+@inject IMulseApiClient ApiClient
+
+<section class="flow-assistant" aria-labelledby="flow-assistant-heading">
+    <header class="assistant-header">
+        <div><h2 id="flow-assistant-heading">Flow authoring assistant</h2><p>Describe a change, review the proposal, then apply it to the unsaved canvas.</p></div>
+        <button type="button" class="secondary-button" @onclick="Close">Close assistant</button>
+    </header>
+    <StatusBanner Error="@_error" />
+    @if (_connectionMode)
+    {
+        <button type="button" class="secondary-button" @onclick="() => _connectionMode = false">Back to general assistance (discard samples)</button>
+        <ConnectionAssistant CaptureDraft="CaptureDraft" Apply="Apply" />
+    }
+    else if (_agent is null)
+    {
+        <button type="button" class="secondary-button" disabled="@_starting" @onclick="() => _connectionMode = true">Assist a connection with sample data</button>
+        <p>Your prompt, recent conversation and redacted draft will be sent to the configured AI provider. Ordinary options such as file patterns and delays may be shared. Credentials, unknown free-text settings and resolved secrets stay hidden. Do not paste credentials, private code or customer payloads into chat.</p>
+        <label class="checkbox-label"><input type="checkbox" @bind="_includeEnvironmentSettings" disabled="@_starting" /> Include environment-specific settings (paths and endpoints) for this conversation</label>
+        <p>This is off by default. Credential fields, connection strings and URLs containing credentials, queries or fragments remain hidden even when enabled. Shared values may appear in replies and remain with the provider; closing and reopening starts a new conversation with sharing off.</p>
+        <p>The assistant cannot save, enable or execute flows, access stored secret values, load modules, or change storage. <a href="/ai-assistance">Configure AI assistance</a>.</p>
+        <button class="run-button" type="button" @onclick="StartAsync" disabled="@_starting">@(_starting ? "Checking provider..." : "Start assistant and share redacted draft")</button>
+    }
+    else
+    {
+        <p>Environment-specific settings: @(_includeEnvironmentSettings ? "included for this conversation (credentials remain hidden)" : "hidden"). Close and reopen the assistant to change this choice; previously shared values cannot be recalled.</p>
+        <ChatPage Agent="@_agent" Placeholder="Describe the flow or change you want...">
+            <WelcomeContent><p>Try: explain this flow; add an HTTP delivery using a configuration reference; or suggest a JSON mapping.</p></WelcomeContent>
+        </ChatPage>
+        @if (_validationErrors.Count > 0)
+        {
+            <div class="status-banner error" role="alert"><strong>Proposal could not be validated.</strong><ul>@foreach (var error in _validationErrors) { <li>@error</li> }</ul></div>
+        }
+        @if (_proposal is not null)
+        {
+            <section class="proposal-review" aria-label="Review proposed flow changes">
+                <h3>Proposed changes</h3>
+                <p>No changes have been applied. Applying replaces the current draft with the reviewed proposal, disables it and leaves it unsaved. Setting values stay hidden here; inspect them in Properties before saving.</p>
+                <div class="proposal-table"><table><thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead><tbody>
+                    @foreach (var change in _changes)
+                    {
+                        <tr><td><code>@change.Path</code></td><td>@change.Before</td><td>@change.After</td></tr>
+                    }
+                </tbody></table></div>
+                <label class="checkbox-label"><input type="checkbox" @bind="_approved" /> I reviewed these changes and want to replace the unsaved draft.</label>
+                <div class="action-row">
+                    <button class="run-button" type="button" disabled="@(!_approved || _applying || _validationErrors.Count > 0)" @onclick="ApplyAsync">Apply to canvas (do not save)</button>
+                    <button class="secondary-button" type="button" @onclick="Discard">Discard proposal</button>
+                </div>
+            </section>
+        }
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public Func<Task<string>> CaptureDraft { get; set; } = default!;
+    [Parameter] public EventCallback<FlowAuthoringProposal> Apply { get; set; }
+    [Parameter] public EventCallback Close { get; set; }
+    private UIAgent? _agent;
+    private AuthoringChatClient? _client;
+    private FlowAuthoringProposal? _proposal;
+    private IReadOnlyList<string> _validationErrors = [];
+    private IReadOnlyList<AuthoringChange> _changes = [];
+    private string? _error;
+    private bool _starting, _approved, _applying, _disposed, _includeEnvironmentSettings, _connectionMode;
+    private readonly CancellationTokenSource _lifetime = new();
+
+    private async Task StartAsync()
+    {
+        if (_starting || _disposed || _agent is not null) return;
+        _starting = true; _error = null;
+        var cancellationToken = _lifetime.Token;
+        try
+        {
+            var settings = await ApiClient.GetAiAuthoringSettingsAsync(cancellationToken);
+            if (!settings.Enabled) throw new InvalidOperationException("AI assistance is disabled. Configure and enable it under Configuration > AI assistance.");
+            _ = await CaptureDraft();
+            cancellationToken.ThrowIfCancellationRequested();
+            _client = new AuthoringChatClient(ApiClient, CaptureDraft, ReceiveProposalAsync, _includeEnvironmentSettings);
+            _agent = new UIAgent(_client);
+        }
+        catch (OperationCanceledException) when (_disposed) { }
+        catch (Exception exception) { _error = exception.Message; }
+        finally { _starting = false; }
+    }
+
+    private Task ReceiveProposalAsync(FlowAuthoringProposal? proposal, IReadOnlyList<string> errors) => InvokeAsync(() =>
+    {
+        if (_disposed) return;
+        _proposal = proposal; _validationErrors = errors; _approved = false;
+        _changes = proposal is null ? [] : AuthoringProposalReview.Compare(proposal.BaseDraftJson, proposal.ProposalJson);
+        StateHasChanged();
+    });
+
+    private async Task ApplyAsync()
+    {
+        if (!_approved || _proposal is null || _validationErrors.Count > 0 || _applying || _disposed) return;
+        _error = null; _applying = true;
+        try { await Apply.InvokeAsync(_proposal); Discard(); }
+        catch (Exception exception) { _error = exception.Message; }
+        finally { _applying = false; }
+    }
+
+    private void Discard() { _proposal = null; _approved = false; _changes = []; }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+        _agent?.Dispose();
+        _client?.Dispose();
+    }
+}

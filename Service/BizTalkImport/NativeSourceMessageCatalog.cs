@@ -14,6 +14,7 @@ internal sealed class NativeSourceMessageCatalog
     private static readonly XNamespace BizTalk = "http://schemas.microsoft.com/BizTalk/2003";
     private readonly Dictionary<string, NativeMessageFact> _members = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _failures = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _writeOnly = new(StringComparer.Ordinal);
 
     public static NativeSourceMessageCatalog Read(IEnumerable<OdxNode> declarations, BizTalkSchemaSourceCatalog schemas)
     {
@@ -71,6 +72,7 @@ internal sealed class NativeSourceMessageCatalog
                             }
                         }
                         members.Add(member, fact);
+                        if (IsInteger(compiledRoot, fact)) result._writeOnly.Add(member);
                     }
                     catch (Exception exception) when (exception is ArgumentException or NotSupportedException or InvalidOperationException)
                     {
@@ -86,8 +88,10 @@ internal sealed class NativeSourceMessageCatalog
         return result;
     }
 
-    public NativeMessageFact Resolve(string member)
+    public NativeMessageFact Resolve(string member, bool forWrite = false)
     {
+        if (!forWrite && _writeOnly.Contains(member))
+            throw new NotSupportedException($"Source member '{member}' is an xs:integer field, which BizTalk exposes as System.Decimal; reading it as a native Int32 is not translated (assigning an Int32 to it is).");
         if (_members.TryGetValue(member, out var fact)) return new()
         {
             Kind = fact.Kind, MessageName = fact.MessageName,
@@ -95,7 +99,7 @@ internal sealed class NativeSourceMessageCatalog
         };
         var message = member.Split('.')[0];
         throw new NotSupportedException(_failures.GetValueOrDefault(member, _failures.GetValueOrDefault(message,
-            "Source member has no exact distinguished schema-field declaration; ordinary XML members and context properties are not inferred.")));
+            $"Source member '{member}' has no exact distinguished schema-field declaration; ordinary XML members and context properties are not inferred.")));
     }
 
     public void ValidatePolicyMessage(string message, XmlRulePolicy policy)
@@ -110,14 +114,24 @@ internal sealed class NativeSourceMessageCatalog
         }
     }
 
+    private static bool IsInteger(XmlSchemaElement root, NativeMessageFact fact)
+    {
+        var element = root;
+        foreach (var step in fact.Steps.Skip(1))
+            element = (element.ElementSchemaType as XmlSchemaComplexType)?.ContentTypeParticle is XmlSchemaGroupBase group
+                ? group.Items.Cast<XmlSchemaElement>().Single(child => child.QualifiedName.Name == step.Name && child.QualifiedName.Namespace == step.Namespace) : element;
+        return element.SchemaTypeName is { Name: "integer" } name && name.Namespace == Xs.NamespaceName;
+    }
+
     private static NativeMessageFactKind ScalarKind(XmlSchemaElement element)
     {
         if (element.SchemaTypeName.Namespace != Xs.NamespaceName || element.ElementSchemaType is not XmlSchemaSimpleType)
             throw new NotSupportedException("Distinguished scalar type requires explicit XML Schema built-in identity.");
+        // xs:integer is accepted for assignment of an Int32 only; the member is also recorded as write-only.
         return element.SchemaTypeName.Name switch
         {
-            "string" => NativeMessageFactKind.XmlString, "int" => NativeMessageFactKind.XmlInt32, "boolean" => NativeMessageFactKind.XmlBoolean,
-            _ => throw new NotSupportedException("Distinguished scalar supports only XSD string, int and boolean; no implicit datatype conversion.")
+            "string" => NativeMessageFactKind.XmlString, "int" or "integer" => NativeMessageFactKind.XmlInt32, "boolean" => NativeMessageFactKind.XmlBoolean,
+            _ => throw new NotSupportedException("Distinguished scalar supports only XSD string, int, integer (write-only) and boolean; no implicit datatype conversion.")
         };
     }
 }

@@ -46,6 +46,18 @@ public static class DesignerEndpoints
             .Produces<NativeFlowTestResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest);
 
+        app.MapPost("/api/flow-designer/native/compare", async (NativeFlowCompareRequest request, CancellationToken cancellationToken) =>
+            {
+                var response = await Service.Execution.NativeFlowCompareRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+                return TypedResults.Ok(response);
+            })
+            .WithName("CompareNativeFlowWithRealOutput")
+            .WithSummary("Compare supplied real output with Mulse's output and classify each difference")
+            .WithDescription("Deterministic and local: no AI is called and no real module is invoked. A match means the supplied samples match, not that the flows are equivalent. Samples may contain real data and are not stored.")
+            .WithTags("Designer")
+            .Produces<NativeFlowCompareResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
+
         app.MapPost("/api/flow-designer/analyze", async Task<Ok<FlowDesignResponse>> (AnalyzeFlowDesignRequest request, IFlowDesignService flowDesignService, CancellationToken cancellationToken) =>
             {
                 var response = await flowDesignService.AnalyzeAsync(request, cancellationToken).ConfigureAwait(false);

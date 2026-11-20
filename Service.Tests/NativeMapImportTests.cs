@@ -36,6 +36,34 @@ public sealed class NativeMapImportTests
         .ToString().Replace("</mapsource>", extra + "</mapsource>", StringComparison.Ordinal);
 
     [Fact]
+    public void WrappedPartRecordLinkedToTheTargetRoot_IsTheSameAsARootToRootLinkOnlyWhenItIsRequiredAndNotRepeating()
+    {
+        string Source(string occurs) => $"""
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:source" elementFormDefault="qualified">
+              <xs:element name="Wrapper"><xs:complexType><xs:sequence>
+                <xs:element name="Part" {occurs}><xs:complexType><xs:sequence><xs:element name="Id" type="xs:string" /></xs:sequence></xs:complexType></xs:element>
+              </xs:sequence></xs:complexType></xs:element>
+            </xs:schema>
+            """;
+        const string target = """
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:target">
+              <xs:element name="Result"><xs:complexType><xs:sequence><xs:element name="Number" type="xs:string" /></xs:sequence></xs:complexType></xs:element>
+            </xs:schema>
+            """;
+        var map = new XElement("mapsource", new XElement("SrcTree", new XAttribute("RootNode_Name", "Wrapper")), new XElement("TrgTree", new XAttribute("RootNode_Name", "Result")),
+            new XElement("Pages", new XElement("Page", new XElement("Links",
+                new XElement("Link", new XAttribute("LinkFrom", Path("Wrapper/Part")), new XAttribute("LinkTo", Path("Result"))),
+                new XElement("Link", new XAttribute("LinkFrom", Path("Wrapper/Part/Id")), new XAttribute("LinkTo", Path("Result/Number"))))))).ToString();
+
+        var conversion = BizTalkNativeMapConverter.Convert(map, [Source("")], [target]);
+        var output = XDocument.Parse(new XmlMappingEngine(conversion.MappingJson).Transform("<Wrapper xmlns='urn:source'><Part><Id>42</Id></Part></Wrapper>"));
+        Assert.Equal("42", output.Root!.Element("Number")!.Value);
+
+        Assert.Throws<ArgumentException>(() => BizTalkNativeMapConverter.Convert(map, [Source("minOccurs=\"0\"")], [target]));
+        Assert.Throws<ArgumentException>(() => BizTalkNativeMapConverter.Convert(map, [Source("maxOccurs=\"unbounded\"")], [target]));
+    }
+
+    [Fact]
     public void SchemaTrees_ResolveExpandedNamesAndInheritedCardinality()
     {
         var tree = XmlSchemaInspector.Analyze([SourceXsd]);

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Mulse.ServiceDefaults.Security;
 using Service;
+using Service.Ai;
 using Service.Endpoints;
 using Service.Middleware;
 
@@ -24,17 +25,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.Authority = authority;
         options.Audience = apiAudience;
         options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        options.BackchannelTimeout = TimeSpan.FromSeconds(15);
         options.MapInboundClaims = false;
         options.TokenValidationParameters.NameClaimType = "preferred_username";
         options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
-        options.Events = new JwtBearerEvents
+        options.Events = JwtBearerProviderAvailability.Attach(new JwtBearerEvents
         {
             OnTokenValidated = context =>
             {
                 OidcRoleClaims.AddJsonArrayRoles(context.Principal, rolesClaim, rolesProperty);
                 return Task.CompletedTask;
             }
-        };
+        });
     });
 builder.Services.AddAuthorization(options =>
 {
@@ -51,6 +53,9 @@ builder.Services.AddValidation();
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddMulsePlatform(builder.Configuration, builder.Environment.ContentRootPath);
+builder.Services.AddAiAuthoring(builder.Configuration, builder.Environment);
+builder.Services.AddComparisonScenarios(builder.Configuration, builder.Environment);
+builder.Services.AddAssist();
 
 var app = builder.Build();
 
@@ -69,6 +74,7 @@ app.MapModuleEndpoints();
 app.MapFlowEndpoints();
 app.MapWorkspaceEndpoints();
 app.MapDesignerEndpoints();
+app.MapComparisonScenarioEndpoints();
 app.MapBizTalkMigrationEndpoints();
 app.MapConfigValueEndpoints();
 app.MapEncryptionEndpoints();
@@ -76,6 +82,8 @@ app.MapStorageEndpoints();
 app.MapHistoryEndpoints();
 app.MapProcessingEndpoints();
 app.MapHttpInboundEndpoints();
+app.MapAiAuthoringEndpoints();
+app.MapAssistEndpoints();
 
 app.Run();
 

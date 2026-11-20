@@ -241,6 +241,7 @@ public sealed class XmlRulesApiUiTests
         public PipelineDefinition GetById(string id) => throw new NotSupportedException();
         public Task<PipelineDefinition> UpdateAsync(string id, PipelineDefinition pipeline, CancellationToken ct) => throw new NotSupportedException();
         public Task<PipelineDefinition> DuplicateAsync(string id, string newId, CancellationToken ct) => throw new NotSupportedException();
+        public Task<PipelineDefinition> ReplaceImportedAsync(string id, PipelineDefinition pipeline, CancellationToken ct) => throw new NotSupportedException();
         public Task DeleteAsync(string id, CancellationToken ct) => throw new NotSupportedException();
     }
 }

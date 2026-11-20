@@ -1,0 +1,82 @@
+@using Mulse.Ui.Models
+
+<section class="review-panel" data-testid="map-review" aria-label="@($"Maps of {FlowName}")">
+    <h3>Maps: @FlowName</h3>
+
+    @if (Loading)
+    {
+        <p role="status">Checking the maps...</p>
+    }
+    else if (Review is null || Failed)
+    {
+        <p class="field-hint" role="status" data-testid="map-review-unavailable">The map checklist is not available right now. The migration report below still lists every map.</p>
+    }
+    else
+    {
+        <p role="status" data-testid="map-review-summary">
+            @if (Review.MapsReviewed == 0)
+            {
+                <text>No maps to check for this flow.</text>
+            }
+            else if (Review.Blockers + Review.Warnings + Review.Notes == 0)
+            {
+                <text>Nothing to report for @Review.MapsReviewed map(s). This does not show that they are correct.</text>
+            }
+            else
+            {
+                <text>@Review.MapsReviewed map(s): @Review.Blockers blocker(s), @Review.Warnings warning(s), @Review.Notes note(s).</text>
+            }
+        </p>
+        @foreach (var remark in Review.Remarks)
+        {
+            <p class="field-hint">@remark</p>
+        }
+
+        @foreach (var map in Review.Maps)
+        {
+            <h4 data-testid="map-review-name">@map.Name</h4>
+            <p class="field-hint">@map.DirectLinks direct link(s), @map.Constants constant(s), @map.UnsupportedLinks link(s) through untranslated functoids, @map.Scripts script block(s).</p>
+            <ol class="review-items">
+                @foreach (var item in map.Items)
+                {
+                    <li class="review-item" data-code="@item.Code">
+                        <span class="status-pill @(item.Severity == "Blocker" ? "blocker" : item.Severity == "Warning" ? "warning" : null)">@item.Severity</span>
+                        <strong>@item.Title</strong>
+                        <p>@item.Detail</p>
+                        @if (item.Where.Count > 0)
+                        {
+                            <ul class="review-where" aria-label="Details">
+                                @foreach (var place in item.Where)
+                                {
+                                    <li>@place</li>
+                                }
+                            </ul>
+                        }
+                        <p class="review-fix"><strong>To do:</strong> @item.Fix</p>
+                    </li>
+                }
+            </ol>
+        }
+
+        <details>
+            <summary>What was checked, and what was not</summary>
+            <h4>Checked</h4>
+            <ul>@foreach (var line in Review.Checked) { <li>@line</li> }</ul>
+            <h4>Not checked</h4>
+            <ul>@foreach (var line in Review.NotChecked) { <li>@line</li> }</ul>
+        </details>
+        <p class="review-disclaimer">@Review.Disclaimer</p>
+    }
+
+    <div class="flow-card-actions">
+        <button type="button" class="secondary-button" data-testid="map-review-close" @onclick="OnClose">Close</button>
+    </div>
+</section>
+
+@code {
+    [Parameter] public string FlowName { get; set; } = "";
+    [Parameter] public MapReviewViewModel? Review { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool Failed { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}

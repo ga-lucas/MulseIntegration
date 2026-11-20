@@ -48,6 +48,23 @@ public sealed class FlowDefinitionService(IRuntimeConfigurationStore runtimeConf
         return GetById(flowId);
     }
 
+    public async Task<PipelineDefinition> ReplaceImportedAsync(string flowId, PipelineDefinition pipeline, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(flowId, pipeline.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The flow id in the route must match the payload.", nameof(flowId));
+        }
+
+        var existing = GetById(flowId);
+        if (existing.Migration is null || pipeline.Migration is null)
+            throw new InvalidOperationException($"Flow '{flowId}' was not created by an import, so it has no import to replace.");
+        pipeline = FlowMappings.CopyPipeline(pipeline, pipeline.Id, false, pipeline.Category, pipeline.Migration);
+        ValidatePipeline(pipeline, allowExisting: true);
+        using var moduleUsage = moduleCatalog.PinFlowModules(pipeline);
+        await runtimeConfigurationStore.UpsertFlowAsync(pipeline, cancellationToken).ConfigureAwait(false);
+        return GetById(flowId);
+    }
+
     public Task<PipelineDefinition> DuplicateAsync(string flowId, string newFlowId, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(newFlowId))

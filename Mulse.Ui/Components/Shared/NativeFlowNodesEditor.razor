@@ -39,11 +39,27 @@
                 <input class="mapping-input" maxlength="128" value="@node.ExceptionDetailsVariable" @onchange="args => SetExceptionVariable(node, true, args.Value?.ToString())" />
             </label>
         }
-        @if (node.Kind is "Wait" or "Receive")
+        @if (node.Kind == "Wait")
+        {
+            <label class="field-label">Wait duration <select class="selector" value="@(node.DurationExpression is null ? "Fixed" : "Expression")" @onchange="args => ChangeWaitMode(node, args.Value?.ToString())"><option value="Fixed">Fixed duration</option><option value="Expression">Computed from an expression</option></select></label>
+        }
+        @if (node.Kind == "Wait" && node.DurationExpression is not null)
+        {
+            <p class="field-hint">The Int32 result is the delay in whole seconds, evaluated once when the wait starts; a negative result waits zero seconds and more than 366 days fails. To wait until a UTC time, use Seconds between (target, Now).</p>
+            <NativeExpressionEditor Value="node.DurationExpression" Variables="Variables" MessageNames="MessageNames" Changed="Changed" />
+        }
+        else if (node.Kind is "Wait" or "Receive")
         {
             <label class="field-label">@(node.Kind == "Wait" ? "Wait seconds" : "Receive timeout seconds (0 means no timeout)")
                 <input type="number" min="0" max="31622400" @bind="node.DurationSeconds" @bind:after="Notify" />
             </label>
+            @if (node.Kind == "Wait")
+            {
+                <label class="field-label">Wait milliseconds (0-999, added to the seconds)
+                    <input type="number" min="0" max="999" @bind="node.DurationMilliseconds" @bind:after="Notify" />
+                </label>
+                <p class="field-hint">A wait shorter than one second (0 seconds plus milliseconds) pauses the running flow in place, so it works as a throttle. A wait of one second or more parks the instance and resumes on the flow's next run, so it is a minimum, not an exact delay.</p>
+            }
         }
         @if (node.Kind == "Receive")
         {
@@ -109,7 +125,14 @@
                         <fieldset><legend>Renderer identity expression</legend><NativeExpressionEditor Value="selection" Variables="Variables" MessageNames="MessageNames" Changed="Changed" /></fieldset>
                     }
                 }
-                <RenderDispatchEditor Settings="node.Settings" Modules="Modules" References="References" NativeSelectionMode="@(node.SelectionExpression is not null)" Changed="Notify" />
+                @if (node.SelectionExpression is not null && node.Settings.Count == 0)
+                {
+                    <p class="field-hint">This step uses the flow's shared renderer choices. Edit them under "Execution and message settings".</p>
+                }
+                else
+                {
+                    <RenderDispatchEditor Settings="node.Settings" Modules="Modules" References="References" NativeSelectionMode="@(node.SelectionExpression is not null)" Changed="Notify" />
+                }
             }
             else
             {
@@ -133,6 +156,24 @@
                     }
                     <button type="button" class="secondary-button" disabled="@((node.SettingExpressions?.Count ?? 0) >= 32)" @onclick="() => AddSettingExpression(node)">Add dynamic setting</button>
                 </fieldset>
+                <fieldset><legend>Retry</legend>
+                    <p class="field-hint">Repeats the send only when the destination module proves nothing was sent (connection refused, name not found, login rejected before any data). A timeout or a drop after sending began is ambiguous and is never retried unless you opt in below. Between attempts the instance is parked and resumes on the flow's next run after the interval, so the interval is a minimum. Every attempt is recorded in the run history.</p>
+                    <label class="field-label"><input type="checkbox" aria-label="Retry failed sends" checked="@(node.Retry is not null)" @onchange="args => ToggleRetry(node, args.Value is true)" /> Retry failed sends</label>
+                    @if (node.Retry is { } retry)
+                    {
+                        <label class="field-label">Additional attempts (1-100, after the first)
+                            <input type="number" min="1" max="100" aria-label="Retry attempts" @bind="retry.Attempts" @bind:after="Notify" />
+                        </label>
+                        <label class="field-label">Seconds between attempts (0-604800)
+                            <input type="number" min="0" max="604800" aria-label="Retry interval seconds" @bind="retry.IntervalSeconds" @bind:after="Notify" />
+                        </label>
+                        <label class="field-label"><input type="checkbox" aria-label="Also retry ambiguous failures" @bind="retry.RetryAmbiguous" @bind:after="Notify" /> Also retry ambiguous failures (may send the same data twice)</label>
+                        @if (retry.RetryAmbiguous)
+                        {
+                            <p class="field-hint">Warning: after a timeout or dropped connection the destination may already have received the data. Retrying can duplicate it. Enable this only if the destination tolerates duplicates.</p>
+                        }
+                    }
+                </fieldset>
             }
         }
         @if (node.Kind == "InvokeTransform" && node.TransformInputs is { } transformInputs)
@@ -155,7 +196,8 @@
             <p class="field-hint">Variables belong to this execution/instance and survive durable waits. Declare each once before use; assignments preserve the declared type. Scope-local declarations and implicit input facts are not inferred.</p>
             @if (node.Kind == "DeclareVariable")
             {
-                <label class="field-label">Declared type <select class="selector" @bind="node.VariableType" @bind:after="Notify"><option>String</option><option>Int32</option><option>Boolean</option></select></label>
+                <label class="field-label">Declared type <select class="selector" @bind="node.VariableType" @bind:after="Notify"><option>String</option><option>Int32</option><option>Boolean</option><option>DateTime</option></select></label>
+                @if (node.VariableType == "DateTime") { <p class="field-hint">DateTime variables are always UTC. Use a Now, Parse or From-parts expression; display zones in this editor never change the stored value.</p> }
             }
         }
         @if (node.Kind is "If" or "While")
@@ -188,7 +230,9 @@
         }
         @if (node.Kind == "ApplyXmlRules")
         {
-            <p class="field-hint">Applies one explicit single-pass XML policy/version to a named fact document. No match leaves that document unchanged; conflicting matches fail. The working payload, metadata and other named copies stay unchanged. No BRE agenda, source interpreter or external effect is executed.</p>
+            <p class="field-hint">Applies one explicit single-pass XML policy/version to a named fact document. Conflicting matches fail. The working payload, metadata and other named copies stay unchanged. No BRE agenda, source interpreter or external effect is executed.</p>
+            <label class="field-label"><input type="checkbox" aria-label="Stop when no rule matches" @bind="node.StopWhenNoRuleMatches" @bind:after="Notify" /> Stop when no rule matches</label>
+            <p class="field-hint">@(node.StopWhenNoRuleMatches ? "A value that no rule covers fails the flow here, so an unknown value is never processed silently. BizTalk would have continued with the document unchanged." : "When no rule matches, the document is left unchanged and the flow continues, as BizTalk did. Later steps that need a value the policy would have set may then fail or behave unexpectedly.")</p>
             <XmlRulePolicyEditor PolicyJson='@(node.PolicyJson ?? "")' PolicyJsonChanged="value => SetPolicy(node, value)" />
         }
         @if (node.Target is not null)
@@ -225,9 +269,13 @@
             <label class="field-label">Maximum iterations <input type="number" min="1" max="10000" @bind="node.MaxIterations" @bind:after="Notify" /></label>
             <p class="field-hint">ForEach processes original payloads in order and combines all outputs. While tests the updated output before each iteration and fails at its limit.</p>
         }
-        @if (!PropertiesOnly && (node.Kind is "Sequence" or "If" or "ForEach" or "While" or "Try" or "Blocked" || node.Children.Count > 0))
+        @if (node.Kind == "Listen")
         {
-            <fieldset><legend>@(node.Kind == "If" ? "Then" : node.Kind == "Try" ? "Try body" : "Body")</legend>
+            <p class="field-hint">Waits for the first of several branches. Each branch below is a Sequence whose first step is either a Receive (the branch runs when a matching message arrives) or, for at most one branch, a Wait (the timeout: the branch runs if no message has arrived when it elapses). The timeout is measured once when the Listen starts and is saved with the instance, so it survives restarts. A Receive in a branch must have no timeout of its own. A message arriving after the timeout is rejected. Durable flows only.</p>
+        }
+        @if (!PropertiesOnly && (node.Kind is "Sequence" or "If" or "ForEach" or "While" or "Try" or "Listen" or "Blocked" || node.Children.Count > 0))
+        {
+            <fieldset><legend>@(node.Kind == "If" ? "Then" : node.Kind == "Try" ? "Try body" : node.Kind == "Listen" ? "Branches (first step of each: Receive, or the timeout Wait)" : "Body")</legend>
                 <NativeFlowNodesEditor Nodes="node.Children" Modules="Modules" References="References" Changed="Changed" Depth="@(Depth + 1)" MessageNames="MessageNames" Variables="Variables" HtmlIdPrefix="@HtmlIdPrefix" />
             </fieldset>
         }
@@ -261,7 +309,7 @@
     [Parameter] public string HtmlIdPrefix { get; set; } = "";
     [Parameter] public bool PropertiesOnly { get; set; }
     [Parameter] public string? FocusedNodeId { get; set; }
-    private static readonly string[] Kinds = ["Sequence", "If", "ForEach", "While", "Augment", "Render", "Wait", "Receive", "SaveMessage", "UseMessage", "Reply", "Deliver", "DeclareVariable", "SetVariable", "CreateXmlMessage", "SetMessageValue", "CreateXmlRoot", "AppendXmlMessage", "ApplyXmlRules", "Terminate", "Try", "InvokeTransform", "Blocked"];
+    private static readonly string[] Kinds = ["Sequence", "If", "ForEach", "While", "Augment", "Render", "Wait", "Receive", "SaveMessage", "UseMessage", "Reply", "Deliver", "DeclareVariable", "SetVariable", "CreateXmlMessage", "SetMessageValue", "CreateXmlRoot", "AppendXmlMessage", "ApplyXmlRules", "Terminate", "Try", "InvokeTransform", "Listen", "Blocked"];
     private static string ModuleKind(string kind) => kind == "Render" ? "Render" : kind == "Deliver" ? "Deliver" : kind == "InvokeTransform" ? "Transform" : "OrchestrationAugment";
     private static readonly string[] Sources = ["Metadata", "Payload", "PayloadName", "ContentType", "Literal"];
     private static readonly string[] Comparisons = ["Exists", "Equals", "NotEquals", "Contains", "StartsWith", "EndsWith", "In", "IsTrue", "IsFalse"];
@@ -282,20 +330,34 @@
     {
         if (kind is null || kind == node.Kind || !Kinds.Contains(kind)) return;
         node.Kind = kind; node.Module = ""; node.Settings.Clear(); node.Conditions.Clear();
-        node.MessageName = ""; node.Channel = ""; node.DurationSeconds = 0; node.CorrelationKeys.Clear();
+        node.MessageName = ""; node.Channel = ""; node.DurationSeconds = 0; node.DurationMilliseconds = 0; node.DurationExpression = null; node.CorrelationKeys.Clear();
         node.Variable = kind is "DeclareVariable" or "SetVariable" or "InvokeTransform" ? "" : null;
         node.TransformInputs = kind == "InvokeTransform" ? [new()] : null;
         node.SettingExpressions = null;
+        node.Retry = null;
         node.VariableType = kind == "DeclareVariable" ? "String" : null;
         node.Expression = kind is "DeclareVariable" or "SetVariable" or "CreateXmlMessage" or "SetMessageValue" or "CreateXmlRoot" ? new() : null;
         node.Target = kind == "SetMessageValue" ? new() { Kind = "XmlString" } : null;
         node.NamespaceExpression = kind == "CreateXmlRoot" ? new() : null;
         node.SourceMessage = kind == "AppendXmlMessage" ? "" : null;
-        node.PolicyJson = kind == "ApplyXmlRules" ? "" : null;
+        node.PolicyJson = kind == "ApplyXmlRules" ? "" : null; node.StopWhenNoRuleMatches = false;
         node.TerminateMessage = kind == "Terminate" ? "" : null;
         node.ExceptionMessageVariable = null; node.ExceptionDetailsVariable = null;
         node.InputMessages = null; node.SelectionExpression = null;
         if (kind is "If" or "While") node.Conditions.Add(new());
+        await Notify();
+    }
+    private async Task ToggleRetry(NativeFlowNodeViewModel node, bool enabled)
+    {
+        if (enabled == (node.Retry is not null)) return;
+        node.Retry = enabled ? new() : null;
+        await Notify();
+    }
+    private async Task ChangeWaitMode(NativeFlowNodeViewModel node, string? mode)
+    {
+        if (mode is not ("Fixed" or "Expression") || (mode == "Expression") == (node.DurationExpression is not null)) return;
+        node.DurationSeconds = mode == "Fixed" ? 1 : 0; node.DurationMilliseconds = 0;
+        node.DurationExpression = mode == "Expression" ? new() { Literal = new() { Type = "Int32", Value = "1" } } : null;
         await Notify();
     }
     private async Task ChangePredicate(NativeFlowNodeViewModel node, string? mode)
@@ -327,7 +389,7 @@
     private async Task ChangeSelectionMode(NativeFlowNodeViewModel node, bool enabled)
     {
         node.SelectionExpression = enabled ? new() : null;
-        if (enabled) { node.Settings.Remove("metadataKey"); node.Settings.Remove("batchMode"); }
+        if (enabled) { node.Settings.Remove("metadataKey"); node.Settings.Remove("batchMode"); node.Settings.TryAdd("casesJson", "[]"); }
         else { node.Settings["metadataKey"] = ""; node.Settings["batchMode"] = "PerPayload"; }
         await Notify();
     }

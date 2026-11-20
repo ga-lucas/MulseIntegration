@@ -368,7 +368,7 @@ public sealed partial class BizTalkImportService
 
         if (op.HasPipelineConfiguration)
         {
-            warnings.Add($"Receive location '{location.Name}' configures pipeline component properties that are not imported; review parse steps.");
+            warnings.Add($"Receive location '{location.Name}' configures pipeline component properties; recognized property-setter components are drafted as augment steps, all other properties are not imported - review parse steps.");
         }
     }
 

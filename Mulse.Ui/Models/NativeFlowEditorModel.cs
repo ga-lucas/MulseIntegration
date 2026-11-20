@@ -10,6 +10,8 @@ public sealed class NativeFlowEditorModel
     public string CorrelationMetadataKey { get; set; } = "group";
     public string MessageIdMetadataKey { get; set; } = "messageId";
     public string OutputMessage { get; set; } = "";
+    /// <summary>Shared renderer choices (a dispatch casesJson array) used by selection nodes that have no choices of their own.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? RenderChoicesJson { get; set; }
 }
 
 public sealed class NativeFlowNodeViewModel
@@ -26,6 +28,8 @@ public sealed class NativeFlowNodeViewModel
     public string BlockReason { get; set; } = "";
     public string MessageName { get; set; } = "";
     public int DurationSeconds { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int DurationMilliseconds { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpressionViewModel? DurationExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? TerminateMessage { get; set; }
     public string Channel { get; set; } = "";
     public List<string> CorrelationKeys { get; set; } = [];
@@ -36,12 +40,21 @@ public sealed class NativeFlowNodeViewModel
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpressionViewModel? NamespaceExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? SourceMessage { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? PolicyJson { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool StopWhenNoRuleMatches { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? InputMessages { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpressionViewModel? SelectionExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionMessageVariable { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionDetailsVariable { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<NativeExpressionViewModel>? TransformInputs { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Dictionary<string, NativeExpressionViewModel>? SettingExpressions { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeDeliverRetryViewModel? Retry { get; set; }
+}
+
+public sealed class NativeDeliverRetryViewModel
+{
+    public int Attempts { get; set; } = 3;
+    public int IntervalSeconds { get; set; } = 60;
+    public bool RetryAmbiguous { get; set; }
 }
 
 public sealed class NativeExpressionViewModel

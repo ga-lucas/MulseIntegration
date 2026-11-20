@@ -1,0 +1,169 @@
+@page "/github-copilot"
+@implements IDisposable
+@inject GitHubCopilotConnectionStore Connections
+@inject GitHubCopilotDeviceAuthorization DeviceAuthorization
+@inject Microsoft.AspNetCore.Authorization.IAuthorizationService Authorization
+@inject Microsoft.Extensions.Options.IOptions<GitHubCopilotSignInOptions> Options
+
+<PageTitle>My GitHub connection | Mulse</PageTitle>
+<div class="page-shell">
+    <header class="page-hero"><div><p class="eyebrow">AI assistance</p><h1>My GitHub connection</h1>
+        <p class="lede">Connect your own GitHub account for Copilot. Your Mulse login remains unchanged.</p></div></header>
+    <StatusBanner Error="@_error" />
+    <Panel Title="GitHub Copilot account" Description="Personal accounts and accounts with organization-provided Copilot access can connect here.">
+        @if (!_loaded)
+        {
+            <p role="status">Loading your connection...</p>
+        }
+        else
+        {
+            @if (_login is not null)
+            {
+                <p>Connected GitHub account: <strong>@_login</strong></p>
+                <p>@(_expired ? "This connection has expired. Reconnect before using Copilot." : "Copilot requests use this account and its allowance, subject to GitHub account and organization policies.")</p>
+                @if (_expiresAt is { } expires) { <p>Token expires: @expires.ToString("u")</p> }
+            }
+            else if (!_loadFailed)
+            {
+                <p>No GitHub account is connected for your Mulse identity.</p>
+            }
+            @if (_devicePrompt is { } prompt)
+            {
+                <div role="status" aria-live="polite">
+                    <p>Open <a href="@GitHubCopilotDeviceAuthorization.VerificationUrl" target="_blank" rel="noopener noreferrer">github.com/login/device</a> and enter this code:</p>
+                    <p><strong><code>@prompt.UserCode</code></strong></p>
+                    <p>Waiting for GitHub approval. This code expires at @prompt.ExpiresAt.ToString("u"). Keep this page open; it checks automatically.</p>
+                    <p>Only enter the code generated here for your own sign-in. Never authorize a code sent by someone else. Your Mulse installation does not need to be reachable from GitHub.</p>
+                </div>
+            }
+            @if (Options.Value.Configured && !_loadFailed)
+            {
+                <form method="post" action="/auth/github-copilot/connect">
+                    <AntiforgeryToken />
+                    <button class="run-button" type="submit">@(_login is null ? "Connect GitHub" : "Reconnect GitHub")</button>
+                </form>
+            }
+            else if (!Options.Value.Configured)
+            {
+                @if (Options.Value.UseCallbackOAuth)
+                {
+                    <p>Callback mode requires the UI's GitHub OAuth App ClientId and ClientSecret, with callback URL <code>https://&lt;UI-host&gt;/signin-github-copilot</code>.</p>
+                }
+                else
+                {
+                    <p>The Mulse publisher must provide a GitHub app public client ID with device flow enabled. Configure it as GitHubCopilot:ClientId on the UI. The same registration works across installations; no client secret, callback URL or public inbound access is needed. A publisher client ID has not been bundled in this build.</p>
+                }
+            }
+            <form method="post" action="/auth/github-copilot/disconnect">
+                <AntiforgeryToken />
+                <button class="secondary-button" type="submit">Disconnect GitHub and cancel pending sign-in</button>
+            </form>
+        }
+        <p>GitHub authorization does not grant Mulse access to private repository contents. Copilot access and organization approval must be available to your account. Connecting is not a guarantee of Copilot entitlement; use Test saved connection after selecting GitHub Copilot.</p>
+        <p>Tokens stay encrypted on the UI server and are forwarded only server-to-server for your authoring requests. Other users never use your connection. Disconnect removes Mulse's stored token and blocks new requests; it cannot cancel requests already sent. To revoke the authorization at GitHub too, remove Mulse under GitHub Settings &gt; Applications.</p>
+        <a href="/ai-assistance">Back to AI assistance settings</a>
+    </Panel>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "github")] public string? Result { get; set; }
+    [CascadingParameter] public Task<AuthenticationState> AuthenticationState { get; set; } = default!;
+    private string? _login, _error;
+    private DateTimeOffset? _expiresAt;
+    private bool _expired, _loaded, _loadFailed;
+    private GitHubDevicePrompt? _devicePrompt;
+    private string? _owner;
+    private CancellationTokenSource? _pollCancellation;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _pollCancellation?.Cancel();
+        _pollCancellation = null;
+        _devicePrompt = null;
+        _owner = null;
+        _loaded = _loadFailed = false; _login = _error = null; _expiresAt = null;
+        try
+        {
+            var state = await AuthenticationState;
+            _owner = GitHubCopilotConnectionStore.Owner(state.User);
+            _devicePrompt = DeviceAuthorization.Get(_owner);
+            var connection = Connections.Get(_owner);
+            _login = connection?.Login;
+            _expiresAt = connection?.ExpiresAt;
+            _expired = _expiresAt <= DateTimeOffset.UtcNow;
+            _error = Result switch
+            {
+                "failed" => "GitHub authorization could not be started or completed. Check outbound access to GitHub, the app configuration and your Mulse login, then try again.",
+                "device" when _devicePrompt is null => "This GitHub sign-in expired, was canceled, or the UI restarted. Connect again for a new code.",
+                "unconfigured" => "GitHub sign-in is not configured by the administrator yet.",
+                _ => null
+            };
+        }
+        catch (InvalidOperationException exception)
+        {
+            _loadFailed = true;
+            _error = $"Unable to load your GitHub connection: {exception.Message} Disconnect to remove the unreadable local connection, then reconnect.";
+        }
+        finally { _loaded = true; }
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_devicePrompt is { } prompt && _owner is { } owner && _pollCancellation is null)
+        {
+            _pollCancellation = new CancellationTokenSource();
+            _ = PollDeviceAsync(owner, prompt, _pollCancellation);
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task PollDeviceAsync(string owner, GitHubDevicePrompt prompt, CancellationTokenSource source)
+    {
+        var cancellation = source.Token;
+        try
+        {
+            while (true)
+            {
+                var delay = prompt.NextPollAt - DateTimeOffset.UtcNow;
+                await Task.Delay(delay > TimeSpan.Zero ? delay : TimeSpan.FromSeconds(1), cancellation);
+                var state = await AuthenticationState;
+                if (GitHubCopilotConnectionStore.Owner(state.User) != owner
+                    || !(await Authorization.AuthorizeAsync(state.User, null, "MulseAdmin")).Succeeded)
+                    throw new InvalidOperationException("Your Mulse identity changed. Reload this page before connecting GitHub.");
+                var connected = await DeviceAuthorization.PollAsync(owner, prompt.AttemptId, cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                if (connected)
+                {
+                    var connection = Connections.Get(owner);
+                    _login = connection?.Login;
+                    _expiresAt = connection?.ExpiresAt;
+                    _expired = _expiresAt <= DateTimeOffset.UtcNow;
+                    _devicePrompt = null;
+                    StateHasChanged();
+                    return;
+                }
+                prompt = DeviceAuthorization.Get(owner)
+                    ?? throw new InvalidOperationException("This GitHub sign-in expired or was canceled. Connect again.");
+                _devicePrompt = prompt;
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (InvalidOperationException exception)
+        {
+            if (!cancellation.IsCancellationRequested)
+            {
+                _error = exception.Message;
+                _devicePrompt = null;
+                StateHasChanged();
+            }
+        }
+        catch (Exception exception) { await DispatchExceptionAsync(exception); }
+        finally
+        {
+            if (ReferenceEquals(_pollCancellation, source)) _pollCancellation = null;
+            source.Dispose();
+        }
+    }
+
+    public void Dispose() => _pollCancellation?.Cancel();
+}

@@ -1,0 +1,232 @@
+@using Mulse.Ui.Models
+@using Mulse.Ui.Services
+@inject IMulseApiClient Api
+
+<div class="biztalk-assist" data-testid="assist-panel">
+    <p class="field-hint">
+        Checking what you supplied happens on the Mulse service and sends nothing to an AI provider. Asking the AI shows you exactly what would be sent first, and nothing is sent until you agree.
+        AI replies are suggestions only. They never change a flow, and only the importer decides whether evidence is enough when you analyze again.
+    </p>
+
+    <label class="field-label">Your question (optional)
+        <input class="mapping-input" @bind="_question" @bind:event="oninput" maxlength="1000" placeholder="For example: we only have PowerShell access to the server" />
+    </label>
+
+    <div class="action-row">
+        <button class="secondary-button" disabled="@(Busy || _working)" @onclick="ExplainAsync" data-testid="assist-explain">Explain with AI</button>
+        <button class="secondary-button" disabled="@(Busy || _working || !HasEvidence)" @onclick="() => ReviewAsync(false)" data-testid="assist-check">Check what I supplied</button>
+        <button class="secondary-button" disabled="@(Busy || _working || !HasEvidence)" @onclick="() => ReviewAsync(true)" data-testid="assist-review-ai">Ask AI about what I supplied</button>
+    </div>
+    <label class="field-label"><input type="checkbox" @bind="_includeContent" data-testid="assist-include-content" /> Also include the start of each text file I supplied, with credential-looking values removed (always asks)</label>
+    <p class="field-hint">Files over 1 MB, zip files, paths on the server and real input and output samples are never read or sent. Structure (names and counts) is checked locally either way.</p>
+
+    @if (_working)
+    {
+        <p class="field-hint" role="status">Working...</p>
+    }
+
+    @if (_error is not null)
+    {
+        <p class="status-banner error" role="alert" data-testid="assist-error">@_error</p>
+    }
+
+    @if (_findings.Count > 0)
+    {
+        <div class="assist-findings" data-testid="assist-findings">
+            <h4>What was found locally</h4>
+            <ul>
+                @foreach (var finding in _findings)
+                {
+                    <li>
+                        <strong>@finding.Name</strong>
+                        <span class="muted">(supplied as @BizTalkEvidenceKinds.Describe(finding.DeclaredKind), looks like @finding.Detected)</span>
+                        @if (finding.Facts.Count > 0 || finding.Warnings.Count > 0)
+                        {
+                            <ul>
+                                @foreach (var fact in finding.Facts)
+                                {
+                                    <li>@fact</li>
+                                }
+                                @foreach (var warning in finding.Warnings)
+                                {
+                                    <li class="assist-warning">@warning</li>
+                                }
+                            </ul>
+                        }
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+
+    @if (_unavailable is not null)
+    {
+        <p class="status-banner error" role="status" data-testid="assist-unavailable">AI help is not available: @_unavailable</p>
+    }
+
+    @if (_awaitingConsent && _disclosure is not null)
+    {
+        <div class="warning-panel" data-testid="assist-consent">
+            <h4>Review before anything is sent</h4>
+            <p>
+                This will be sent to <strong>@_disclosure.Provider</strong> (model <strong>@_disclosure.Model</strong>). Nothing has been sent yet.
+            </p>
+            <ul>
+                @foreach (var note in _disclosure.Notes)
+                {
+                    <li>@note</li>
+                }
+            </ul>
+            <pre class="assist-payload" data-testid="assist-payload">@_disclosure.Payload</pre>
+            <div class="action-row">
+                <button class="run-button" disabled="@_working" @onclick="() => SendAsync(false)" data-testid="assist-send">Send</button>
+                @if (!_disclosure.IncludesContent)
+                {
+                    <button class="secondary-button" disabled="@_working" @onclick="() => SendAsync(true)" data-testid="assist-send-remember">Send and don't ask again this session</button>
+                }
+                <button class="secondary-button" disabled="@_working" @onclick="Cancel" data-testid="assist-cancel">Cancel</button>
+            </div>
+            @if (_disclosure.IncludesContent)
+            {
+                <p class="field-hint">Sends that include file excerpts always ask.</p>
+            }
+            else
+            {
+                <p class="field-hint">"Don't ask again" lasts until you start a new session, resume one, or reload this page. It is never saved.</p>
+            }
+        </div>
+    }
+
+    @if (_reply is not null)
+    {
+        <div class="assist-reply" data-testid="assist-reply">
+            <h4>AI-generated reply</h4>
+            <p class="field-hint">From @_replyProvider (@_replyModel). It may be wrong. It has not been applied to anything.</p>
+            <div class="assist-reply-text">@_reply</div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public BizTalkEvidenceRequestViewModel Request { get; set; } = default!;
+    [Parameter, EditorRequired] public Func<IReadOnlyList<BizTalkAssistEvidenceViewModel>> GetEvidence { get; set; } = default!;
+    [Parameter, EditorRequired] public BizTalkAssistConsent Consent { get; set; } = default!;
+    [Parameter] public bool HasEvidence { get; set; }
+    [Parameter] public bool Busy { get; set; }
+
+    private BizTalkAssistConsent? _boundConsent;
+    private BizTalkAssistRequestViewModel? _pending;
+    private BizTalkAssistDisclosureViewModel? _disclosure;
+    private IReadOnlyList<BizTalkEvidenceFindingViewModel> _findings = [];
+    private string _question = string.Empty;
+    private bool _includeContent;
+    private bool _awaitingConsent;
+    private bool _working;
+    private string? _unavailable;
+    private string? _error;
+    private string? _reply;
+    private string? _replyProvider;
+    private string? _replyModel;
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_boundConsent, Consent)) return;
+        // A new or resumed session starts clean, so nothing from the previous one is shown or approved.
+        _boundConsent = Consent;
+        Clear();
+    }
+
+    private void Clear()
+    {
+        _pending = null;
+        _disclosure = null;
+        _findings = [];
+        _awaitingConsent = false;
+        _unavailable = null;
+        _error = null;
+        _reply = null;
+    }
+
+    private BizTalkAssistRequestInfoViewModel Info() => new(Request.Id, Request.Title, Request.Why, Request.HowToGet, Request.Impact, Request.Risk, Request.Accepts);
+
+    private Task ExplainAsync() => PrepareAsync(new(BizTalkAssistOperations.Explain, Info(), Trimmed(_question), [], false), askAi: true);
+
+    private Task ReviewAsync(bool askAi)
+        => PrepareAsync(new(BizTalkAssistOperations.Review, Info(), Trimmed(_question), GetEvidence(), _includeContent && askAi), askAi);
+
+    private static string? Trimmed(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private async Task PrepareAsync(BizTalkAssistRequestViewModel request, bool askAi)
+    {
+        Clear();
+        _working = true;
+        try
+        {
+            var disclosure = await Api.PreviewBizTalkAssistAsync(request, CancellationToken.None);
+            _disclosure = disclosure;
+            _findings = disclosure.Findings;
+            _pending = request with { DisclosureSha256 = disclosure.PayloadSha256 };
+            if (!askAi) return;
+            if (!disclosure.AiAvailable)
+            {
+                _unavailable = $"{disclosure.Unavailable} The local check above still applies.";
+                return;
+            }
+
+            if (Consent.SkipMetadataPrompt && !disclosure.IncludesContent)
+            {
+                await SendCoreAsync();
+                return;
+            }
+
+            _awaitingConsent = true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _error = $"Unable to prepare the check: {exception.Message}";
+        }
+        finally
+        {
+            _working = false;
+        }
+    }
+
+    private async Task SendAsync(bool remember)
+    {
+        _working = true;
+        try
+        {
+            // Only a send that carries no file content can be remembered.
+            if (remember && _disclosure is { IncludesContent: false }) Consent.SkipMetadataPrompt = true;
+            await SendCoreAsync();
+        }
+        finally
+        {
+            _working = false;
+        }
+    }
+
+    private async Task SendCoreAsync()
+    {
+        if (_pending is null) return;
+        _awaitingConsent = false;
+        try
+        {
+            var response = await Api.BizTalkAssistAsync(_pending, CancellationToken.None);
+            _reply = response.Reply;
+            _replyProvider = response.Provider;
+            _replyModel = response.Model;
+            _findings = response.Findings.Count > 0 ? response.Findings : _findings;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _error = $"The AI request failed: {exception.Message}";
+        }
+    }
+
+    private void Cancel()
+    {
+        _awaitingConsent = false;
+        _pending = null;
+    }
+}

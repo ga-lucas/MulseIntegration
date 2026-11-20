@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+﻿using System.Text.Json.Nodes;
 using System.Xml.Linq;
 using Mulse.CompatibilityPack;
 using Mulse.Modules.Abstractions;
@@ -85,6 +85,42 @@ public sealed class NativeDynamicSendImportTests : IDisposable
         Assert.Equal(["FILE"], all.Where(node => node.Id.Contains("-when-", StringComparison.Ordinal)).Select(node => node.Name));
         Assert.DoesNotContain(all, node => node.Module == "ftp-deliver");
         Assert.Contains(candidate.DraftFlow.Warnings, warning => warning.Contains("no native adapter (SFTP)", StringComparison.Ordinal));
+    }
+
+    private static string DynamicPortWithPipeline(string[] handlers, string components)
+        => $"<SendPort Name=\"DynamicOutput\" IsStatic=\"false\"><TransmitPipeline Name=\"Example.Pipelines.SendX\"/><SendPipelineData>{System.Security.SecurityElement.Escape($"<Root><Stages><Stage><Components>{components}</Components></Stage></Stages></Root>")}</SendPipelineData>"
+            + $"<DynamicSendHanders>{string.Concat(handlers.Select(handler => $"<SendHandler Name=\"Host\"><TransportType Name=\"{handler}\"/></SendHandler>"))}</DynamicSendHanders></SendPort>";
+
+    private const string TypeCasterAndMime = "<Component Name=\"Example.CPC.HL7TypeCaster\"><Properties/></Component>"
+        + "<Component Name=\"Microsoft.BizTalk.Component.MIME_SMIME_Encoder\"><Properties><SendBodyPartAsAttachment vt=\"11\">-1</SendBodyPartAsAttachment><SignatureType vt=\"3\">0</SignatureType><EnableEncryption vt=\"11\">0</EnableEncryption></Properties></Component>";
+
+    [Fact]
+    public async Task DynamicSmtpOnlyPortRunsTheTranslatedPipelineOnceBeforeTheDispatchAndAttachesTheBody()
+    {
+        var (_, definition) = await Import(Both, DynamicPortWithPipeline(["SMTP"], TypeCasterAndMime));
+        Assert.True(definition.AllNodes().All(node => node.Kind != NativeFlowNodeKind.Blocked), string.Join(" | ", definition.AllNodes().Where(node => node.Kind == NativeFlowNodeKind.Blocked).Select(node => node.BlockReason)));
+        var step = Assert.Single(definition.AllNodes(), node => node.Module == "hl7-message-type-augment");
+        var deliver = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Deliver);
+        Assert.Equal(step.MessageName, deliver.MessageName);
+        Assert.Equal("true", deliver.Settings["attachPayload"]);
+    }
+
+    [Fact]
+    public async Task MimePipelineOnAPortThatCanAlsoUseOtherTransportsOnlyDeliversBySmtpAndEndsTheFlowOtherwise()
+    {
+        var (candidate, definition) = await Import(Both, DynamicPortWithPipeline(["FILE", "SMTP"], TypeCasterAndMime));
+        Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked);
+        Assert.Equal("smtp-email-deliver", Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Deliver).Module);
+        Assert.Contains("only translated for SMTP", Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Terminate).TerminateMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain(candidate.DraftFlow.ConfigurationRequirements, requirement => requirement.SettingPath.Contains("-file", StringComparison.Ordinal) || requirement.SettingPath.Contains("-ftp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task MimePipelineOnAPortWithNoSmtpHandlerStaysBlocked()
+    {
+        var (_, definition) = await Import(Both, DynamicPortWithPipeline(["FILE"], TypeCasterAndMime));
+        var blocked = Assert.Single(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.Blocked && node.Name.Contains("Out", StringComparison.Ordinal));
+        Assert.Contains("MIME/S-MIME encoder", blocked.BlockReason!, StringComparison.Ordinal);
     }
 
     [Fact]

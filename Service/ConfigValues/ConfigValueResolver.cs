@@ -129,12 +129,45 @@ public sealed partial class ConfigValueResolver(IRuntimeConfigurationStore runti
             resolved[key] = module.Equals("native-control-flow-augment", StringComparison.OrdinalIgnoreCase) && key.Equals("flowJson", StringComparison.OrdinalIgnoreCase)
                 ? SubstituteJson(value, configValues, missingReferences.Add, sizeLimit: 1_000_000)
                 : structured && key is "stagesJson" or "casesJson" or "sendsJson"
-                    ? SubstituteJson(value, configValues, missingReferences.Add) : Substitute(value, configValues, missingReferences.Add);
+                    ? SubstituteJson(value, configValues, missingReferences.Add, deferStored: key.Equals("casesJson", StringComparison.OrdinalIgnoreCase))
+                    : Substitute(value, configValues, missingReferences.Add);
         }
         return resolved;
     }
 
-    internal static string SubstituteJson(string value, IReadOnlyDictionary<string, string>? configValues, Action<string> onMissing, int depth = 0, bool dependenciesOnly = false, int sizeLimit = 262144)
+    /// <summary>Choice settings that may hold one large definition (a map or stylesheet) stored as a config value.</summary>
+    internal static bool IsStoredDefinitionKey(string? key)
+        => key is not null && (key.Equals("mappingJson", StringComparison.OrdinalIgnoreCase) || key.Equals("xsltText", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("schemaText", StringComparison.OrdinalIgnoreCase));
+
+    [GeneratedRegex(@"\A\{\{config:(?<reference>[^{}\r\n]+)\}\}\z")]
+    private static partial Regex WholeConfigTokenPattern();
+
+    /// <summary>True when any stored-definition setting is exactly one <c>{{config:reference}}</c> token that must be resolved when the choice is rendered.</summary>
+    internal static bool HasStoredDefinitionReference(IReadOnlyDictionary<string, string> settings)
+        => settings.Any(pair => IsStoredDefinitionKey(pair.Key) && WholeConfigTokenPattern().IsMatch(pair.Value));
+
+    /// <summary>
+    /// Resolves the stored-definition references of one render dispatch choice. Only the selected choice is expanded, so a dispatch can name many large maps
+    /// without loading them all. A missing value fails closed.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> ResolveStoredDefinitions(IReadOnlyDictionary<string, string> settings, Func<string, string?> lookup)
+    {
+        Dictionary<string, string>? resolved = null;
+        foreach (var (key, value) in settings)
+        {
+            if (!IsStoredDefinitionKey(key) || WholeConfigTokenPattern().Match(value) is not { Success: true } token) continue;
+            var reference = token.Groups["reference"].Value;
+            var stored = lookup(reference) ?? throw new InvalidOperationException($"Configuration reference '{reference}' used by a render choice has no stored value. Set it before running the flow.");
+            if (stored.Length > 1_000_000) throw new ArgumentException($"Configuration reference '{reference}' exceeds 1,000,000 characters.");
+            resolved ??= new Dictionary<string, string>(settings, StringComparer.OrdinalIgnoreCase);
+            resolved[key] = stored;
+        }
+        return resolved ?? settings;
+    }
+
+    /// <param name="deferStored">Inside render dispatch choices, a whole-value reference in a stored-definition setting is only checked for existence and stays a token.</param>
+    internal static string SubstituteJson(string value, IReadOnlyDictionary<string, string>? configValues, Action<string> onMissing, int depth = 0, bool dependenciesOnly = false, int sizeLimit = 262144, bool deferStored = false)
     {
         if (depth > 8 || value.Length > sizeLimit) throw new ArgumentException("Structured configuration exceeds its JSON depth or size limit.");
         var token = TokenPattern().Match(value);
@@ -148,9 +181,17 @@ public sealed partial class ConfigValueResolver(IRuntimeConfigurationStore runti
         {
             if (level > maxDepth) throw new ArgumentException($"Structured configuration JSON exceeds {maxDepth} levels.");
             if (node is JsonValue scalar && scalar.TryGetValue<string>(out var text))
-                return JsonValue.Create(key is "stagesJson" or "casesJson" or "sendsJson" or "policyJson" or "mappingJson" or "decisionJson" or "promotionsJson"
-                    ? SubstituteJson(text, configValues, onMissing, depth + 1, dependenciesOnly)
+            {
+                if (deferStored && IsStoredDefinitionKey(key) && WholeConfigTokenPattern().Match(text) is { Success: true } stored)
+                {
+                    var reference = stored.Groups["reference"].Value;
+                    if (!dependenciesOnly && (configValues is null || !configValues.ContainsKey(reference))) onMissing(reference);
+                    return JsonValue.Create(text);
+                }
+                return JsonValue.Create(key is "stagesJson" or "casesJson" or "renderChoicesJson" or "sendsJson" or "policyJson" or "mappingJson" or "decisionJson" or "promotionsJson"
+                    ? SubstituteJson(text, configValues, onMissing, depth + 1, dependenciesOnly, deferStored: key is "casesJson" or "renderChoicesJson")
                     : dependenciesOnly && key != "module" ? text : Substitute(text, configValues, onMissing));
+            }
             if (node is JsonObject record)
                 return new JsonObject(record.Select(pair => new KeyValuePair<string, JsonNode?>(pair.Key, Visit(pair.Value, pair.Key, level + 1))));
             if (node is JsonArray array)

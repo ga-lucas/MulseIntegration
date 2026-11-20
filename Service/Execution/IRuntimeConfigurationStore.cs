@@ -39,6 +39,9 @@ public interface IRuntimeConfigurationStore
     /// </summary>
     Task<RuntimeMulseState> SetConfigValueAsync(string reference, string value, CancellationToken cancellationToken);
 
+    /// <summary>Reads one stored config/secret value without copying the whole workspace; null when it is not set.</summary>
+    string? TryGetConfigValue(string reference) => GetState().ConfigValues.GetValueOrDefault(reference);
+
     /// <summary>Removes a previously-set config/secret value.</summary>
     Task<RuntimeMulseState> DeleteConfigValueAsync(string reference, CancellationToken cancellationToken);
 }

@@ -119,6 +119,7 @@ public partial class Designer : IAsyncDisposable
     private FlowDesignAnalysisViewModel? _analysis;
 
     private bool _showBizTalkPanel;
+    private bool _showBizTalkWizard;
     private bool _isAnalyzingBizTalk;
     private string _sourcePath = string.Empty;
     private string _additionalSourcePaths = string.Empty;
@@ -236,6 +237,8 @@ public partial class Designer : IAsyncDisposable
             ResetGraph();
             _isLoading = false;
         }
+
+        ResetHistory();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -255,6 +258,7 @@ public partial class Designer : IAsyncDisposable
             await _canvasModule.InvokeVoidAsync("initializeFileDrop", _canvasElement, _canvasFileInput!.Element, _selfReference);
             _splitterModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/dock-splitter.js");
             await _splitterModule.InvokeVoidAsync("initialize", _leftDock, _dockSplitter, _selfReference);
+            await _canvasModule.InvokeVoidAsync("initializeHistoryShortcuts", _selfReference);
         }
         catch (JSDisconnectedException)
         {
@@ -305,6 +309,7 @@ public partial class Designer : IAsyncDisposable
         {
             try
             {
+                await _canvasModule.InvokeVoidAsync("disposeHistoryShortcuts");
                 await _canvasModule.InvokeVoidAsync("disposeToolbox", _toolboxElement);
                 await _canvasModule.InvokeVoidAsync("disposeFileDrop", _canvasElement);
                 await _canvasModule.InvokeVoidAsync("dispose", _canvasElement);
@@ -327,6 +332,7 @@ public partial class Designer : IAsyncDisposable
         {
             node.X = x;
             node.Y = y;
+            RecordChange();
             StateHasChanged();
         }
 
@@ -348,6 +354,7 @@ public partial class Designer : IAsyncDisposable
             }
         }
 
+        RecordChange();
         StateHasChanged();
         return Task.CompletedTask;
     }
@@ -400,6 +407,7 @@ public partial class Designer : IAsyncDisposable
                 break;
         }
 
+        RecordChange();
         StateHasChanged();
         return Task.CompletedTask;
     }
@@ -496,6 +504,8 @@ public partial class Designer : IAsyncDisposable
         _bizTalkRequirements = [];
         _bizTalkWarnings = [];
         _migration = null;
+        _authoringCategory = null;
+        _assistantUndoDraft = _assistantAppliedDraft = null;
         _selectedNodeId = null;
         _selectedAugmentNodeId = null;
         _showAugmentDesigner = false;
@@ -521,10 +531,12 @@ public partial class Designer : IAsyncDisposable
         var flowId = _flowId;
         var flowName = _flowName;
         var migration = _migration;
+        var category = _authoringCategory;
         ResetGraph();
         _flowId = flowId;
         _flowName = flowName;
         _migration = migration;
+        _authoringCategory = category;
         _seedSource = IsExistingFlow ? SeedSource.ExistingFlow : SeedSource.Manual;
         _statusMessage = "Canvas cleared.";
     }
@@ -536,6 +548,8 @@ public partial class Designer : IAsyncDisposable
         _bizTalkRequirements = [];
         _bizTalkWarnings = [];
         _migration = flow.Migration;
+        _authoringCategory = flow.Category;
+        _assistantUndoDraft = _assistantAppliedDraft = null;
         _selectedNodeId = null;
         _selectedAugmentNodeId = null;
         _showAugmentDesigner = false;
@@ -724,9 +738,11 @@ public partial class Designer : IAsyncDisposable
         _isSaving = true;
         _statusMessage = null;
         _errorMessage = null;
+        _saveSummary = null;
 
         try
         {
+            var wasExisting = IsExistingFlow;
             var flowId = IsExistingFlow ? FlowId! : _flowId.Trim();
             if (string.IsNullOrWhiteSpace(flowId))
             {
@@ -854,6 +870,9 @@ public partial class Designer : IAsyncDisposable
             _enabled = saved.Enabled;
             _flowName = saved.Name ?? string.Empty;
             _migration = saved.Migration;
+            _authoringCategory = saved.Category;
+            _assistantUndoDraft = _assistantAppliedDraft = null;
+            MarkDraftSaved(summarize: wasExisting);
             await RefreshConfigUsagesAsync();
         }
         catch (Exception exception)

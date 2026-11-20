@@ -12,4 +12,13 @@ public sealed record AnalyzeBizTalkSolutionRequestViewModel(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NativeHostConfigurationPath = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? NativeConfigurationHelperPaths = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NativeMapChoicesJson = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DeriveNativeMapChoices = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DeriveNativeMapChoices = false)
+{
+    /// <summary>Evidence carried with the request (pasted text or uploads); null when everything is a server path.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<BizTalkEvidenceItemViewModel>? Evidence { get; init; }
+
+    /// <summary>The summary of the previous analysis, so the response can report what changed.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BizTalkAnalysisSummaryViewModel? PreviousSummary { get; init; }
+}

@@ -239,6 +239,9 @@ public sealed class FlowDesignServiceTests
         public Task<PipelineDefinition> DuplicateAsync(string flowId, string newFlowId, CancellationToken cancellationToken)
             => throw new NotSupportedException();
 
+        public Task<PipelineDefinition> ReplaceImportedAsync(string flowId, PipelineDefinition pipeline, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
         public Task DeleteAsync(string flowId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

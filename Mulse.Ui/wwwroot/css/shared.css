@@ -404,6 +404,90 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1rem; height: 1rem;
     border: 1px solid var(--warning-border);
 }
 
+/* BizTalk import wizard. */
+.biztalk-wizard .wizard-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.75rem 0 0.25rem;
+}
+
+.biztalk-wizard .wizard-open-summary,
+.biztalk-wizard .wizard-delta {
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--warning-border);
+    border-radius: 0.5rem;
+}
+
+.biztalk-wizard .evidence-request {
+    margin: 0.75rem 0;
+}
+
+.biztalk-wizard .evidence-status {
+    padding: 0.1rem 0.5rem;
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--warning-border);
+}
+
+.biztalk-wizard .evidence-steps {
+    margin: 0.35rem 0 0.35rem 1.25rem;
+}
+
+.biztalk-wizard .evidence-form {
+    display: grid;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+}
+
+.biztalk-wizard .update-pieces {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.biztalk-wizard .assist-payload {
+    max-height: 18rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--warning-border);
+    border-radius: 0.5rem;
+}
+
+.biztalk-wizard .assist-reply-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.biztalk-wizard .assist-warning {
+    font-weight: 600;
+}
+
+.compare-differences {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.compare-differences th,
+.compare-differences td {
+    padding: 0.25rem 0.5rem;
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+}
+
+.compare-summary {
+    font-weight: 600;
+}
+
+.biztalk-wizard .update-pieces th,
+.biztalk-wizard .update-pieces td {
+    padding: 0.25rem 0.5rem;
+    text-align: left;
+}
+
 /* Buttons. */
 .run-button,
 .secondary-button {

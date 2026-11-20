@@ -5,7 +5,7 @@ using Mulse.Modules.Decisions;
 namespace Mulse.Modules.ControlFlow;
 
 [JsonConverter(typeof(JsonStringEnumConverter<NativeFlowNodeKind>))]
-public enum NativeFlowNodeKind { Sequence, If, ForEach, While, Augment, Render, Blocked, Wait, Receive, SaveMessage, UseMessage, Reply, Deliver, DeclareVariable, SetVariable, CreateXmlMessage, SetMessageValue, CreateXmlRoot, AppendXmlMessage, ApplyXmlRules, Terminate, Try, InvokeTransform }
+public enum NativeFlowNodeKind { Sequence, If, ForEach, While, Augment, Render, Blocked, Wait, Receive, SaveMessage, UseMessage, Reply, Deliver, DeclareVariable, SetVariable, CreateXmlMessage, SetMessageValue, CreateXmlRoot, AppendXmlMessage, ApplyXmlRules, Terminate, Try, InvokeTransform, Listen }
 
 public sealed class NativeFlowNode
 {
@@ -21,6 +21,10 @@ public sealed class NativeFlowNode
     public string BlockReason { get; set; } = "";
     public string MessageName { get; set; } = "";
     public int DurationSeconds { get; set; }
+    /// <summary>Wait only: sub-second part (0-999) of a fixed duration, added to <see cref="DurationSeconds"/>. A fixed wait under one second pauses the running instance in place (a throttle); a wait of a second or more parks the instance until the flow's next run.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public int DurationMilliseconds { get; set; }
+    /// <summary>Wait only: optional Int32 expression giving the delay in whole seconds, evaluated once when the wait starts (a negative result waits zero seconds). Mutually exclusive with a fixed <see cref="DurationSeconds"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpression? DurationExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? TerminateMessage { get; set; }
     public string Channel { get; set; } = "";
     public List<string> CorrelationKeys { get; set; } = [];
@@ -31,6 +35,8 @@ public sealed class NativeFlowNode
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpression? NamespaceExpression { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? SourceMessage { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? PolicyJson { get; set; }
+    /// <summary>ApplyXmlRules only: fail when no rule matches. Off (the default, and BizTalk's behavior) leaves the fact document unchanged.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool StopWhenNoRuleMatches { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? InputMessages { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeExpression? SelectionExpression { get; set; }
     /// <summary>InvokeTransform only: ordered argument expressions for the pure, hot-loadable transform module; the String result is stored in <see cref="Variable"/>.</summary>
@@ -41,6 +47,20 @@ public sealed class NativeFlowNode
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionMessageVariable { get; set; }
     /// <summary>Try only: optional String variable that receives the exception type and message (never a CLR stack trace).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ExceptionDetailsVariable { get; set; }
+    /// <summary>Deliver only: bounded automatic retry. Retries only when the deliver module proves nothing was sent, unless <see cref="NativeDeliverRetry.RetryAmbiguous"/> opts in.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public NativeDeliverRetry? Retry { get; set; }
+}
+
+public sealed class NativeDeliverRetry
+{
+    public const int MaxAttempts = 100;
+    public const int MaxIntervalSeconds = 604800;
+    /// <summary>Additional attempts after the first (1-100).</summary>
+    public int Attempts { get; set; }
+    /// <summary>Seconds between a failed attempt and the next (0-604800). The instance is parked meanwhile and resumes on the flow's next run after the interval.</summary>
+    public int IntervalSeconds { get; set; }
+    /// <summary>Also retry failures where the destination may already have received the data. This can duplicate a send. Off by default.</summary>
+    public bool RetryAmbiguous { get; set; }
 }
 
 public sealed class NativeFlowDefinition
@@ -57,6 +77,15 @@ public sealed class NativeFlowDefinition
     public string CorrelationMetadataKey { get; set; } = "group";
     public string MessageIdMetadataKey { get; set; } = "messageId";
     public string OutputMessage { get; set; } = "";
+    /// <summary>
+    /// Optional render-dispatch choices (the same JSON array as a dispatch node's <c>casesJson</c>) shared by every selection-expression Render node that has no
+    /// <c>casesJson</c> of its own. A flow with many dynamic transforms keeps one table here instead of a copy per node, so editing a choice changes every node that uses it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? RenderChoicesJson { get; set; }
+
+    /// <summary>The choices a selection-expression Render node dispatches over: its own <c>casesJson</c> when present, otherwise the flow's shared table.</summary>
+    public string ChoicesFor(NativeFlowNode node) => node.Settings.TryGetValue("casesJson", out var own) ? own
+        : RenderChoicesJson ?? throw new ArgumentException($"Native node '{node.Id}' has no casesJson and the flow has no shared renderChoicesJson.");
 
     public static NativeFlowDefinition Read(string json, bool allowBlocked = false)
     {
@@ -69,6 +98,7 @@ public sealed class NativeFlowDefinition
             || string.IsNullOrWhiteSpace(flow.MessageIdMetadataKey) || flow.MessageIdMetadataKey.Length > 128
             || flow.OutputMessage is null || flow.OutputMessage.Length > 128 || flow.OutputMessage != flow.OutputMessage.Trim())
             throw new ArgumentException("Native durable configuration requires bounded metadata keys and output message name.");
+        if (flow.RenderChoicesJson is not null) _ = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(flow.RenderChoicesJson);
         var ids = new HashSet<string>(StringComparer.Ordinal);
         void Validate(List<NativeFlowNode> nodes, int depth)
         {
@@ -106,21 +136,23 @@ public sealed class NativeFlowDefinition
                 if (node.SelectionExpression is { } selection)
                 {
                     if (node.Kind != NativeFlowNodeKind.Render || node.InputMessages is null || node.Module != "render-dispatch"
-                        || node.Settings.Count != 1 || !node.Settings.ContainsKey("casesJson"))
-                        throw new ArgumentException($"Native node '{node.Id}' requires named Render with render-dispatch and only casesJson for a selection expression.");
+                        || node.Settings.Count > 1 || node.Settings.Count == 1 && !node.Settings.ContainsKey("casesJson"))
+                        throw new ArgumentException($"Native node '{node.Id}' requires named Render with render-dispatch and only casesJson (or no settings, to use the flow's shared renderChoicesJson) for a selection expression.");
                     NativeExpression.Validate(selection);
-                    _ = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(node.Settings["casesJson"]);
+                    _ = Mulse.Modules.Mapping.RenderDispatchDefinition.Read(flow.ChoicesFor(node));
                 }
                 if ((node.Kind == NativeFlowNodeKind.ApplyXmlRules) != (node.PolicyJson is not null))
                     throw new ArgumentException($"Native node '{node.Id}' requires a policy only for ApplyXmlRules.");
                 if (node.PolicyJson is not null) _ = XmlRuleRuntime.ReadPolicy(node.PolicyJson);
+                if (node.StopWhenNoRuleMatches && node.Kind != NativeFlowNodeKind.ApplyXmlRules)
+                    throw new ArgumentException($"Native node '{node.Id}' allows stop-when-no-rule-matches only on ApplyXmlRules.");
                 if (node.Expression is not null)
                 {
                     NativeExpression.Validate(node.Expression);
                     if (!variableNode && !messageWrite && node.Kind is not (NativeFlowNodeKind.If or NativeFlowNodeKind.While) || node.Conditions.Count != 0)
                         throw new ArgumentException($"Native node '{node.Id}' has an inactive expression or mixed predicate modes.");
                 }
-                if (!flow.Durable && (node.Expression?.RequiresInstance == true || node.NamespaceExpression?.RequiresInstance == true))
+                if (!flow.Durable && (node.Expression?.RequiresInstance == true || node.NamespaceExpression?.RequiresInstance == true || node.DurationExpression?.RequiresInstance == true))
                     throw new ArgumentException($"Native node '{node.Id}' uses InstanceId, which requires durable=true.");
                 if (messageWrite && node.Expression is null || (node.Kind == NativeFlowNodeKind.SetMessageValue) != (node.Target is not null))
                     throw new ArgumentException($"Native node '{node.Id}' requires a value expression and an active target only for SetMessageValue.");
@@ -166,10 +198,10 @@ public sealed class NativeFlowDefinition
                     || node.ExceptionDetailsVariable is not null && !NativeExpression.ValidName(node.ExceptionDetailsVariable)
                     || node.ExceptionDetailsVariable is not null && node.ExceptionDetailsVariable == node.ExceptionMessageVariable)
                     throw new ArgumentException($"Native node '{node.Id}' requires durable=true and distinct valid exception variable names only on Try nodes.");
-                if (node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Blocked or NativeFlowNodeKind.Try)
+                if (node.Kind is not (NativeFlowNodeKind.Sequence or NativeFlowNodeKind.If or NativeFlowNodeKind.ForEach or NativeFlowNodeKind.While or NativeFlowNodeKind.Blocked or NativeFlowNodeKind.Try or NativeFlowNodeKind.Listen)
                     && node.Children.Count > 0)
                     throw new ArgumentException($"Native leaf node '{node.Id}' cannot hide child activities.");
-                var durableNode = node.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.SaveMessage
+                var durableNode = node.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive or NativeFlowNodeKind.Listen or NativeFlowNodeKind.SaveMessage
                     or NativeFlowNodeKind.UseMessage or NativeFlowNodeKind.Reply or NativeFlowNodeKind.Deliver or NativeFlowNodeKind.CreateXmlMessage or NativeFlowNodeKind.SetMessageValue
                     or NativeFlowNodeKind.CreateXmlRoot or NativeFlowNodeKind.AppendXmlMessage or NativeFlowNodeKind.ApplyXmlRules or NativeFlowNodeKind.Terminate or NativeFlowNodeKind.InvokeTransform;
                 if ((node.Kind == NativeFlowNodeKind.Terminate) != (node.TerminateMessage is not null)
@@ -185,6 +217,17 @@ public sealed class NativeFlowDefinition
                 if (node.Kind is NativeFlowNodeKind.Wait or NativeFlowNodeKind.Receive
                     ? node.DurationSeconds is < 0 or > 31622400 : node.DurationSeconds != 0)
                     throw new ArgumentException($"Native node '{node.Id}' has an invalid or inactive duration.");
+                if (node.Kind == NativeFlowNodeKind.Wait ? node.DurationMilliseconds is < 0 or > 999 || node.DurationMilliseconds != 0 && node.DurationSeconds >= 31622400 : node.DurationMilliseconds != 0)
+                    throw new ArgumentException($"Native node '{node.Id}' has an invalid or inactive millisecond duration (a Wait allows 0-999 ms within the 366-day limit).");
+                if (node.DurationExpression is not null)
+                {
+                    if (node.Kind != NativeFlowNodeKind.Wait || node.DurationSeconds != 0 || node.DurationMilliseconds != 0)
+                        throw new ArgumentException($"Native node '{node.Id}' allows a duration expression only on a Wait without a fixed duration.");
+                    NativeExpression.Validate(node.DurationExpression);
+                }
+                if (node.Retry is { } retry && (node.Kind != NativeFlowNodeKind.Deliver || retry.Attempts is < 1 or > NativeDeliverRetry.MaxAttempts
+                    || retry.IntervalSeconds is < 0 or > NativeDeliverRetry.MaxIntervalSeconds))
+                    throw new ArgumentException($"Native node '{node.Id}' allows a retry policy only on a Deliver, with 1-{NativeDeliverRetry.MaxAttempts} additional attempts and an interval of 0-{NativeDeliverRetry.MaxIntervalSeconds} seconds.");
                 if (node.Kind == NativeFlowNodeKind.Receive)
                 {
                     if (string.IsNullOrWhiteSpace(node.Channel) || node.Channel.Length > 128 || node.Channel != node.Channel.Trim()
@@ -194,6 +237,15 @@ public sealed class NativeFlowDefinition
                 }
                 else if (node.Channel.Length != 0 || node.CorrelationKeys.Count != 0)
                     throw new ArgumentException($"Native node '{node.Id}' cannot have inactive receive settings.");
+                if (node.Kind == NativeFlowNodeKind.Listen)
+                {
+                    // Each child is one branch (a Sequence) whose first activity is its trigger: a Receive, or at most one Wait that acts as the timeout.
+                    var heads = node.Children.Select(branch => branch?.Kind == NativeFlowNodeKind.Sequence && branch.Children is { Count: > 0 } ? branch.Children[0] : null).ToArray();
+                    if (node.Children.Count is < 2 or > 16 || heads.Any(head => head is null || head.Kind is not (NativeFlowNodeKind.Receive or NativeFlowNodeKind.Wait))
+                        || heads.Count(head => head!.Kind == NativeFlowNodeKind.Wait) > 1 || heads.All(head => head!.Kind == NativeFlowNodeKind.Wait)
+                        || heads.Any(head => head!.Kind == NativeFlowNodeKind.Receive && head.DurationSeconds != 0))
+                        throw new ArgumentException($"Native listen '{node.Id}' requires 2-16 branch sequences that each start with a Receive (without its own timeout) or, for at most one branch, a Wait that acts as the timeout; at least one branch must be a Receive.");
+                }
                 Validate(node.Children, depth + 1); Validate(node.Otherwise, depth + 1);
             }
         }

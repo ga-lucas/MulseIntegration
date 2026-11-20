@@ -12,15 +12,32 @@
         <div class="designer-heading">
             <p class="eyebrow">Integration builder</p>
             <h1>@(string.IsNullOrWhiteSpace(_flowName) ? IsExistingFlow ? FlowId : "New flow" : _flowName)</h1>
+            @if (HasUnsavedChanges)
+            {
+                <span class="status-pill warning" role="status" data-testid="unsaved-changes">Unsaved changes</span>
+            }
         </div>
         <div class="designer-topbar-actions" role="group" aria-label="Flow actions">
+            <button class="secondary-button" @onclick="UndoEdit" disabled="@(!CanUndoEdit)" title="@UndoTitle" aria-keyshortcuts="Control+Z">Undo</button>
+            <button class="secondary-button" @onclick="RedoEdit" disabled="@(!CanRedoEdit)" title="@RedoTitle" aria-keyshortcuts="Control+Y">Redo</button>
+            <button class="secondary-button" @onclick="ResetEdits" disabled="@(!HasUnsavedChanges || _isSaving || _isLoading)" title="Discard every change since this flow was loaded or last saved. Undo brings them back.">Reset</button>
+            @if (IsExistingFlow)
+            {
+                <button class="secondary-button" @onclick="RequestReloadAsync" disabled="@(_isSaving || _isLoading)" title="Load the saved flow again from the server, discarding unsaved changes and the undo history.">Reload</button>
+            }
             @if (IsExistingFlow)
             {
                 <a class="secondary-button" href="@($"/history/{Uri.EscapeDataString(FlowId!)}")">History</a>
             }
             <button class="secondary-button @(_showSamplePanel ? "active" : null)" aria-expanded="@(_showSamplePanel ? "true" : "false")" @onclick="() => { SetMappingWorkspace(false); ToggleSamplePanel(); }">Add sample data</button>
-            <button class="secondary-button @(_showBizTalkPanel ? "active" : null)" aria-expanded="@(_showBizTalkPanel ? "true" : "false")" @onclick="() => { SetMappingWorkspace(false); ToggleBizTalkPanel(); }">Import from BizTalk</button>
+            <button class="secondary-button @(_showBizTalkWizard ? "active" : null)" aria-expanded="@(_showBizTalkWizard ? "true" : "false")" @onclick="() => { SetMappingWorkspace(false); ToggleBizTalkWizard(); }">Import from BizTalk</button>
+            <button class="secondary-button @(_showBizTalkPanel ? "active" : null)" aria-expanded="@(_showBizTalkPanel ? "true" : "false")" title="The single-form import without saved sessions or evidence requests." @onclick="() => { SetMappingWorkspace(false); ToggleBizTalkPanel(); }">BizTalk quick import</button>
             <button class="secondary-button" @onclick="RefreshCatalogAsync" disabled="@_isAnalyzingSample">Refresh modules</button>
+            <button class="secondary-button" aria-expanded="@(_showAssistant ? "true" : "false")" @onclick="() => _showAssistant = !_showAssistant">AI assistant</button>
+            @if (_assistantUndoDraft is not null)
+            {
+                <button class="secondary-button" @onclick="UndoAuthoringProposal">Undo AI proposal</button>
+            }
             <button class="secondary-button" @onclick="AutoLayout" disabled="@(_showMappingDesigner || _showAugmentDesigner)">Auto layout</button>
             <button class="secondary-button" @onclick="ClearCanvas" disabled="@(_showMappingDesigner || _showAugmentDesigner)">Clear canvas</button>
         </div>
@@ -31,21 +48,48 @@
         <div class="status-banner success designer-banner" role="status">@_statusMessage</div>
     }
 
+    @if (_saveSummary is { } saveSummary)
+    {
+        <details class="field-hint designer-banner" data-testid="save-summary" open="@(saveSummary.Cautions.Count > 0)">
+            <summary>What changed in this save (@saveSummary.Changes.Count)@(saveSummary.Cautions.Count > 0 ? $", {saveSummary.Cautions.Count} to double-check" : "")</summary>
+            @if (saveSummary.Cautions.Count > 0)
+            {
+                <p><strong>Worth a second look</strong></p>
+                <ul data-testid="save-summary-cautions">@foreach (var caution in saveSummary.Cautions) { <li>@caution</li> }</ul>
+            }
+            <ul data-testid="save-summary-changes">@foreach (var change in saveSummary.Changes) { <li>@change</li> }</ul>
+            <p>Setting values are never listed here. Undo restores the draft but does not undo a save.</p>
+        </details>
+    }
+
     @if (!string.IsNullOrWhiteSpace(_errorMessage))
     {
         <div class="status-banner error designer-banner" role="alert">@_errorMessage</div>
     }
 
+    @if (_confirmReload)
+    {
+        <div class="status-banner designer-banner" role="alertdialog" aria-label="Confirm reload" data-testid="reload-confirmation">
+            <span>Reloading discards your unsaved changes and the undo history, and loads the flow as saved.</span>
+            <button class="run-button" @onclick="ReloadSavedAsync">Discard and reload</button>
+            <button class="secondary-button" @onclick="CancelReload">Keep editing</button>
+        </div>
+    }
+
+    @if (_showAssistant)
+    {
+        <FlowAssistant @key="(typeof(FlowAssistant), FlowId)" CaptureDraft="CaptureAuthoringDraftAsync" Apply="ApplyAuthoringProposal" Close="() => _showAssistant = false" />
+    }
     @if (IsExistingFlow)
     {
-        <FlowCheckpoints @key="FlowId" FlowId="@FlowId" AllowRelease="@(_enabled && _migration is null)" />
+        <FlowCheckpoints @key="(typeof(FlowCheckpoints), FlowId)" FlowId="@FlowId" AllowRelease="@(_enabled && _migration is null)" />
     }
     <div class="workspace-tabs" role="tablist" aria-label="Designer workspace">
         <button @ref="_flowTab" id="flow-workspace-tab" role="tab" type="button" aria-selected="@(!_showMappingDesigner && !_showAugmentDesigner ? "true" : "false")" aria-controls="flow-workspace" tabindex="@(!_showMappingDesigner && !_showAugmentDesigner ? 0 : -1)" @onclick="() => SetMappingWorkspace(false)" @onkeydown="args => HandleWorkspaceKeyAsync(args, 0)">Flow</button>
         <button @ref="_mappingTab" id="mapping-workspace-tab" role="tab" type="button" aria-selected="@(_showMappingDesigner ? "true" : "false")" aria-controls="mapping-workspace" tabindex="@(_showMappingDesigner ? 0 : -1)" @onclick="() => SetMappingWorkspace(true)" @onkeydown="args => HandleWorkspaceKeyAsync(args, 1)">Mapping</button>
         <button @ref="_augmentTab" id="augment-workspace-tab" role="tab" type="button" aria-selected="@(_showAugmentDesigner ? "true" : "false")" aria-controls="augment-workspace" tabindex="@(_showAugmentDesigner ? 0 : -1)" @onclick="SetAugmentWorkspace" @onkeydown="args => HandleWorkspaceKeyAsync(args, 2)">Augment steps</button>
     </div>
-    <div class="designer-surface">
+    <div class="designer-surface" @onchange="ObserveSurfaceEvent" @onclick="ObserveSurfaceEvent">
         <div id="flow-workspace" class="flow-workspace" role="tabpanel" aria-labelledby="flow-workspace-tab" hidden="@(_showMappingDesigner || _showAugmentDesigner)">
         @if (_showSamplePanel)
         {
@@ -129,9 +173,16 @@
         </FloatingPanel>
     }
 
+    @if (_showBizTalkWizard)
+    {
+        <FloatingPanel Title="Import from BizTalk" Icon="🗂" X="60" Y="80" Width="760" ShowClose="true" OnClose="ToggleBizTalkWizard">
+            <BizTalkImportWizard Modules="_modules" OnLoadCandidate="LoadWizardCandidate" OnAddRulePolicy="AddWizardRulePolicy" />
+        </FloatingPanel>
+    }
+
     @if (_showBizTalkPanel)
     {
-        <FloatingPanel Title="Import from BizTalk" Icon="🗂" X="80" Y="420" Width="520" ShowClose="true" OnClose="ToggleBizTalkPanel">
+        <FloatingPanel Title="BizTalk quick import" Icon="🗂" X="80" Y="420" Width="520" ShowClose="true" OnClose="ToggleBizTalkPanel">
 
             <label class="field-label" for="source-path">Source path</label>
             <input id="source-path" class="mapping-input" @bind="_sourcePath" @bind:event="oninput" placeholder="C:\Users\...\MyBizTalkApp.sln" />
@@ -155,8 +206,8 @@
             @if (_generateNativeBizTalkFlow)
             {
                 <details><summary>Native map replacement choices (optional)</summary>
-                    <label class="field-label"><input type="checkbox" id="derive-native-map-choices" @bind="_deriveNativeMapChoices" /> Derive choices from the policy exports</label>
-                    <p class="field-hint">Matches each literal *MapName value in the rule exports to a map in the analyzed projects and converts maps that contain only direct links and constants. Values that cannot be proven are listed after analysis with the reason and stay fail-closed; add them manually below. Explicit choices below win over derived ones. Needs rule exports and the project that owns the maps in the source paths.</p>
+                    <label class="field-label"><input type="checkbox" id="derive-native-map-choices" @bind="_deriveNativeMapChoices" /> Derive choices from the policy exports and Transform shapes</label>
+                    <p class="field-hint">Matches each literal *MapName value in the rule exports, and the map class of each orchestration Transform shape, to a map in the analyzed projects and converts the maps it can prove. Values that cannot be proven are listed after analysis with the reason and stay fail-closed; add them manually below. Explicit choices below win over derived ones. Needs the project that owns the maps in the source paths (and rule exports for policy-selected maps).</p>
                     <p class="field-hint">Use the exact map-name String returned by the selected policy, including any assembly qualification. Choices explicitly select native replacements, not verified deployed map equivalents. Complete supported dynamic transform statements use these choices; unsupported statements remain blocked. Reanalyze after editing choices.</p>
                     <RenderDispatchEditor Settings="_nativeMapSettings" Modules="_modules" NativeSelectionMode="true" Changed="BizTalkMapChoicesChanged" />
                 </details>
@@ -1010,7 +1061,7 @@
                         <div class="setting-row" @key="key">
                             <label class="field-label">@key</label>
                             <div class="inline-row">
-                                <ReferenceInput Value="@node.Settings[key]" ValueChanged="value => node.Settings[key] = value" Label="@key" References="_configReferences" />
+                                <ReferenceInput Value="@node.Settings[key]" ValueChanged="value => node.Settings[key] = value" SettingKey="@key" Label="@key" References="_configReferences" />
                                 <button class="secondary-button" @onclick="() => node.Settings.Remove(key)">Remove</button>
                             </div>
                         </div>

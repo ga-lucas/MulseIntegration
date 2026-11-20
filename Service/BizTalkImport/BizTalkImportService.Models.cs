@@ -73,6 +73,7 @@ public sealed partial class BizTalkImportService
         public bool StartDateEnabled { get; init; }
         public bool EndDateEnabled { get; init; }
         public bool HasPipelineConfiguration { get; init; }
+        public IReadOnlyList<PipelineComponentConfig> PipelineComponents { get; init; } = [];
     }
 
     /// <summary>BizTalk send-port behavior that has no single Mulse equivalent and must be reviewed or configured.</summary>

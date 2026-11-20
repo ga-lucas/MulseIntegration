@@ -70,7 +70,9 @@ public sealed class FtpDeliverModule : IDeliverModule
         client.Config.ReadTimeout = timeout;
         client.Config.DataConnectionConnectTimeout = timeout;
         client.Config.DataConnectionReadTimeout = timeout;
-        await client.Connect(cancellationToken).ConfigureAwait(false);
+        try { await client.Connect(cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        { throw new DeliveryNotSentException($"FTP connection or login failed before any file was sent: {exception.Message}", exception); }
 
         foreach (var payload in batch.Payloads)
         {

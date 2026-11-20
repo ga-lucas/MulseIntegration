@@ -138,6 +138,18 @@ public sealed class NativeSchemaMigrationTests : IDisposable
         Assert.DoesNotContain(definition.AllNodes(), node => node.Kind == NativeFlowNodeKind.SetVariable);
     }
 
+    [Fact]
+    public async Task IntegerDistinguishedFieldsAcceptInt32WritesButStayBlockedForReads()
+    {
+        void MakeInteger(XDocument _, XDocument shared) => shared.Descendants().Single(element => (string?)element.Attribute("name") == "Count").SetAttributeValue("type", "xs:integer");
+        const string xml = "<p:Request xmlns:p='urn:request'><Config><Target>t</Target><Count>0</Count><Enabled>false</Enabled></Config></p:Request>";
+        var (_, write) = await Import("xml.LoadXml(\"" + xml + "\"); output = xml; count = 7; output.Config.Count = count + 1;", reply: true, editSchemas: MakeInteger);
+        Assert.DoesNotContain(write.AllNodes(), node => node.Name == "fields" && node.Kind == NativeFlowNodeKind.Blocked);
+        Assert.Contains(write.AllNodes(), node => node.Kind == NativeFlowNodeKind.SetMessageValue && node.Target?.Kind == NativeMessageFactKind.XmlInt32);
+        var (_, read) = await Import("count = request.Config.Count;", editSchemas: MakeInteger);
+        Assert.Contains("System.Decimal", read.AllNodes().Single(node => node.Name == "fields").BlockReason);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

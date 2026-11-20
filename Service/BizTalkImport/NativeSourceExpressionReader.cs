@@ -147,18 +147,47 @@ internal sealed class NativeSourceExpressionReader
     private void End() { if (_token.Length != 0) throw new NotSupportedException("Native source scalar expression has unconsumed behavior."); }
     public NativeExpression ReadCondition() { var expression = Read(); End(); return expression; }
     public IReadOnlyList<NativeFlowNode> ReadAssignments(string id) => ReadBlock(id, 0);
-    private NativeFlowNode ReadIf(string id, int depth)
+    /// <summary>Reads one conditional. A condition that is exactly [!]Int32.TryParse(text, out v) is split into a SetVariable (parse, or 0 when invalid) followed by the If, so the out variable keeps its source value.</summary>
+    private List<NativeFlowNode> ReadIf(string id, int depth)
     {
-        Expect("("); var condition = Read(); Expect(")");
+        var result = new List<NativeFlowNode>();
+        NativeExpression condition;
+        if (ReadTryParseCondition() is var (parseCondition, parseVariable, parseText))
+        {
+            condition = parseCondition;
+            result.Add(new() { Id = id + "-parse", Name = "Parse " + parseVariable, Kind = NativeFlowNodeKind.SetVariable, Variable = parseVariable,
+                Expression = new() { Kind = NativeExpressionKind.ParseInt32OrZero, Operands = [parseText] } });
+        }
+        else { Expect("("); condition = Read(); Expect(")"); }
         RequireType(condition, "if", NativeScalarType.Boolean); NativeExpression.Validate(condition);
         var node = new NativeFlowNode { Id = id, Name = "If", Kind = NativeFlowNodeKind.If, Expression = condition, Children = ReadBranch(id + "-then", depth) };
         if (_kind == "name" && _token == "else")
         {
             Next();
-            if (_kind == "name" && _token == "if") { Next(); node.Otherwise = [ReadIf(id + "-elseif", depth + 1)]; }
+            if (_kind == "name" && _token == "if") { Next(); node.Otherwise = ReadIf(id + "-elseif", depth + 1); }
             else node.Otherwise = ReadBranch(id + "-else", depth);
         }
-        return node;
+        result.Add(node);
+        return result;
+    }
+    private (NativeExpression Condition, string Variable, NativeExpression Text)? ReadTryParseCondition()
+    {
+        if (_kind != "symbol" || _token != "(") return null;
+        var (offset, token, kind, depth, values) = (_offset, _token, _kind, _depth, _values);
+        Next(); var negate = Take("!");
+        if (_kind != "name" || _token is not ("System.Int32.TryParse" or "Int32.TryParse" or "int.TryParse"))
+        {
+            (_offset, _token, _kind, _depth, _values) = (offset, token, kind, depth, values);
+            return null;
+        }
+        Next(); Expect("("); var text = Read(); Expect(","); ExpectName("out");
+        if (_kind != "name" || _token.Contains('.') || !_variables.TryGetValue(_token, out var type) || type != NativeScalarType.Int32)
+            throw new NotSupportedException("Int32.TryParse requires an exact declared Int32 variable as its out argument.");
+        var variable = NativeVariableName(_token); Next(); Expect(")");
+        if (!Take(")")) throw new NotSupportedException("Int32.TryParse is translated only when it is the whole if condition, optionally negated; combined conditions are not split.");
+        RequireType(text, "Int32.TryParse", NativeScalarType.String); NativeExpression.Validate(text);
+        NativeExpression check = new() { Kind = NativeExpressionKind.IsInt32, Operands = [text] };
+        return (negate ? new() { Kind = NativeExpressionKind.Not, Operands = [check] } : check, variable, text);
     }
     private List<NativeFlowNode> ReadBranch(string id, int depth)
     {
@@ -179,14 +208,25 @@ internal sealed class NativeSourceExpressionReader
             var partDot = name.LastIndexOf('.');
             if (partDot > 0 && _multiparts.Contains(name[..partDot]))
             {
-                if (_token == "(") throw new NotSupportedException("Part-level context '" + name + "(...)' is not translated; native messages carry message-level metadata only.");
+                if (_token == "(")
+                {
+                    // Only the body part's MIME file name is mapped (to the message-level key the SMTP deliver reads); other part-level context has no native equivalent.
+                    if (name[(partDot + 1)..] != "BodySegments" || pendingEmptyDocument is not null)
+                        throw new NotSupportedException("Part-level context '" + name + "(...)' is not translated; native messages carry message-level metadata only.");
+                    var partContext = ReadContext(name[..partDot], out var partSymbol);
+                    if (partSymbol != "MIME.FileName")
+                        throw new NotSupportedException("Part-level context '" + name + "(" + partSymbol + ")' is not translated; only MIME.FileName on the body part is mapped, to message-level metadata.");
+                    Expect("="); var partValue = Read(); Expect(";"); NativeExpression.Validate(partValue);
+                    nodes.Add(new() { Id = id + "-partcontext-" + nodes.Count, Name = name + " " + partSymbol, Kind = NativeFlowNodeKind.SetMessageValue, Target = TypePlatformWrite(partContext, partSymbol, partValue), Expression = partValue });
+                    continue;
+                }
                 if (pendingEmptyDocument is not null) throw new NotSupportedException("A multipart construction cannot interrupt an incomplete XML document construction.");
                 nodes.AddRange(ReadMultipartConstruction(name[..partDot], name, id + "-multipart-" + nodes.Count)); continue;
             }
             if (name == "if")
             {
                 if (pendingEmptyDocument is not null) throw new NotSupportedException("A conditional cannot interrupt an incomplete XML document construction.");
-                nodes.Add(ReadIf(id + "-if-" + nodes.Count, depth)); continue;
+                nodes.AddRange(ReadIf(id + "-if-" + nodes.Count, depth)); continue;
             }
             if (_dynamicPorts.Contains(name) && _token == "(")
             {
@@ -232,7 +272,7 @@ internal sealed class NativeSourceExpressionReader
                 NativeExpression.Validate(selector);
                 nodes.Add(new() { Id = id + "-map-" + nodes.Count, Kind = NativeFlowNodeKind.Render,
                     Module = Mulse.Modules.Mapping.RenderDispatchDefinition.ModuleId, InputMessages = inputs, MessageName = output,
-                    SelectionExpression = selector, Settings = new() { ["casesJson"] = _mapChoices } });
+                    SelectionExpression = selector });
                 continue;
             }
             if (_elements.Contains(name))
@@ -278,6 +318,8 @@ internal sealed class NativeSourceExpressionReader
                 {
                     if (pendingEmptyDocument is not null) throw new NotSupportedException("Context assignment cannot reuse a previous snapshot of the empty document being replaced.");
                     var context = ReadContext(name, out var contextSymbol);
+                    if (NativeSourceContextCatalog.IsReadOnlySystemProperty(contextSymbol) && context.MetadataKey == NativeSourceContextCatalog.MessageIdKey)
+                        throw new NotSupportedException("System property '" + contextSymbol + "' is read-only in BizTalk; assigning it is not translated.");
                     Expect("="); var expression = Read(); Expect(";"); NativeExpression.Validate(expression);
                     if (NativeSourceContextCatalog.IsPlatformKey(context.MetadataKey)) context = TypePlatformWrite(context, contextSymbol, expression);
                     nodes.Add(new() { Id = id + "-context-" + nodes.Count, Kind = NativeFlowNodeKind.SetMessageValue, Target = context, Expression = expression });
@@ -289,6 +331,21 @@ internal sealed class NativeSourceExpressionReader
                     Next();
                     if (_kind != "name" || _token != "System.Xml.XmlDocument") throw new NotSupportedException("Only the exact parameterless XmlDocument constructor is recognized.");
                     Next(); Expect("("); Expect(")"); Expect(";"); pendingEmptyDocument = name; continue;
+                }
+                if (_kind == "name" && _token.LastIndexOf('.') is var partDotInSource and > 0 && _multiparts.Contains(_token[..partDotInSource]))
+                {
+                    var multipartName = _token[..partDotInSource]; var partName = _token[(partDotInSource + 1)..];
+                    if (partName is not ("MSHSegment" or "BodySegments") || _multiparts.Contains(name))
+                        throw new NotSupportedException("Copying part '" + partName + "' of multipart message '" + multipartName + "' into message '" + name
+                            + "' is not translated: only the MSHSegment and BodySegments parts can be copied into a single-part message (the empty ZSegments part has no native representation).");
+                    Next(); Expect(";");
+                    nodes.Add(new()
+                    {
+                        Id = id + "-part-" + nodes.Count, Name = "Copy " + partName + " of " + multipartName + " into " + name, Kind = NativeFlowNodeKind.Render, Module = "xml-child-select",
+                        Settings = new(StringComparer.OrdinalIgnoreCase) { ["partNumber"] = partName == "MSHSegment" ? "1" : "2", ["expectedRootName"] = "", ["metadata"] = "Clear" },
+                        InputMessages = [multipartName], MessageName = name
+                    });
+                    pendingEmptyDocument = null; continue;
                 }
                 if (_kind != "name" || !_messages.Contains(_token) || _token == pendingEmptyDocument)
                     throw new NotSupportedException("Message copy requires a declared initialized source; transforms/context/empty DOM behavior require explicit native operations.");
@@ -317,7 +374,7 @@ internal sealed class NativeSourceExpressionReader
                 nodes.Add(new() { Id = id + "-set-" + nodes.Count, Kind = NativeFlowNodeKind.SetVariable, Variable = name, Expression = expression });
                 continue;
             }
-            var target = _messageCatalog?.Resolve(name) ?? throw new NotSupportedException("Source assignment has no declared scalar or exact schema-field target.");
+            var target = _messageCatalog?.Resolve(name, forWrite: true) ?? throw new NotSupportedException("Source assignment has no declared scalar or exact schema-field target.");
             Expect("="); var value = Read(); Expect(";"); NativeExpression.Validate(value);
             nodes.Add(new() { Id = id + "-write-" + nodes.Count, Kind = NativeFlowNodeKind.SetMessageValue, Target = target, Expression = value });
         }
@@ -382,6 +439,7 @@ internal sealed class NativeSourceExpressionReader
                     left = new() { Kind = NativeExpressionKind.ToInt32, Operands = [left] };
                 }
             }
+            else if (_kind == "name" && ReadDateTimeCall() is { } dateCall) left = dateCall;
             else if (_kind == "name" && ReadStringCall() is { } call) left = call;
             else if (_kind == "name" && _token == "xpath")
             {
@@ -416,7 +474,11 @@ internal sealed class NativeSourceExpressionReader
             while (_kind == "symbol" && Priority(_token) > precedence)
             {
                 var operation = _token; var priority = Priority(operation); Next();
-                left = new() { Kind = Operation(operation), Operands = [left, Read(priority)] };
+                var right = Read(priority);
+                var dates = (TypeOf(left) == NativeScalarType.DateTime ? 1 : 0) + (TypeOf(right) == NativeScalarType.DateTime ? 1 : 0);
+                if (dates != 0 && (dates != 2 || operation is not ("==" or "!=" or "<" or "<=" or ">" or ">=")))
+                    throw new NotSupportedException("DateTime values support only comparison with another DateTime; TimeSpan arithmetic and implicit conversions are not translated (use AddDays/AddHours/AddMinutes or a Delay on Subtract).");
+                left = new() { Kind = Operation(operation), Operands = [left, right] };
             }
             return left;
         }
@@ -428,12 +490,14 @@ internal sealed class NativeSourceExpressionReader
         NativeExpressionKind.Variable => _variables.TryGetValue(expression.Variable!, out var type) ? type : null,
         NativeExpressionKind.MessageValue => expression.Fact!.Kind switch
         {
-            NativeMessageFactKind.Metadata or NativeMessageFactKind.XmlText or NativeMessageFactKind.XmlString => NativeScalarType.String,
+            NativeMessageFactKind.Metadata or NativeMessageFactKind.XmlText or NativeMessageFactKind.XmlString or NativeMessageFactKind.XmlMessageType => NativeScalarType.String,
             NativeMessageFactKind.XmlInt32 or NativeMessageFactKind.MetadataInt32 or NativeMessageFactKind.XmlCount => NativeScalarType.Int32,
             _ => NativeScalarType.Boolean
         },
         NativeExpressionKind.InstanceId or NativeExpressionKind.Substring or NativeExpressionKind.SubstringLength or NativeExpressionKind.ToText => NativeScalarType.String,
-        NativeExpressionKind.Not or NativeExpressionKind.And or NativeExpressionKind.Or or NativeExpressionKind.Equal or NativeExpressionKind.NotEqual
+        NativeExpressionKind.Now or NativeExpressionKind.ParseDateTime or NativeExpressionKind.DateTimeFromParts or NativeExpressionKind.AddDays or NativeExpressionKind.AddHours
+            or NativeExpressionKind.AddMinutes or NativeExpressionKind.AddSeconds => NativeScalarType.DateTime,
+        NativeExpressionKind.IsInt32 or NativeExpressionKind.Not or NativeExpressionKind.And or NativeExpressionKind.Or or NativeExpressionKind.Equal or NativeExpressionKind.NotEqual
             or NativeExpressionKind.Less or NativeExpressionKind.LessOrEqual or NativeExpressionKind.Greater or NativeExpressionKind.GreaterOrEqual
             or NativeExpressionKind.RegexIsMatch => NativeScalarType.Boolean,
         NativeExpressionKind.Add => TypeOf(expression.Operands[0]) is { } first && TypeOf(expression.Operands[1]) is { } second
@@ -444,6 +508,71 @@ internal sealed class NativeSourceExpressionReader
     {
         if (TypeOf(expression) is not { } type || !allowed.Contains(type))
             throw new NotSupportedException(operation + " requires an operand whose scalar type is statically proven (" + string.Join("/", allowed) + "); no implicit CLR coercion is inferred.");
+    }
+    private static bool IsClockRead(string token) => token is "System.DateTime.Now" or "DateTime.Now" or "System.DateTime.UtcNow" or "DateTime.UtcNow";
+    private NativeExpression? DateTimeReceiver(string prefix)
+    {
+        if (IsClockRead(prefix)) return new() { Kind = NativeExpressionKind.Now };
+        return _variables.TryGetValue(prefix, out var type) && type == NativeScalarType.DateTime ? new() { Kind = NativeExpressionKind.Variable, Variable = NativeVariableName(prefix) } : null;
+    }
+    private NativeExpression ReadDateTimeOperand(string operation)
+    {
+        var operand = Read(); RequireType(operand, operation, NativeScalarType.DateTime); return operand;
+    }
+    /// <summary>DateTime construction, parsing, parts, AddX and Compare over UTC values; the CLR local-time and culture behavior of the source is not reproduced (the importer states this as a warning).</summary>
+    private NativeExpression? ReadDateTimeCall()
+    {
+        var token = _token;
+        if (IsClockRead(token)) { Next(); return new() { Kind = NativeExpressionKind.Now }; }
+        if (token is "System.DateTime.Parse" or "DateTime.Parse")
+        {
+            Next(); Expect("("); var text = Read();
+            if (_kind == "symbol" && _token == ",") throw new NotSupportedException("DateTime.Parse culture and style overloads are not translated; native parsing is invariant and UTC.");
+            Expect(")"); RequireType(text, "DateTime.Parse", NativeScalarType.String);
+            return new() { Kind = NativeExpressionKind.ParseDateTime, Operands = [text] };
+        }
+        if (token is "System.DateTime.Compare" or "DateTime.Compare")
+        {
+            Next(); Expect("("); var first = ReadDateTimeOperand("DateTime.Compare"); Expect(","); var second = ReadDateTimeOperand("DateTime.Compare"); Expect(")");
+            return new() { Kind = NativeExpressionKind.CompareDateTime, Operands = [first, second] };
+        }
+        if (token == "new")
+        {
+            Next();
+            if (_kind != "name" || _token is not ("System.DateTime" or "DateTime")) throw new NotSupportedException("Object construction other than new XmlDocument/DateTime is not translated.");
+            Next(); Expect("("); var parts = new List<NativeExpression>();
+            do
+            {
+                if (parts.Count == 6) throw new NotSupportedException("Only the six-argument DateTime(year, month, day, hour, minute, second) constructor is translated.");
+                var part = Read(); RequireType(part, "DateTime constructor", NativeScalarType.Int32); parts.Add(part);
+            } while (Take(","));
+            Expect(")");
+            if (parts.Count != 6) throw new NotSupportedException("Only the six-argument DateTime(year, month, day, hour, minute, second) constructor is translated.");
+            return new() { Kind = NativeExpressionKind.DateTimeFromParts, Operands = parts };
+        }
+        var dot = token.LastIndexOf('.');
+        if (dot <= 0 || DateTimeReceiver(token[..dot]) is not { } receiver) return null;
+        var member = token[(dot + 1)..];
+        if (member is "Year" or "Month" or "Day" or "Hour" or "Minute" or "Second")
+        {
+            Next(); return new() { Kind = Enum.Parse<NativeExpressionKind>(member), Operands = [receiver] };
+        }
+        if (member is "AddDays" or "AddHours" or "AddMinutes" or "AddSeconds")
+        {
+            Next(); Expect("("); var amount = Read(); Expect(")");
+            RequireType(amount, member, NativeScalarType.Int32);
+            return new() { Kind = Enum.Parse<NativeExpressionKind>(member), Operands = [receiver, amount] };
+        }
+        throw new NotSupportedException("DateTime member '" + member + "' is not translated (supported: Year, Month, Day, Hour, Minute, Second, AddDays, AddHours, AddMinutes, AddSeconds, Parse, Compare, Now).");
+    }
+    /// <summary>Reads a Delay timeout of the exact form later.Subtract(earlier) as whole seconds between two DateTime expressions.</summary>
+    public NativeExpression ReadSubtractDurationSeconds()
+    {
+        if (_kind != "name" || !_token.EndsWith(".Subtract", StringComparison.Ordinal) || DateTimeReceiver(_token[..^9]) is not { } later)
+            throw new NotSupportedException("Only a constant TimeSpan or dateTime.Subtract(dateTime) is translated as a dynamic delay.");
+        Next(); Expect("("); var earlier = ReadDateTimeOperand("DateTime.Subtract"); Expect(")"); End();
+        NativeExpression.Validate(earlier);
+        return new() { Kind = NativeExpressionKind.SecondsBetween, Operands = [later, earlier] };
     }
     private NativeExpression? ReadStringCall()
     {
@@ -457,6 +586,13 @@ internal sealed class NativeSourceExpressionReader
             return new() { Kind = NativeExpressionKind.RegexIsMatch, Operands = [input, pattern] };
         }
         var dot = token.LastIndexOf('.');
+        if (dot > 0 && token[(dot + 1)..] == "ToString" && _variables.ContainsKey(token[..dot]))
+        {
+            var operand = new NativeExpression { Kind = NativeExpressionKind.Variable, Variable = NativeVariableName(token[..dot]) };
+            RequireType(operand, "ToString", NativeScalarType.String, NativeScalarType.Int32, NativeScalarType.Boolean);
+            Next(); Expect("("); Expect(")");
+            return new() { Kind = NativeExpressionKind.ToText, Operands = [operand] };
+        }
         if (dot <= 0 || token[(dot + 1)..] is not ("Length" or "IndexOf" or "LastIndexOf" or "Substring")) return null;
         var member = token[(dot + 1)..];
         NativeExpression receiver;
