@@ -369,7 +369,8 @@ FodyWeavers.xsd
 /Service/plugins/
 /Service/Runtime/
 
-# Local SQLite runtime databases (including journals)
+# Local workspace state and SQLite runtime databases (including journals)
+/Service/Data/mulse-runtime.json
 /Service/Data/*.db
 /Service/Data/*.db-wal
 /Service/Data/*.db-shm
