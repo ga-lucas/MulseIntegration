@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build a reusable BizTalk importer that automatically preserves as much behavior and workflow as possible in native Mulse flows, without hosting BizTalk code or runtime. Billing is a worked example, not the product scope; only truly Billing-specific code (the LegacyBilling field read) lives in `ExternalBillingPlugin`, and reusable legacy-compat modules live in the built-in Compatibility Pack (or `Mulse.Hl7` for HL7). Make all flow and module settings explicitly editable in the UI, including configuration for unsupported or unknown behavior. Imported and scratch-built flows should share the same tools.
+Build a reusable BizTalk importer that automatically preserves as much behavior and workflow as possible in native Mulse flows, without hosting BizTalk code or runtime. Billing is a worked example, not the product scope. Client-specific modules live in the separate `ClientIntegration` repository; reusable legacy-compat modules live in the built-in Compatibility Pack (or `Mulse.Hl7` for HL7). Make all flow and module settings explicitly editable in the UI, including configuration for unsupported or unknown behavior. Imported and scratch-built flows should share the same tools.
 
 ```text
 BizTalk project -> analyzed artifacts -> canonical Mulse model
@@ -16,7 +16,7 @@ Latest verification: 2,473 service tests (the 29 empty leftover files were remov
 The importer is meant for this organization first and for publication as a reusable open-source tool second, so the goal is the broadest BizTalk compatibility that can be proven, not just the shape of the Billing samples. Billing and its policy, binding and host-config exports are the only available corpus; they say which constructs to prioritize, not what the product supports.
 
 - Fix each gap for the BizTalk construct in general (as the public BizTalk documentation defines it), not for the specific shape seen in the samples.
-- Importer code names no organization-specific type, schema or map. Org-specific behavior goes in the `ClientIntegration\` plugin solution.
+- Importer code names no organization-specific type, schema or map. Org-specific behavior goes in the separate `ClientIntegration` plugin repository.
 - Tests use small synthetic artifacts and cover variants the samples do not use. Real sample content is never copied into the repo.
 - What cannot be proven stays a visible `Blocked` node or a documented stub with an editable UI setting. The importer never guesses.
 - Track coverage by BizTalk construct (shapes, functoids, adapters, pipeline components, rule constructs), independent of the samples.

@@ -271,13 +271,13 @@ imported Billing execution and DTC/business parity are not claimed.
 
 ### Separate Billing feature pack
 
-`ExternalBillingPlugin` demonstrates source-specific behavior outside the host/core: an `IModuleInstaller` registers the exact
-LegacyBilling field adapter, the only truly Billing-specific module. Reusable legacy-compat modules (filename template
-transform/augment, set-context-property, XML remove-namespaces) live in the built-in `Mulse.CompatibilityPack`, and the HL7
-message-type augment lives in `Mulse.Hl7`. Placement rule: if it has no hard-coded customer schema, it is generic. It references only `Mulse.Modules` and is discovered unloaded under
-`Service\plugins\ExternalBillingPlugin`; enable it from **Modules**. Do not add a production host reference or load
-original BizTalk/.NET Framework helper assemblies. Standard descriptor settings provide the native editor,
-parsed mapper and pipeline-stage UI without source-specific UI branches.
+The external `ClientIntegration` plugin demonstrates source-specific behavior outside the host: its
+`IModuleInstaller` registers the LegacyBilling field adapter and other ClientIntegration-specific modules. Reusable
+legacy-compat modules (filename templates, set-context-property, XML namespace removal) live in the built-in
+`Mulse.CompatibilityPack`, and the HL7 message-type augment lives in `Mulse.Hl7`. Build and deploy the external
+plugin separately under `Service\plugins\ClientIntegration`, then load it in **Module Packages**. Do not add a
+production host reference or load original BizTalk/.NET Framework helper assemblies. Standard descriptors
+provide the editor and mapper UI without source-specific UI branches.
 
 Native flows call a pure transform (a "UDF") with the durable-only `InvokeTransform` node: pick a Transform module,
 a declared String result variable and 1-8 argument expressions (String/Int32/Boolean/null; result String of at most
